@@ -1,0 +1,23 @@
+# Environment and secrets
+.env
+
+# Claude / local tooling
+.claude/
+
+# Python cache and local envs
+__pycache__/
+*.py[cod]
+*.pyo
+*.pyd
+.venv/
+venv/
+
+# Generated outputs
+generated-suites/
+
+# OS / editor temp files
+.DS_Store
+Thumbs.db
+*.tmp
+*.swp
+*.swo

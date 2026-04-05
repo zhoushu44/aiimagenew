@@ -1,0 +1,10 @@
+{
+  "topBtnText": "生成基准模特",
+  "topBtnDisabled": false,
+  "ctaText": "生成推荐场景",
+  "ctaDisabled": false,
+  "activeTab": "AI 生成",
+  "stageText": "✓\nAI\nAI 基准模特\n女 · 青年 · 欧美白人 · 标准\n已按当前配置生成可用于服饰展示的模特。",
+  "hasLoading": false,
+  "hasDoneCard": true
+}

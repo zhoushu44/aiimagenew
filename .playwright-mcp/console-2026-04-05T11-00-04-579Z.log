@@ -1,0 +1,3 @@
+[   22822ms] [LOG] Selected output spec: 1:1 @ http://127.0.0.1:5078/fashion?cc-regression=reload-check:321
+[   47806ms] [LOG] Selected output spec: 1:1 @ http://127.0.0.1:5078/fashion?cc-regression=reload-check-2:321
+[   74372ms] [LOG] Selected output spec: 1:1 @ http://127.0.0.1:5078/fashion?cc-regression=final-fashion:321

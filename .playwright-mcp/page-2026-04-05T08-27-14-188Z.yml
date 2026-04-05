@@ -1,0 +1,114 @@
+- generic [ref=e2]:
+  - banner [ref=e3]:
+    - generic [ref=e4]:
+      - generic [ref=e5]: Minimal Tech Console / Commerce Image Ops
+      - generic [ref=e6]:
+        - generic [ref=e7]: AIC
+        - generic [ref=e8]:
+          - heading "AI 电商视觉控制台" [level=1] [ref=e9]
+          - paragraph [ref=e10]: 统一调度商品套图、A+ 详情页与服饰穿戴生成链路。
+    - generic [ref=e11]:
+      - link "默认进入工作台" [ref=e12] [cursor=pointer]:
+        - /url: /suite
+      - generic [ref=e13]: system online
+  - generic [ref=e14]:
+    - generic [ref=e15]:
+      - generic [ref=e16]: Unified generation surface
+      - heading "把首页变成总控台，而不是海报。" [level=2] [ref=e17]
+      - paragraph [ref=e18]: 新的入口页聚焦模块分发、任务摘要与输出系统说明。三个业务模块继续使用真实路由跳转，结果页仍在各自工作台内完成筛选、预览、下载与标题生成。
+      - generic [ref=e19]:
+        - link "进入商品套图" [ref=e20] [cursor=pointer]:
+          - /url: /suite
+        - link "进入 A+ 详情页" [ref=e21] [cursor=pointer]:
+          - /url: /aplus
+        - link "进入服饰穿戴" [ref=e22] [cursor=pointer]:
+          - /url: /fashion
+    - complementary [ref=e23]:
+      - generic [ref=e24]:
+        - generic [ref=e25]: active modules
+        - generic [ref=e26]: "03"
+        - paragraph [ref=e27]: 共享上传、策略配置、风格分析、结果管理与预览下载能力。
+      - generic [ref=e28]:
+        - article [ref=e29]:
+          - text: routing
+          - strong [ref=e30]: Flask 直达
+          - paragraph [ref=e31]:
+            - text: 保留
+            - code [ref=e32]: /suite
+            - text: 、
+            - code [ref=e33]: /aplus
+            - text: 、
+            - code [ref=e34]: /fashion
+            - text: 三个入口。
+        - article [ref=e35]:
+          - text: result flow
+          - strong [ref=e36]: 内嵌结果态
+          - paragraph [ref=e37]: 继续由工作台内的 intro / result 视图切换承载生成后链路。
+        - article [ref=e38]:
+          - text: visual system
+          - strong [ref=e39]: 极简科技控制台
+          - paragraph [ref=e40]: 更克制的层级、状态线、数据标签与高密度信息面板。
+  - generic [ref=e41]:
+    - article [ref=e42]:
+      - generic [ref=e43]:
+        - generic [ref=e44]: workspace distribution
+        - generic [ref=e45]: "2026"
+      - generic [ref=e46]:
+        - generic [ref=e47]:
+          - text: output chain
+          - generic [ref=e48]: upload → plan → style → result
+        - generic [ref=e49]:
+          - text: workspace pattern
+          - generic [ref=e50]: left control / right canvas
+      - paragraph [ref=e51]: 所有模块共享同一控制台骨架，但保留商品套图、A+ 模块化页面、服饰模特穿搭三种业务语义，不为统一而牺牲现有行为。
+    - article [ref=e52]:
+      - generic [ref=e53]: design priority
+      - generic [ref=e54]:
+        - text: 冷静
+        - text: 系统化
+        - text: 可操作
+    - article [ref=e55]:
+      - generic [ref=e56]: interface note
+      - paragraph [ref=e57]: 强调摘要、状态、结构，不再用主视觉占满首页。
+  - generic [ref=e58]:
+    - article [ref=e59]:
+      - generic [ref=e61]: 01 / suite
+      - heading "商品套图" [level=3] [ref=e63]
+      - paragraph [ref=e64]: 适合商品主图、场景图、卖点图、细节图、参数图和配件售后图等整套输出。
+      - list [ref=e65]:
+        - listitem [ref=e66]: 平台 / 国家 / 文字 / 尺寸策略配置
+        - listitem [ref=e67]: AI 帮写与爆款风格分析
+        - listitem [ref=e68]: 结果批量勾选、预览、下载、标题生成
+      - link "打开 suite 工作台 ↗" [ref=e69] [cursor=pointer]:
+        - /url: /suite
+    - article [ref=e70]:
+      - generic [ref=e72]: 02 / aplus
+      - heading "A+ 详情页" [level=3] [ref=e74]
+      - paragraph [ref=e75]: 适合按首屏主视觉、卖点模块、品牌故事、细节放大、参数说明等模块组织页面内容。
+      - list [ref=e76]:
+        - listitem [ref=e77]: 保留 A+ 模块显隐与数量逻辑
+        - listitem [ref=e78]: 沿用现有模块选择与排序输出
+        - listitem [ref=e79]: 生成后继续走统一结果工具栏与预览层
+      - link "打开 A+ 工作台 ↗" [ref=e80] [cursor=pointer]:
+        - /url: /aplus
+    - article [ref=e81]:
+      - generic [ref=e83]: 03 / fashion
+      - heading "服饰穿戴" [level=3] [ref=e85]
+      - paragraph [ref=e86]: 面向服装类展示，保留上传 5 张、比例选择、AI 模特 / 我的模特切换和外貌细节控制。
+      - list [ref=e87]:
+        - listitem [ref=e88]: 服饰主体一致性与穿搭叙事优先
+        - listitem [ref=e89]: 模特配置区块继续独立存在
+        - listitem [ref=e90]: 结果态同样支持预览与批量下载
+      - link "打开 fashion 工作台 ↗" [ref=e91] [cursor=pointer]:
+        - /url: /fashion
+  - generic [ref=e92]:
+    - generic [ref=e93]:
+      - text: system reminder
+      - paragraph [ref=e94]: 首页只承担总控入口与信息摘要，实际生产动作全部在各业务工作台内完成。
+    - generic [ref=e95]:
+      - link "Suite" [ref=e96] [cursor=pointer]:
+        - /url: /suite
+      - link "A+" [ref=e97] [cursor=pointer]:
+        - /url: /aplus
+      - link "Fashion" [ref=e98] [cursor=pointer]:
+        - /url: /fashion

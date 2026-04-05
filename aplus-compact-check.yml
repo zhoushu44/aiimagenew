@@ -1,0 +1,46 @@
+- generic [ref=e2]:
+  - banner [ref=e3]:
+    - generic [ref=e4]:
+      - link "AI Commerce Console" [ref=e5] [cursor=pointer]:
+        - /url: /
+      - generic [ref=e6]:
+        - generic [ref=e7]: A+ Workspace / Minimal Tech Control
+        - generic [ref=e8]: A+详情页工作台
+    - generic [ref=e9]:
+      - generic [ref=e10]: route /aplus
+      - generic [ref=e11]: module engine ready
+  - main [ref=e12]:
+    - complementary [ref=e13]:
+      - navigation "功能导航" [ref=e14]:
+        - link "01 商品套图" [ref=e15] [cursor=pointer]:
+          - /url: /suite
+        - link "02 A+详情页" [ref=e18] [cursor=pointer]:
+          - /url: /aplus
+        - link "03 服饰穿戴" [ref=e21] [cursor=pointer]:
+          - /url: /fashion
+      - generic [ref=e24]:
+        - generic [ref=e25]
+        - generic [ref=e28]
+      - generic [ref=e35]:
+        - generic [ref=e36]
+        - generic [ref=e39]
+      - generic [ref=e52]:
+        - generic [ref=e53]
+        - generic [ref=e60]
+      - generic [ref=e64]:
+        - generic [ref=e65]
+        - button "爆款风格分析 ↻" [ref=e68] [cursor=pointer]
+      - generic [ref=e72]:
+        - generic [ref=e73]
+        - generic [ref=e78]
+      - button "一键生成A+详情页" [ref=e144] [cursor=pointer]
+    - generic [ref=e147]:
+      - generic [ref=e148]:
+        - generic [ref=e149]
+        - generic [ref=e154]
+      - generic [ref=e163]:
+        - article [ref=e164]
+        - article [ref=e180]
+        - article [ref=e184]
+        - article [ref=e188]
+        - article [ref=e192]

@@ -1,0 +1,152 @@
+- generic [ref=e2]:
+  - banner [ref=e3]:
+    - generic [ref=e4]:
+      - link "AI Commerce Console" [ref=e5] [cursor=pointer]:
+        - /url: /
+      - generic [ref=e6]:
+        - generic [ref=e7]: Suite Workspace / Minimal Tech Control
+        - generic [ref=e8]: 商品套图工作台
+    - generic [ref=e9]:
+      - generic [ref=e10]: route /suite
+      - generic [ref=e11]: image pipeline online
+  - main [ref=e12]:
+    - complementary [ref=e13]:
+      - navigation "功能导航" [ref=e14]:
+        - link "01 商品套图" [ref=e15] [cursor=pointer]:
+          - /url: /suite
+          - generic [ref=e16]: "01"
+          - generic [ref=e17]: 商品套图
+        - link "02 A+详情页" [ref=e18] [cursor=pointer]:
+          - /url: /aplus
+          - generic [ref=e19]: "02"
+          - generic [ref=e20]: A+详情页
+        - link "03 服饰穿戴" [ref=e21] [cursor=pointer]:
+          - /url: /fashion
+          - generic [ref=e22]: "03"
+          - generic [ref=e23]: 服饰穿戴
+      - generic [ref=e24]:
+        - generic [ref=e25]:
+          - generic [ref=e26]: source input
+          - heading "上传素材" [level=2] [ref=e27]
+        - generic [ref=e28]:
+          - generic [ref=e30]:
+            - button "上传图片" [ref=e31] [cursor=pointer]
+            - generic [ref=e32]: 支持商品主图、细节图、角度图
+          - generic [ref=e33]: 同一产品，最多3张
+      - generic [ref=e34]:
+        - generic [ref=e35]:
+          - generic [ref=e36]: strategy setup
+          - heading "策略配置" [level=2] [ref=e37]
+        - generic [ref=e38]:
+          - generic [ref=e39]:
+            - generic [ref=e40]: 目标平台
+            - combobox "目标平台" [ref=e41]:
+              - option "亚马逊" [selected]
+              - option "淘宝天猫1688"
+              - option "Temu"
+              - option "TikTok Shop"
+              - option "拼多多抖音电商"
+              - option "OZON"
+              - option "独立站"
+              - option "Shopee"
+              - option "阿里国际站"
+              - option "速卖通"
+              - option "SHEIN"
+              - option "京东"
+          - generic [ref=e42]:
+            - generic [ref=e43]: 国家参考
+            - combobox "国家参考" [ref=e44]:
+              - option "中国" [selected]
+              - option "美国"
+              - option "欧洲"
+              - option "俄罗斯"
+              - option "东南亚"
+              - option "西班牙"
+              - option "德国"
+              - option "日本"
+              - option "巴西"
+          - generic [ref=e45]:
+            - generic [ref=e46]: 文字类型
+            - combobox "文字类型" [ref=e47]:
+              - option "中文" [selected]
+              - option "英文"
+              - option "俄语"
+              - option "西语"
+              - option "德语"
+              - option "泰语"
+              - option "葡萄牙语"
+              - option "无文字"
+          - generic [ref=e48]:
+            - generic [ref=e49]: 输出比例
+            - combobox "输出比例" [ref=e50]:
+              - option "1:1" [selected]
+              - option "3:4"
+              - option "9:16"
+              - option "16:9"
+      - generic [ref=e51]:
+        - generic [ref=e52]:
+          - generic [ref=e53]:
+            - generic [ref=e54]: selling notes
+            - heading "核心卖点" [level=2] [ref=e55]
+          - button "✦ AI 帮写" [ref=e56] [cursor=pointer]:
+            - generic [ref=e57]: ✦
+            - generic [ref=e58]: AI 帮写
+        - generic [ref=e59]:
+          - generic [ref=e60]: 卖点输入
+          - textbox "卖点输入" [ref=e61]:
+            - /placeholder: "1. 产品名称\n2. 核心卖点\n3. 适用人群\n4. 期望场景\n5. 具体参数"
+      - generic [ref=e63]:
+        - generic [ref=e64]:
+          - generic [ref=e65]: style analysis
+          - heading "爆款风格分析" [level=2] [ref=e66]
+        - button "开始分析 ↻" [ref=e67] [cursor=pointer]:
+          - generic [ref=e68]: 开始分析
+          - generic [ref=e69]: ↻
+      - generic [ref=e71]:
+        - button "一键生成爆款套图" [ref=e72] [cursor=pointer]
+        - button "更多操作" [ref=e74] [cursor=pointer]: ⋯
+    - generic [ref=e77]:
+      - generic [ref=e78]:
+        - generic [ref=e79]:
+          - generic [ref=e80]: 01 / Editorial Intro
+          - heading "AI商品套图" [level=1] [ref=e81]
+          - paragraph [ref=e82]: 上传商品图后，系统将按平台规范、场景逻辑与卖点层级生成整套电商图像方案。新的版式以更强秩序、对比和编辑式结构呈现，适合跨境与平台首页展示。
+          - paragraph [ref=e83]: Flat / Hard Edge / Poster Rhythm / Swiss Red Accent
+        - generic [ref=e84]:
+          - article [ref=e85]:
+            - generic [ref=e86]: output system
+            - generic [ref=e87]: "08"
+            - generic [ref=e88]: 主图、场景图、模特图、细节图、卖点图与详解图。
+          - article [ref=e89]:
+            - generic [ref=e90]: grid logic
+            - generic [ref=e91]: 2×4
+            - generic [ref=e92]: 生成态采用统一宫格系统，便于浏览与批量处理。
+      - generic [ref=e93]:
+        - article [ref=e94]:
+          - generic [ref=e95]:
+            - generic [ref=e96]: suite flow
+            - generic [ref=e97]: clean
+          - generic [ref=e98]: 输入清晰，结果直接
+          - paragraph [ref=e99]: 上传、配置、分析、生成压缩为单条清晰链路。
+          - generic [ref=e100]:
+            - generic [ref=e101]:
+              - generic [ref=e102]: platform
+              - generic [ref=e103]: AMZ
+            - generic [ref=e104]:
+              - generic [ref=e105]: ratio
+              - generic [ref=e106]: 1:1
+            - generic [ref=e107]:
+              - generic [ref=e108]: count
+              - generic [ref=e109]: "8"
+        - article [ref=e110]:
+          - generic [ref=e111]: "01"
+          - generic [ref=e112]: 上传
+          - generic [ref=e113]: 保留参考图用于识别与对照。
+        - article [ref=e114]:
+          - generic [ref=e115]: "02"
+          - generic [ref=e116]: 策略
+          - generic [ref=e117]: 平台、国家、文字和比例统一约束。
+        - article [ref=e118]:
+          - generic [ref=e119]: "03"
+          - generic [ref=e120]: 结果
+          - generic [ref=e121]: 生成后直接进入筛选、预览与下载。

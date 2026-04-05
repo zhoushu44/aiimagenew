@@ -1,0 +1,53 @@
+- generic [active] [ref=e1]:
+  - navigation [ref=e2]:
+    - heading "论文搜索系统" [level=1] [ref=e5]
+  - main [ref=e6]:
+    - generic [ref=e7]:
+      - generic [ref=e8]:
+        - heading "论文搜索系统" [level=2] [ref=e9]
+        - paragraph [ref=e10]: 输入中文关键词创建项目，自动翻译并搜索相关论文
+        - generic [ref=e12]:
+          - textbox "输入中文关键词创建项目，如：电商点击率" [ref=e14]
+          - button "创建项目" [ref=e16] [cursor=pointer]
+        - generic [ref=e17]:
+          - generic [ref=e18]:
+            - generic [ref=e19]: "0"
+            - generic [ref=e20]: 论文总数
+          - generic [ref=e21]:
+            - generic [ref=e22]: "0"
+            - generic [ref=e23]: 顶会论文
+          - generic [ref=e24]:
+            - generic [ref=e25]: "2"
+            - generic [ref=e26]: 项目数量
+        - button "⚙ 设置" [ref=e27] [cursor=pointer]
+      - generic [ref=e28]:
+        - heading "我的项目" [level=3] [ref=e29]
+        - generic [ref=e30]:
+          - generic [ref=e31]:
+            - generic [ref=e32]:
+              - generic [ref=e33]: 电商点击率
+              - generic [ref=e34]: 搜索中...
+            - generic [ref=e35]:
+              - generic [ref=e36]: 0 篇论文
+              - generic [ref=e37]: 0 顶会
+              - generic [ref=e38]: 2026-03-30 22:43
+            - generic [ref=e39]:
+              - button "查看" [ref=e40] [cursor=pointer]
+              - button "汇总" [ref=e41] [cursor=pointer]
+              - button "继续搜索" [ref=e42] [cursor=pointer]
+              - button "下载" [ref=e43] [cursor=pointer]
+              - button "删除" [ref=e44] [cursor=pointer]
+          - generic [ref=e45]:
+            - generic [ref=e46]:
+              - generic [ref=e47]: 电商点击率
+              - generic [ref=e48]: 搜索中...
+            - generic [ref=e49]:
+              - generic [ref=e50]: 0 篇论文
+              - generic [ref=e51]: 0 顶会
+              - generic [ref=e52]: 2026-03-30 22:48
+            - generic [ref=e53]:
+              - button "查看" [ref=e54] [cursor=pointer]
+              - button "汇总" [ref=e55] [cursor=pointer]
+              - button "继续搜索" [ref=e56] [cursor=pointer]
+              - button "下载" [ref=e57] [cursor=pointer]
+              - button "删除" [ref=e58] [cursor=pointer]

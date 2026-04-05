@@ -1,0 +1,13 @@
+{
+  "topBtnHtml": "<span>生成基准模特</span>",
+  "topBtnText": "生成基准模特",
+  "topBtnDisabled": false,
+  "ctaText": "生成推荐场景",
+  "ctaDisabled": false,
+  "stageText": "✓\nAI\nAI 基准模特\n女 · 青年 · 欧美白人 · 标准\n已按当前配置生成可用于服饰展示的模特。",
+  "stageHtml": "\n          <button class=\"fashion-model-card is-selected\" type=\"button\" data-role=\"select-fashion-model\" data-source=\"ai\" data-id=\"ai-1775390649674\" aria-pressed=\"true\">\n            <span class=\"fashion-model-check\" aria-hidden=\"true\">✓</span>\n            <div class=\"fashion-model-preview\"><div class=\"fashion-model-card-placeholder\">AI</div></div>\n            <div class=\"fashion-model-info\">\n              <div class=\"fashion-model-name\">AI 基准模特</div>\n              <div class=\"fashion-model-summary\">女 · 青年 · 欧美白人 · 标准</div>\n              <div class=\"fashion-model-detail\">已按当前配置生成可用于服饰展示的模特。</div>\n            </div>\n          </button>\n        ",
+  "hasLoadingDots": false,
+  "hasLoadingCard": false,
+  "hasDoneCard": true,
+  "localStorageValue": "{\"currentMode\":\"fashion\",\"selectedOutputCount\":8,\"selectedAplusModules\":[],\"currentStyleResults\":[],\"selectedStyleIndex\":-1,\"currentResult\":null,\"currentResultItems\":[],\"selectedResultKeys\":[],\"previewIndex\":-1,\"viewState\":{\"introActive\":true,\"resultActive\":false},\"resultMeta\":\"系统将根据服饰商品图、平台策略、卖点与风格参考生成服饰穿戴结果。\",\"resultStatus\":{\"message\":\"\",\"className\":\"result-status-message\"},\"taskSummaryLine\":\"统一输出为适合服装展示、筛选下载与继续排版的结果结构。\",\"taskOutputCount\":\"08\",\"taskSelectedCount\":\"00\",\"taskSelectAllChecked\":false,\"titleSuggestions\":{\"hidden\":true,\"html\":\"\",\"suggestions\":\"[]\"},\"controlValues\":{},\"moreMenu\":{\"hidden\":true,\"expanded\":false},\"scroll\":{\"windowY\":0,\"controlRail\":0,\"workspaceMain\":0},\"fashionSelectedModelSource\":\"ai\",\"fashionSelectedModelId\":\"ai-1775390649674\",\"fashionModelGenerationState\":\"done\",\"fashionGeneratedModel\":{\"id\":\"ai-1775390649674\",\"name\":\"AI 基准模特\",\"summary\":\"女 · 青年 · 欧美白人 · 标准\",\"detailText\":\"已按当前配置生成可用于服饰展示的模特。\",\"previewLabel\":\"AI\",\"createdAt\":1775390649674}}"
+}

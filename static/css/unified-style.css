@@ -1,0 +1,215 @@
+/* 统一优化样式 - 适用于所有页面 */
+.unified-panel-card {
+  background: #ffffff;
+  border: 1px solid #e5e7eb;
+  border-radius: 16px;
+  padding: 20px;
+  margin-bottom: 16px;
+  box-shadow: 0 1px 3px rgba(0, 0, 0, 0.04);
+  transition: all 0.2s ease;
+}
+
+.unified-panel-card:hover {
+  border-color: #d1d5db;
+  box-shadow: 0 4px 12px rgba(0, 0, 0, 0.08);
+}
+
+.unified-section-title {
+  font-size: 15px;
+  font-weight: 600;
+  color: #1f2937;
+  margin-bottom: 16px;
+  letter-spacing: -0.01em;
+}
+
+.unified-upload-box {
+  border: 2px dashed #e5e7eb;
+  border-radius: 12px;
+  padding: 24px 16px;
+  text-align: center;
+  background: linear-gradient(135deg, #f9fafb 0%, #f3f4f6 100%);
+  transition: all 0.2s ease;
+  cursor: pointer;
+}
+
+.unified-upload-box:hover {
+  border-color: #3b82f6;
+  background: linear-gradient(135deg, #eff6ff 0%, #dbeafe 100%);
+}
+
+.unified-upload-icon {
+  width: 52px;
+  height: 52px;
+  margin: 0 auto 14px;
+  background: linear-gradient(135deg, #3b82f6 0%, #2563eb 100%);
+  border-radius: 16px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  font-size: 22px;
+  color: white;
+  box-shadow: 0 4px 12px rgba(59, 130, 246, 0.25);
+}
+
+.unified-upload-btn {
+  display: inline-block;
+  background: #3b82f6;
+  color: white;
+  border: none;
+  padding: 10px 28px;
+  border-radius: 10px;
+  font-size: 15px;
+  font-weight: 600;
+  cursor: pointer;
+  margin-bottom: 10px;
+  box-shadow: 0 2px 8px rgba(59, 130, 246, 0.2);
+  transition: all 0.2s ease;
+}
+
+.unified-upload-btn:hover {
+  background: #2563eb;
+  transform: translateY(-1px);
+  box-shadow: 0 4px 12px rgba(59, 130, 246, 0.3);
+}
+
+.unified-upload-hint {
+  font-size: 13px;
+  color: #6b7280;
+  line-height: 1.5;
+}
+
+.unified-grid-2x2 {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 12px;
+}
+
+.unified-select {
+  width: 100%;
+  padding: 12px 14px;
+  border: 1px solid #d1d5db;
+  border-radius: 10px;
+  font-size: 14px;
+  font-weight: 500;
+  color: #374151;
+  background: #ffffff;
+  cursor: pointer;
+  transition: all 0.2s ease;
+  appearance: none;
+  background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='14' height='14' viewBox='0 0 24 24' fill='none' stroke='%236b7280' stroke-width='2' stroke-linecap='round' stroke-linejoin='round'%3E%3Cpolyline points='6 9 12 15 18 9'%3E%3C/polyline%3E%3C/svg%3E");
+  background-repeat: no-repeat;
+  background-position: right 12px center;
+  padding-right: 36px;
+}
+
+.unified-select:hover {
+  border-color: #9ca3af;
+}
+
+.unified-select:focus {
+  outline: none;
+  border-color: #3b82f6;
+  box-shadow: 0 0 0 3px rgba(59, 130, 246, 0.1);
+}
+
+.unified-textarea {
+  width: 100%;
+  min-height: 140px;
+  padding: 14px 16px;
+  border: 1px solid #d1d5db;
+  border-radius: 12px;
+  font-size: 14px;
+  font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
+  line-height: 1.6;
+  color: #374151;
+  resize: none;
+  transition: all 0.2s ease;
+}
+
+.unified-textarea::placeholder {
+  color: #9ca3af;
+}
+
+.unified-textarea:hover {
+  border-color: #9ca3af;
+}
+
+.unified-textarea:focus {
+  outline: none;
+  border-color: #3b82f6;
+  box-shadow: 0 0 0 3px rgba(59, 130, 246, 0.1);
+}
+
+.unified-ai-btn {
+  white-space: nowrap;
+  padding: 12px 16px;
+  border: 1px solid #3b82f6;
+  border-radius: 10px;
+  background: linear-gradient(135deg, #eff6ff 0%, #dbeafe 100%);
+  color: #1d4ed8;
+  font-size: 14px;
+  font-weight: 600;
+  cursor: pointer;
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  transition: all 0.2s ease;
+}
+
+.unified-ai-btn:hover {
+  background: linear-gradient(135deg, #dbeafe 0%, #bfdbfe 100%);
+  transform: translateY(-1px);
+  box-shadow: 0 2px 8px rgba(59, 130, 246, 0.15);
+}
+
+.unified-style-btn {
+  width: 100%;
+  padding: 14px 20px;
+  border: 1px solid #e5e7eb;
+  border-radius: 12px;
+  background: linear-gradient(135deg, #f9fafb 0%, #f3f4f6 100%);
+  color: #374151;
+  font-size: 15px;
+  font-weight: 600;
+  cursor: pointer;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  transition: all 0.2s ease;
+}
+
+.unified-style-btn:hover {
+  background: linear-gradient(135deg, #f3f4f6 0%, #e5e7eb 100%);
+  border-color: #d1d5db;
+  transform: translateY(-1px);
+}
+
+.unified-style-btn:active {
+  transform: translateY(0);
+}
+
+/* 覆盖原有样式 */
+.panel-body {
+  padding: 20px !important;
+}
+
+/* 入场动画 */
+@keyframes unifiedFadeInUp {
+  from {
+    opacity: 0;
+    transform: translateY(10px);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0);
+  }
+}
+
+.unified-panel-card {
+  animation: unifiedFadeInUp 0.4s ease;
+}
+
+.unified-panel-card:nth-child(1) { animation-delay: 0.05s; }
+.unified-panel-card:nth-child(2) { animation-delay: 0.1s; }
+.unified-panel-card:nth-child(3) { animation-delay: 0.15s; }
+.unified-panel-card:nth-child(4) { animation-delay: 0.2s; }

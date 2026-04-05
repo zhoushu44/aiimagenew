@@ -1943,7 +1943,7 @@
           </div>
 
           <div class="section">
-            <button class="style-btn" id="styleBtn"><span>爆款风格分析</span><span class="btn-icon">↻</span></button>
+            <button class="style-btn" id="styleBtn"><span>开始分析</span><span class="btn-icon">↻</span></button>
             <div class="style-results" id="styleResults">
               <div class="style-results-message" id="styleResultsMessage"></div>
               <div class="style-results-grid" id="styleResultsGrid"></div>
@@ -2879,7 +2879,6 @@
               </label>
               <div class="overlay-chip">
                 <span class="result-no">${String(item.sort || index + 1).padStart(2, '0')}</span>
-                <span class="overlay-type">${escapeHtml(item.type_tag || item.type || 'Board')}</span>
               </div>
               ${imageUrl ? `<img src="${imageUrl}" alt="${escapeHtml(item.title || item.type || '生成结果')}" loading="lazy" data-role="preview-image" data-index="${index}">` : '<div class="image-shape"></div>'}
             </div>
@@ -3239,12 +3238,25 @@
     });
 
     fileInput.addEventListener('change', (event) => {
-      const files = Array.from(event.target.files).slice(0, 3);
+      const rawFiles = Array.from(event.target.files);
+      const invalidFile = rawFiles.find((file) => file && !file.type.startsWith('image/'));
+      if (invalidFile) {
+        event.target.value = '';
+        thumbs.innerHTML = emptyThumbsMarkup;
+        setResultStatus(`仅支持上传图片文件：${invalidFile.name || '未命名文件'}`, 'error');
+        return;
+      }
+
+      const files = rawFiles.slice(0, 3);
       thumbs.innerHTML = '';
 
       if (!files.length) {
         thumbs.innerHTML = emptyThumbsMarkup;
         return;
+      }
+
+      if (rawFiles.length > 3) {
+        setResultStatus('最多仅保留前 3 张图片，其余文件已忽略。', 'error');
       }
 
       files.forEach((file, index) => {

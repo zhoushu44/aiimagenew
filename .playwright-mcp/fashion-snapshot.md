@@ -1,0 +1,59 @@
+- generic [ref=e2]:
+  - banner [ref=e3]:
+    - generic [ref=e4]:
+      - generic [ref=e5]:
+        - generic [ref=e6]: Swiss Edition / AI Visual System
+        - generic [ref=e7]: ai设计室
+      - generic [ref=e8]:
+        - text: "2026"
+        - text: layout
+    - generic [ref=e9]:
+      - button "0.3元开通会员" [ref=e10] [cursor=pointer]
+      - button "34" [ref=e11] [cursor=pointer]
+      - button "生成记录" [ref=e12] [cursor=pointer]
+      - generic [ref=e13]: VIP
+  - main [ref=e14]:
+    - generic [ref=e15]:
+      - complementary "功能导航" [ref=e16]:
+        - link "01 商品套图" [ref=e17] [cursor=pointer]:
+          - /url: /suite
+          - generic [ref=e18]: "01"
+          - generic [ref=e19]: 商品套图
+        - link "02 A+详情页" [ref=e20] [cursor=pointer]:
+          - /url: /aplus
+          - generic [ref=e21]: "02"
+          - generic [ref=e22]: A+详情页
+        - link "03 服饰穿戴" [ref=e23] [cursor=pointer]:
+          - /url: /fashion
+          - generic [ref=e24]: "03"
+          - generic [ref=e25]: 服饰穿戴
+      - generic [ref=e27]:
+        - generic [ref=e30]: 上传素材
+        - generic [ref=e31]:
+          - generic [ref=e32]
+          - generic [ref=e36]: 商品图用于锁定服饰主体，最多 3 张
+          - generic [ref=e37]
+        - generic [ref=e41]:
+          - generic [ref=e42]
+          - generic [ref=e46]: 参考图用于约束姿态、氛围、构图或风格方向，最多 3 张
+          - generic [ref=e47]
+      - generic [ref=e51]:
+        - generic [ref=e54]: 策略配置
+        - generic [ref=e55]:
+          - combobox [ref=e57]
+          - combobox [ref=e59]
+          - combobox [ref=e61]
+          - combobox [ref=e63]
+      - generic [ref=e64]:
+        - generic [ref=e65]:
+          - generic [ref=e67]: 核心卖点
+          - button "✦ AI 帮写" [ref=e68] [cursor=pointer]
+        - textbox "1. 产品名称 2. 核心卖点 3. 适用人群 4. 期望场景 5. 具体参数" [ref=e72]:
+          - /placeholder: "1. 产品名称\n2. 核心卖点\n3. 适用人群\n4. 期望场景\n5. 具体参数"
+      - button "爆款风格分析 ↻" [ref=e75] [cursor=pointer]:
+        - generic [ref=e76]: 爆款风格分析
+        - generic [ref=e77]: ↻
+      - generic [ref=e81]:
+        - button "一键生成服饰穿戴图" [ref=e82] [cursor=pointer]
+        - button "更多操作" [ref=e84] [cursor=pointer]: ⋯
+  - text: FASHION LOOKBOOK / STYLING BOARD / MODEL ATMOSPHERE

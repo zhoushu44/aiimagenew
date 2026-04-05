@@ -1,0 +1,3 @@
+[   28175ms] TypeError: Cannot read properties of null (reading 'value')
+    at getPlatformLabel (http://127.0.0.1:5078/static/js/workspace.js:293:51)
+    at HTMLButtonElement.<anonymous> (http://127.0.0.1:5078/static/js/workspace.js:1420:37)

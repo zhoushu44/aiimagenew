@@ -1,0 +1,12 @@
+{
+  "url": "http://127.0.0.1:5078/fashion",
+  "localStorageValue": null,
+  "allKeys": [
+    "aiDesignState:suite",
+    "aiDesignState:aplus"
+  ],
+  "stageHtml": "\n          <button class=\"fashion-model-card is-selected\" type=\"button\" data-role=\"select-fashion-model\" data-source=\"ai\" data-id=\"ai-1775390517900\" aria-pressed=\"true\">\n            <span class=\"fashion-model-check\" aria-hidden=\"true\">✓</span>\n            <div class=\"fashion-model-preview\"><div class=\"fashion-model-card-placeholder\">AI</div></div>\n            <div class=\"fashion-model-info\">\n              <div class=\"fashion-model-name\">AI 基准模特</div>\n              <div class=\"fashion-model-summary\">女 · 青年 · 欧美白人 · 标准</div>\n              <div class=\"fashion-model-detail\">已按当前配置生成可用于服饰展示的模特。</div>\n            </div>\n          </button>\n        ",
+  "ctaText": "生成推荐场景",
+  "ctaDisabled": false,
+  "activeTab": "AI 生成"
+}

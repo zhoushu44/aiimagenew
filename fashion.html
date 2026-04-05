@@ -1,0 +1,987 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>AI服饰穿戴</title>
+  <link rel="stylesheet" href="/static/css/workspace.css">
+</head>
+<body data-page-mode="fashion" class="fashion-page">
+  <div class="app-shell">
+    <header class="console-topbar">
+      <div class="console-brand">
+        <a class="console-home" href="/">AI Commerce Console</a>
+        <div>
+          <div class="console-kicker">Fashion Workspace / Minimal Tech Control</div>
+          <div class="console-title">服饰穿戴工作台</div>
+        </div>
+      </div>
+    </header>
+
+    <main class="workspace-layout">
+      <aside class="control-rail">
+        <nav class="side-nav" aria-label="功能导航">
+          <a class="nav-item" href="/suite" data-mode="suite" data-nav-link="true" aria-pressed="false">
+            <span class="nav-item-index">01</span>
+            <span class="nav-item-label">商品套图</span>
+          </a>
+          <a class="nav-item" href="/aplus" data-mode="aplus" data-nav-link="true" aria-pressed="false">
+            <span class="nav-item-index">02</span>
+            <span class="nav-item-label">A+详情页</span>
+          </a>
+          <a class="nav-item active" href="/fashion" data-mode="fashion" data-nav-link="true" aria-pressed="true">
+            <span class="nav-item-index">03</span>
+            <span class="nav-item-label">服饰穿戴</span>
+          </a>
+        </nav>
+
+        <section class="panel stack-panel">
+          <div class="panel-head">
+            <span class="panel-kicker">outfit upload</span>
+            <h2>上传服装图片</h2>
+          </div>
+          <div class="upload-box fashion-upload-box">
+            <div class="upload-top fashion-upload-top">
+              <div class="upload-copy">
+                <button class="upload-btn" id="uploadBtn" type="button">上传服装图片</button>
+                <input id="fileInput" type="file" accept="image/*" multiple hidden>
+                <div class="upload-copy-meta">支持整套搭配或同款不同角度服装图</div>
+              </div>
+            </div>
+            <div class="hint upload-hint fashion-upload-hint">整套搭配或同一件服装不同角度图，最多5张</div>
+            <div class="thumbs" id="thumbs" style="display: none;"></div>
+          </div>
+        </section>
+
+        <section class="panel stack-panel">
+          <div class="panel-head">
+            <span class="panel-kicker">output ratio</span>
+            <h2>输出规格</h2>
+          </div>
+          <div class="output-specs">
+            <label class="spec-option"><input type="radio" name="outputSpec" value="3:4" checked><span>3:4</span></label>
+            <label class="spec-option"><input type="radio" name="outputSpec" value="1:1"><span>1:1</span></label>
+            <label class="spec-option"><input type="radio" name="outputSpec" value="9:16"><span>9:16</span></label>
+          </div>
+        </section>
+
+        <section class="panel stack-panel" id="appearanceSection">
+          <div class="panel-head">
+            <span class="panel-kicker">model source</span>
+            <h2>定制专属模特</h2>
+          </div>
+          <div class="model-tabs fashion-model-tabs">
+            <button class="model-tab active" data-model="ai" type="button">AI 生成</button>
+            <button class="model-tab" data-model="custom" type="button">我的模特</button>
+          </div>
+          <div class="model-config" id="aiModelConfig">
+            <div class="grid-2">
+              <label class="field"><span class="field-label">性别</span><select id="genderSelect"><option selected>女</option><option>男</option></select></label>
+              <label class="field"><span class="field-label">年龄</span><select id="ageSelect"><option selected>青年</option><option>少年</option><option>中年</option></select></label>
+              <label class="field"><span class="field-label">人种</span><select id="ethnicitySelect"><option selected>欧美白人</option><option>东亚</option><option>东南亚</option><option>非洲</option><option>拉丁</option></select></label>
+              <label class="field"><span class="field-label">体型</span><select id="bodyTypeSelect"><option selected>标准</option><option>偏瘦</option><option>偏胖</option></select></label>
+            </div>
+            <div class="model-subsection fashion-model-preview-section" id="generateModelSection">
+              <div class="panel-head compact">
+                <span class="panel-kicker">base model</span>
+                <h2>生成基准模特</h2>
+              </div>
+              <button class="generate-model-btn" id="generateModelBtn" type="button">生成基准模特</button>
+              <div class="fashion-model-stage" id="fashionModelStage"></div>
+            </div>
+            <div class="model-subsection" id="appearanceDetailSection">
+              <div class="panel-head compact">
+                <span class="panel-kicker">appearance detail</span>
+                <h2>外貌细节（可选）</h2>
+              </div>
+              <label class="field full">
+                <span class="field-label">细节描述</span>
+                <textarea id="appearanceDetails" placeholder="例如：小麦色皮肤、齐刘海、眼角有泪痕..."></textarea>
+              </label>
+            </div>
+          </div>
+          <div class="model-config" id="customModelConfig" hidden>
+            <div class="fashion-custom-models" id="customModelList"></div>
+            <input id="modelFileInput" type="file" accept="image/*" multiple hidden>
+          </div>
+        </section>
+
+        <section class="action-bar panel fashion-action-bar">
+          <div class="fashion-action-grid">
+            <button class="tool-btn fashion-back-btn" id="fashionBackBtn" type="button" hidden>上一步</button>
+            <button class="generate-btn" id="generateBtn" disabled>请选择模特</button>
+          </div>
+        </section>
+      </aside>
+
+      <section class="workspace-main">
+        <div class="intro-view active" id="introView">
+          <div class="fashion-flow-stage active" id="fashionStepModel" data-step="model">
+            <section class="hero-console panel">
+              <div class="hero-main">
+                <div class="hero-copy">
+                  <span class="small-label" id="heroEyebrow">03 / Styling Console</span>
+                  <h1 id="heroTitle">AI服饰穿戴</h1>
+                  <p id="heroDescription">围绕服装主体、模特来源和输出比例生成更适合服饰展示的穿搭结果。</p>
+                  <p class="hero-note" id="heroNote">Styling Pipeline / Focused Output</p>
+                </div>
+                <div class="hero-metrics">
+                  <article class="metric-card">
+                    <span class="stat-label" id="outputSystemLabel">look</span>
+                    <span class="stat-value" id="outputCountValue">06</span>
+                    <span class="result-meta" id="outputSystemMeta">穿搭展示、氛围、细节与尺码说明统一输出。</span>
+                  </article>
+                  <article class="metric-card">
+                    <span class="stat-label" id="gridLogicLabel">layout</span>
+                    <span class="stat-value" id="gridLogicValue">2×4</span>
+                    <span class="result-meta" id="gridLogicMeta">模特控制更集中，结果处理更顺手。</span>
+                  </article>
+                </div>
+              </div>
+              <div class="showcase-grid compact-showcase-grid">
+                <article class="showcase-card hero-showcase compact-hero-showcase">
+                  <div class="showcase-topline"><span>fashion flow</span><span>lookbook</span></div>
+                  <div class="showcase-title">围绕服装主体出图</div>
+                  <p>模特、比例与服装一致性保持在同一条简洁链路里。</p>
+                  <div class="preview-strip">
+                    <div class="strip-item"><span class="small-label">ratio</span><span class="strip-value">3:4</span></div>
+                    <div class="strip-item"><span class="small-label">mode</span><span class="strip-value">ai / custom</span></div>
+                    <div class="strip-item"><span class="small-label">count</span><span class="strip-value">5 max</span></div>
+                  </div>
+                </article>
+                <article class="showcase-card"><span class="section-index">01</span><div class="mini-title">服装</div><div class="mini-sub">同一件服装或整套搭配保持主体一致。</div></article>
+                <article class="showcase-card"><span class="section-index">02</span><div class="mini-title">模特</div><div class="mini-sub">AI 生成与自定义模特可以直接切换。</div></article>
+                <article class="showcase-card"><span class="section-index">03</span><div class="mini-title">结果</div><div class="mini-sub">统一进入预览、筛选与下载链路。</div></article>
+              </div>
+            </section>
+          </div>
+
+          <div class="fashion-flow-stage" id="fashionStepScene" data-step="scene">
+            <section class="fashion-scene-console panel">
+              <div class="fashion-scene-head">
+                <div>
+                  <span class="small-label">04 / Scene Planner</span>
+                  <h2 class="fashion-scene-title">选择场景</h2>
+                </div>
+                <p class="fashion-scene-copy">先锁定姿态、镜头景别与视角，再进入最终服饰穿戴图生成。</p>
+              </div>
+              <div class="fashion-scene-body" id="fashionSceneBody"></div>
+            </section>
+          </div>
+        </div>
+
+        <div class="result-view" id="resultView">
+          <section class="result-console panel">
+            <div class="result-header">
+              <div class="result-heading">
+                <span class="small-label" id="resultEyebrow">02 / Look Outputs</span>
+                <div class="result-taskbar">
+                  <div class="task-summary">
+                    <h2 id="resultTitle">穿搭结果</h2>
+                    <div class="task-summary-line" id="taskSummaryLine">统一输出为适合服装展示、筛选下载与继续排版的结果结构。</div>
+                  </div>
+                  <div class="toolbar">
+                    <button class="tool-btn highlight" id="generateTitlesBtn" type="button">智能生成上架标题</button>
+                    <button class="tool-btn" id="selectAllBtn" type="button">全选</button>
+                    <button class="tool-btn" id="downloadSelectedBtn" type="button">下载</button>
+                  </div>
+                </div>
+                <p class="result-meta" id="resultMeta">系统将根据服饰商品图、平台策略、卖点与风格参考生成服饰穿戴结果。</p>
+                <div class="result-status-message" id="resultStatusMessage"></div>
+                <div class="title-suggestion-panel" id="titleSuggestionPanel" hidden></div>
+              </div>
+            </div>
+            <div class="result-grid" id="resultGrid"></div>
+          </section>
+        </div>
+      </section>
+    </main>
+  </div>
+
+  <div class="preview-modal" id="previewModal" hidden>
+    <div class="preview-backdrop" id="previewBackdrop"></div>
+    <div class="preview-dialog" role="dialog" aria-modal="true" aria-labelledby="previewTitle">
+      <div class="preview-header-bar">
+        <div>
+          <div class="small-label" id="previewType">预览</div>
+          <div class="preview-title" id="previewTitle">图片预览</div>
+        </div>
+        <div class="preview-actions">
+          <button class="tool-btn" id="previewDownloadBtn" type="button">下载当前图</button>
+          <button class="tool-btn" id="previewCloseBtn" type="button">关闭</button>
+        </div>
+      </div>
+      <div class="preview-stage">
+        <button class="preview-nav" id="previewPrevBtn" type="button" aria-label="上一张">‹</button>
+        <img id="previewImage" alt="预览图片">
+        <button class="preview-nav" id="previewNextBtn" type="button" aria-label="下一张">›</button>
+      </div>
+    </div>
+  </div>
+
+  <script src="/static/js/workspace.js"></script>
+  <script>
+    document.addEventListener('DOMContentLoaded', function() {
+      const STORAGE_KEY = 'aiDesignState:fashion';
+      const MODEL_GENERATION_DELAY = 1400;
+      const modelTabs = document.querySelectorAll('.model-tab');
+      const aiModelConfig = document.getElementById('aiModelConfig');
+      const customModelConfig = document.getElementById('customModelConfig');
+      const appearanceDetailSection = document.getElementById('appearanceDetailSection');
+      const customModelList = document.getElementById('customModelList');
+      const modelFileInput = document.getElementById('modelFileInput');
+      const generateModelBtn = document.getElementById('generateModelBtn');
+      const fashionModelStage = document.getElementById('fashionModelStage');
+      const generateBtn = document.getElementById('generateBtn');
+      const fashionBackBtn = document.getElementById('fashionBackBtn');
+      const fashionStepModel = document.getElementById('fashionStepModel');
+      const fashionStepScene = document.getElementById('fashionStepScene');
+      const fashionSceneBody = document.getElementById('fashionSceneBody');
+      const specOptions = document.querySelectorAll('.spec-option input[type="radio"]');
+      let generationTimer = null;
+
+      const readWorkspaceState = () => {
+        try {
+          return JSON.parse(localStorage.getItem(STORAGE_KEY) || '{}');
+        } catch (error) {
+          console.error('Failed to read fashion state:', error);
+          return {};
+        }
+      };
+
+      const patchWorkspaceState = (patch) => {
+        try {
+          const nextState = { ...readWorkspaceState(), ...patch };
+          localStorage.setItem(STORAGE_KEY, JSON.stringify(nextState));
+          return nextState;
+        } catch (error) {
+          console.error('Failed to save fashion state:', error);
+          return readWorkspaceState();
+        }
+      };
+
+      const escapeHtml = (value = '') => String(value)
+        .replace(/&/g, '&amp;')
+        .replace(/</g, '&lt;')
+        .replace(/>/g, '&gt;')
+        .replace(/"/g, '&quot;')
+        .replace(/'/g, '&#39;');
+
+      const normalizeCustomModels = (models) => {
+        if (!Array.isArray(models)) {
+          return [];
+        }
+        return models
+          .filter((item) => item && typeof item === 'object')
+          .map((item) => ({
+            id: String(item.id || `custom-${Date.now()}`),
+            name: String(item.name || '我的模特').trim() || '我的模特',
+            previewUrl: String(item.previewUrl || ''),
+          }))
+          .filter((item) => item.previewUrl);
+      };
+
+      const buildGeneratedModel = (state) => {
+        const gender = document.getElementById('genderSelect')?.value || '女';
+        const age = document.getElementById('ageSelect')?.value || '青年';
+        const ethnicity = document.getElementById('ethnicitySelect')?.value || '欧美白人';
+        const bodyType = document.getElementById('bodyTypeSelect')?.value || '标准';
+        const details = (document.getElementById('appearanceDetails')?.value || '').trim();
+        const summary = [gender, age, ethnicity, bodyType].filter(Boolean).join(' · ');
+        const detailText = details || '已按当前配置生成可用于服饰展示的模特。';
+        const stamp = Date.now();
+        return {
+          id: `ai-${stamp}`,
+          name: 'AI 基准模特',
+          summary,
+          detailText,
+          previewLabel: 'AI',
+          createdAt: stamp,
+        };
+      };
+
+      const normalizeSceneGroups = (groups) => {
+        if (!Array.isArray(groups)) {
+          return [];
+        }
+        return groups
+          .filter((group) => group && typeof group === 'object')
+          .map((group, groupIndex) => ({
+            id: String(group.id || `scene-group-${groupIndex + 1}`),
+            title: String(group.title || `场景组 ${groupIndex + 1}`),
+            subtitle: String(group.subtitle || group.summary || group.description || ''),
+            prompt: String(group.prompt || group.scene_prompt || group.scenePrompt || ''),
+            poses: Array.isArray(group.poses)
+              ? group.poses
+                .filter((pose) => pose && typeof pose === 'object')
+                .map((pose, poseIndex) => ({
+                  id: String(pose.id || `pose-${groupIndex + 1}-${poseIndex + 1}`),
+                  title: String(pose.title || `姿态 ${poseIndex + 1}`),
+                  subtitle: String(pose.subtitle || pose.summary || pose.description || ''),
+                  prompt: String(pose.prompt || pose.pose_prompt || pose.posePrompt || ''),
+                }))
+              : [],
+          }))
+          .filter((group) => group.poses.length > 0);
+      };
+
+      const normalizeMultiSelectValues = (values, allowedValues) => {
+        if (!Array.isArray(values)) {
+          return [];
+        }
+        const allowedSet = new Set(allowedValues);
+        return values
+          .map((item) => String(item || '').trim())
+          .filter((item, index, list) => item && allowedSet.has(item) && list.indexOf(item) === index);
+      };
+
+      const SHOT_SIZE_OPTIONS = ['全身', '四分之三', '半身', '特写'];
+      const VIEW_ANGLE_OPTIONS = ['正面', '侧面', '3/4侧', '背面'];
+
+      const getFashionState = () => {
+        const state = readWorkspaceState();
+        const customModels = normalizeCustomModels(state.fashionCustomModels);
+        return {
+          fashionModelType: state.fashionModelType === 'custom' ? 'custom' : 'ai',
+          fashionModelGenerationState: state.fashionModelGenerationState === 'loading'
+            ? 'loading'
+            : state.fashionModelGenerationState === 'done'
+              ? 'done'
+              : 'idle',
+          fashionGeneratedModel: state.fashionGeneratedModel && typeof state.fashionGeneratedModel === 'object'
+            ? state.fashionGeneratedModel
+            : null,
+          fashionCustomModels: customModels,
+          fashionSelectedModelSource: state.fashionSelectedModelSource === 'custom' ? 'custom' : state.fashionSelectedModelSource === 'ai' ? 'ai' : '',
+          fashionSelectedModelId: typeof state.fashionSelectedModelId === 'string' ? state.fashionSelectedModelId : '',
+          fashionOutputSpec: state.fashionOutputSpec || '',
+          fashionFlowStep: state.fashionFlowStep === 'scene' || state.fashionFlowStep === 'result' ? state.fashionFlowStep : 'model',
+          fashionSceneGenerationState: state.fashionSceneGenerationState === 'loading'
+            ? 'loading'
+            : state.fashionSceneGenerationState === 'done'
+              ? 'done'
+              : state.fashionSceneGenerationState === 'error'
+                ? 'error'
+                : 'idle',
+          fashionSceneGroups: normalizeSceneGroups(state.fashionSceneGroups),
+          fashionSelectedSceneGroupId: typeof state.fashionSelectedSceneGroupId === 'string' ? state.fashionSelectedSceneGroupId : '',
+          fashionSelectedPoseId: typeof state.fashionSelectedPoseId === 'string' ? state.fashionSelectedPoseId : '',
+          fashionSelectedShotSizes: normalizeMultiSelectValues(state.fashionSelectedShotSizes, SHOT_SIZE_OPTIONS),
+          fashionSelectedViewAngles: normalizeMultiSelectValues(state.fashionSelectedViewAngles, VIEW_ANGLE_OPTIONS),
+          fashionScenePrompt: typeof state.fashionScenePrompt === 'string' ? state.fashionScenePrompt : '',
+          fashionSceneError: typeof state.fashionSceneError === 'string' ? state.fashionSceneError : '',
+          fashionScenePlanRaw: state.fashionScenePlanRaw && typeof state.fashionScenePlanRaw === 'object'
+            ? state.fashionScenePlanRaw
+            : null,
+        };
+      };
+
+      const getSelectedSceneGroup = (state) => state.fashionSceneGroups.find((group) => group.id === state.fashionSelectedSceneGroupId) || null;
+
+      const getSelectedScenePose = (state) => {
+        const group = getSelectedSceneGroup(state);
+        if (!group) {
+          return null;
+        }
+        return group.poses.find((pose) => pose.id === state.fashionSelectedPoseId) || null;
+      };
+
+      const buildFashionCtaState = (state) => {
+        const hasSelectedModel = isModelAvailable(state, state.fashionSelectedModelSource, state.fashionSelectedModelId);
+        if (!hasSelectedModel) {
+          return {
+            hasSelectedModel: false,
+            disabled: true,
+            label: '请选择模特',
+            step: state.fashionFlowStep,
+          };
+        }
+        if (state.fashionFlowStep !== 'scene') {
+          return {
+            hasSelectedModel: true,
+            disabled: false,
+            label: '生成推荐场景',
+            step: 'model',
+          };
+        }
+        if (state.fashionSceneGenerationState === 'loading') {
+          return {
+            hasSelectedModel: true,
+            disabled: true,
+            label: '生成中...',
+            step: 'scene',
+          };
+        }
+        if (state.fashionSceneGenerationState === 'error') {
+          return {
+            hasSelectedModel: true,
+            disabled: false,
+            label: '重新生成推荐场景',
+            step: 'scene',
+          };
+        }
+        if (state.fashionSceneGenerationState !== 'done' || !state.fashionSceneGroups.length) {
+          return {
+            hasSelectedModel: true,
+            disabled: false,
+            label: '生成推荐场景',
+            step: 'scene',
+          };
+        }
+        const hasPose = Boolean(getSelectedScenePose(state));
+        const hasShotSizes = state.fashionSelectedShotSizes.length > 0;
+        const hasViewAngles = state.fashionSelectedViewAngles.length > 0;
+        if (!hasPose) {
+          return {
+            hasSelectedModel: true,
+            disabled: true,
+            label: '请选择姿态',
+            step: 'scene',
+          };
+        }
+        if (!hasShotSizes || !hasViewAngles) {
+          return {
+            hasSelectedModel: true,
+            disabled: true,
+            label: '请选择景别和视角',
+            step: 'scene',
+          };
+        }
+        return {
+          hasSelectedModel: true,
+          disabled: false,
+          label: '生成服饰穿戴图',
+          step: 'scene',
+        };
+      };
+
+      const notifyFashionStateChange = () => {
+        window.dispatchEvent(new CustomEvent('fashion:model-state-change', {
+          detail: {
+            ...getFashionState(),
+            cta: buildFashionCtaState(getFashionState()),
+          },
+        }));
+      };
+
+      const isModelAvailable = (state, source, id) => {
+        if (source === 'ai') {
+          return state.fashionModelGenerationState === 'done' && state.fashionGeneratedModel && state.fashionGeneratedModel.id === id;
+        }
+        if (source === 'custom') {
+          return state.fashionCustomModels.some((model) => model.id === id);
+        }
+        return false;
+      };
+
+      const applyModelType = (modelType) => {
+        modelTabs.forEach((tab) => {
+          const isActive = tab.dataset.model === modelType;
+          tab.classList.toggle('active', isActive);
+          tab.setAttribute('aria-pressed', isActive ? 'true' : 'false');
+        });
+        if (aiModelConfig) aiModelConfig.hidden = modelType !== 'ai';
+        if (customModelConfig) customModelConfig.hidden = modelType !== 'custom';
+        if (appearanceDetailSection) appearanceDetailSection.hidden = modelType !== 'ai';
+      };
+
+      const buildModelCardMarkup = (model, options = {}) => {
+        const isSelected = Boolean(options.selected);
+        const source = options.source || 'custom';
+        const summary = model.summary || model.name || '';
+        const detailText = model.detailText || (source === 'ai' ? '已生成，可直接用于推荐场景。' : '已上传，可直接用于推荐场景。');
+        const previewLabel = model.previewLabel || (source === 'ai' ? 'AI' : 'MY');
+        const previewImage = model.previewUrl
+          ? `<img src="${escapeHtml(model.previewUrl)}" alt="${escapeHtml(model.name || '模特预览')}">`
+          : `<div class="fashion-model-card-placeholder">${escapeHtml(previewLabel)}</div>`;
+        const infoMarkup = source === 'custom'
+          ? ''
+          : `
+            <div class="fashion-model-info">
+              <div class="fashion-model-name">${escapeHtml(model.name || '模特卡片')}</div>
+              <div class="fashion-model-summary">${escapeHtml(summary)}</div>
+              <div class="fashion-model-detail">${escapeHtml(detailText)}</div>
+            </div>
+          `;
+        return `
+          <button
+            class="fashion-model-card fashion-model-card-${escapeHtml(source)}${isSelected ? ' is-selected' : ''}"
+            type="button"
+            data-role="select-fashion-model"
+            data-source="${escapeHtml(source)}"
+            data-id="${escapeHtml(model.id)}"
+            aria-pressed="${isSelected ? 'true' : 'false'}"
+          >
+            <span class="fashion-model-check" aria-hidden="true">✓</span>
+            <div class="fashion-model-preview">${previewImage}</div>
+            ${infoMarkup}
+          </button>
+        `;
+      };
+
+      const renderAiModelStage = (state) => {
+        if (!fashionModelStage) {
+          return;
+        }
+        if (state.fashionModelGenerationState === 'loading') {
+          fashionModelStage.innerHTML = `
+            <div class="fashion-model-stage-card is-loading">
+              <div class="fashion-loading-dots" aria-hidden="true"><span></span><span></span><span></span></div>
+              <div class="fashion-model-stage-title">生成中...</div>
+              <div class="fashion-model-stage-copy">正在根据当前模特配置生成基准模特。</div>
+            </div>
+          `;
+          return;
+        }
+        if (state.fashionModelGenerationState === 'done' && state.fashionGeneratedModel) {
+          const isSelected = state.fashionSelectedModelSource === 'ai'
+            && state.fashionSelectedModelId === state.fashionGeneratedModel.id;
+          fashionModelStage.innerHTML = buildModelCardMarkup(state.fashionGeneratedModel, {
+            selected: isSelected,
+            source: 'ai',
+          });
+          return;
+        }
+        fashionModelStage.innerHTML = `
+          <div class="fashion-model-stage-card is-empty">
+            <div class="fashion-model-stage-icon" aria-hidden="true">✦</div>
+            <div class="fashion-model-stage-title">暂无基准模特</div>
+            <div class="fashion-model-stage-copy">点击上方按钮，即可按当前配置生成专属模特。</div>
+          </div>
+        `;
+      };
+
+      const renderCustomModelList = (state) => {
+        if (!customModelList) {
+          return;
+        }
+        const cards = [
+          `
+            <button class="upload-model-btn fashion-upload-model-card" id="uploadModelBtn" type="button">
+              <div class="upload-model-icon">+</div>
+              <div class="upload-model-text">上传新模特</div>
+            </button>
+          `,
+          ...state.fashionCustomModels.map((model) => buildModelCardMarkup(model, {
+            selected: state.fashionSelectedModelSource === 'custom' && state.fashionSelectedModelId === model.id,
+            source: 'custom',
+          })),
+        ];
+        customModelList.innerHTML = cards.join('');
+      };
+
+      const updateGenerateModelButton = (state) => {
+        if (!generateModelBtn) {
+          return;
+        }
+        const isLoading = state.fashionModelGenerationState === 'loading';
+        generateModelBtn.disabled = isLoading;
+        generateModelBtn.classList.toggle('is-loading', isLoading);
+        generateModelBtn.innerHTML = isLoading
+          ? '<span class="generate-model-spinner" aria-hidden="true"></span><span>基准模特生成中...</span>'
+          : '<span>生成基准模特</span>';
+      };
+
+      const renderSceneOptionChips = (values, selectedValues, role) => values.map((value) => {
+        const isSelected = selectedValues.includes(value);
+        return `
+          <button
+            class="fashion-scene-chip${isSelected ? ' is-selected' : ''}"
+            type="button"
+            data-role="${escapeHtml(role)}"
+            data-value="${escapeHtml(value)}"
+            aria-pressed="${isSelected ? 'true' : 'false'}"
+          >${escapeHtml(value)}</button>
+        `;
+      }).join('');
+
+      const renderFashionSceneState = (state) => {
+        if (!fashionSceneBody) {
+          return;
+        }
+
+        if (state.fashionSceneGenerationState === 'loading') {
+          fashionSceneBody.innerHTML = `
+            <div class="fashion-scene-loading-card">
+              <div class="fashion-loading-dots" aria-hidden="true"><span></span><span></span><span></span></div>
+              <div class="fashion-scene-loading-title">生成中...</div>
+              <div class="fashion-scene-loading-copy">正在根据当前服装主体与模特选择生成推荐场景。</div>
+            </div>
+          `;
+          return;
+        }
+
+        if (state.fashionSceneGenerationState === 'error') {
+          fashionSceneBody.innerHTML = `
+            <div class="fashion-scene-feedback is-error">
+              <div class="fashion-scene-feedback-title">场景生成失败</div>
+              <div class="fashion-scene-feedback-copy">${escapeHtml(state.fashionSceneError || '请重新生成推荐场景。')}</div>
+            </div>
+          `;
+          return;
+        }
+
+        if (state.fashionSceneGenerationState !== 'done' || !state.fashionSceneGroups.length) {
+          fashionSceneBody.innerHTML = `
+            <div class="fashion-scene-feedback">
+              <div class="fashion-scene-feedback-title">等待生成推荐场景</div>
+              <div class="fashion-scene-feedback-copy">已选模特后，可基于服装图生成可选场景组、姿态和镜头建议。</div>
+            </div>
+          `;
+          return;
+        }
+
+        const selectedGroup = getSelectedSceneGroup(state);
+        const selectedPose = getSelectedScenePose(state);
+
+        fashionSceneBody.innerHTML = `
+          <div class="fashion-scene-groups">
+            ${state.fashionSceneGroups.map((group) => {
+              const groupSelected = group.id === state.fashionSelectedSceneGroupId;
+              return `
+                <section class="fashion-scene-group${groupSelected ? ' is-selected' : ''}">
+                  <div class="fashion-scene-group-head">
+                    <div>
+                      <div class="fashion-scene-group-title">${escapeHtml(group.title)}</div>
+                      ${group.subtitle ? `<div class="fashion-scene-group-subtitle">${escapeHtml(group.subtitle)}</div>` : ''}
+                    </div>
+                  </div>
+                  <div class="fashion-pose-grid">
+                    ${group.poses.map((pose) => {
+                      const poseSelected = groupSelected && pose.id === state.fashionSelectedPoseId;
+                      return `
+                        <button
+                          class="fashion-pose-card${poseSelected ? ' is-selected' : ''}"
+                          type="button"
+                          data-role="select-fashion-pose"
+                          data-group-id="${escapeHtml(group.id)}"
+                          data-pose-id="${escapeHtml(pose.id)}"
+                          aria-pressed="${poseSelected ? 'true' : 'false'}"
+                        >
+                          <span class="fashion-pose-card-tag">pose</span>
+                          <span class="fashion-pose-card-title">${escapeHtml(pose.title)}</span>
+                          ${pose.subtitle ? `<span class="fashion-pose-card-copy">${escapeHtml(pose.subtitle)}</span>` : ''}
+                        </button>
+                      `;
+                    }).join('')}
+                  </div>
+                </section>
+              `;
+            }).join('')}
+          </div>
+          ${selectedGroup && selectedPose ? `
+            <section class="fashion-scene-selection-panel">
+              <div class="fashion-scene-selection-head">
+                <div>
+                  <div class="fashion-scene-selection-title">已选姿态</div>
+                  <div class="fashion-scene-selection-copy">${escapeHtml(selectedGroup.title)} / ${escapeHtml(selectedPose.title)}</div>
+                </div>
+              </div>
+              <div class="fashion-scene-option-block">
+                <div class="fashion-scene-option-label">镜头景别</div>
+                <div class="fashion-scene-chip-row">
+                  ${renderSceneOptionChips(SHOT_SIZE_OPTIONS, state.fashionSelectedShotSizes, 'toggle-fashion-shot-size')}
+                </div>
+              </div>
+              <div class="fashion-scene-option-block">
+                <div class="fashion-scene-option-label">视角</div>
+                <div class="fashion-scene-chip-row">
+                  ${renderSceneOptionChips(VIEW_ANGLE_OPTIONS, state.fashionSelectedViewAngles, 'toggle-fashion-view-angle')}
+                </div>
+              </div>
+            </section>
+          ` : ''}
+        `;
+      };
+
+      const updateFashionCTA = (state) => {
+        if (!generateBtn) {
+          return;
+        }
+        const cta = buildFashionCtaState(state);
+        generateBtn.disabled = Boolean(cta.disabled);
+        generateBtn.textContent = cta.label;
+        generateBtn.classList.toggle('fashion-generate-btn-disabled', Boolean(cta.disabled));
+        generateBtn.classList.toggle('fashion-generate-btn-active', !cta.disabled);
+        if (fashionBackBtn) {
+          fashionBackBtn.hidden = cta.step !== 'scene';
+        }
+      };
+
+      const renderFashionFlowState = (state) => {
+        const isSceneStep = state.fashionFlowStep === 'scene';
+        if (fashionStepModel) {
+          fashionStepModel.classList.toggle('active', !isSceneStep);
+        }
+        if (fashionStepScene) {
+          fashionStepScene.classList.toggle('active', isSceneStep);
+        }
+        renderFashionSceneState(state);
+      };
+
+      const renderFashionModelState = () => {
+        const state = getFashionState();
+        applyModelType(state.fashionModelType);
+        updateGenerateModelButton(state);
+        renderAiModelStage(state);
+        renderCustomModelList(state);
+        renderFashionFlowState(state);
+        updateFashionCTA(state);
+        notifyFashionStateChange();
+      };
+
+      window.fashionWorkspace = {
+        getState: () => {
+          const state = getFashionState();
+          return {
+            ...state,
+            cta: buildFashionCtaState(state),
+          };
+        },
+        patchState: (patch = {}) => {
+          patchWorkspaceState(patch || {});
+          renderFashionModelState();
+        },
+        setFlowStep: (step) => {
+          setFashionFlowStep(step);
+        },
+      };
+
+      const setSelectedModel = (source, id) => {
+        const state = getFashionState();
+        if (!isModelAvailable(state, source, id)) {
+          patchWorkspaceState({
+            fashionSelectedModelSource: '',
+            fashionSelectedModelId: '',
+          });
+        } else {
+          patchWorkspaceState({
+            fashionSelectedModelSource: source,
+            fashionSelectedModelId: id,
+          });
+        }
+        renderFashionModelState();
+      };
+
+      const toggleMultiValue = (values, targetValue) => {
+        const current = Array.isArray(values) ? values.slice() : [];
+        const next = current.includes(targetValue)
+          ? current.filter((item) => item !== targetValue)
+          : [...current, targetValue];
+        return next;
+      };
+
+      const setFashionFlowStep = (step) => {
+        patchWorkspaceState({ fashionFlowStep: step === 'scene' || step === 'result' ? step : 'model' });
+        renderFashionModelState();
+      };
+
+      const setSelectedPose = (groupId, poseId) => {
+        const state = getFashionState();
+        const group = state.fashionSceneGroups.find((item) => item.id === groupId);
+        const pose = group?.poses.find((item) => item.id === poseId);
+        if (!group || !pose) {
+          return;
+        }
+        patchWorkspaceState({
+          fashionSelectedSceneGroupId: group.id,
+          fashionSelectedPoseId: pose.id,
+          fashionScenePrompt: [group.prompt, pose.prompt].filter(Boolean).join('\n'),
+        });
+        renderFashionModelState();
+      };
+
+      const toggleSceneShotSize = (value) => {
+        const state = getFashionState();
+        patchWorkspaceState({
+          fashionSelectedShotSizes: toggleMultiValue(state.fashionSelectedShotSizes, value),
+        });
+        renderFashionModelState();
+      };
+
+      const toggleSceneViewAngle = (value) => {
+        const state = getFashionState();
+        patchWorkspaceState({
+          fashionSelectedViewAngles: toggleMultiValue(state.fashionSelectedViewAngles, value),
+        });
+        renderFashionModelState();
+      };
+
+      const startModelGeneration = () => {
+        if (generationTimer) {
+          window.clearTimeout(generationTimer);
+        }
+        patchWorkspaceState({
+          fashionModelGenerationState: 'loading',
+          fashionGeneratedModel: null,
+          fashionSelectedModelSource: '',
+          fashionSelectedModelId: '',
+        });
+        renderFashionModelState();
+        generationTimer = window.setTimeout(() => {
+          const generatedModel = buildGeneratedModel(getFashionState());
+          patchWorkspaceState({
+            fashionModelGenerationState: 'done',
+            fashionGeneratedModel: generatedModel,
+            fashionSelectedModelSource: 'ai',
+            fashionSelectedModelId: generatedModel.id,
+          });
+          renderFashionModelState();
+        }, MODEL_GENERATION_DELAY);
+      };
+
+      const appendCustomModels = (files) => {
+        const nextFiles = Array.from(files || []).filter((file) => file && String(file.type || '').startsWith('image/'));
+        if (!nextFiles.length) {
+          return;
+        }
+        const state = getFashionState();
+        let remaining = nextFiles.length;
+        const newModels = [];
+        nextFiles.forEach((file, index) => {
+          const reader = new FileReader();
+          reader.onload = () => {
+            newModels.push({
+              id: `custom-${Date.now()}-${index}-${Math.random().toString(36).slice(2, 7)}`,
+              name: (file.name || '我的模特').replace(/\.[^.]+$/, ''),
+              previewUrl: typeof reader.result === 'string' ? reader.result : '',
+            });
+            remaining -= 1;
+            if (remaining === 0) {
+              const mergedModels = [...state.fashionCustomModels, ...newModels.filter((item) => item.previewUrl)];
+              const selectedModel = newModels.find((item) => item.previewUrl) || mergedModels[0] || null;
+              patchWorkspaceState({
+                fashionCustomModels: mergedModels,
+                fashionModelType: 'custom',
+                fashionSelectedModelSource: selectedModel ? 'custom' : '',
+                fashionSelectedModelId: selectedModel ? selectedModel.id : '',
+              });
+              if (modelFileInput) {
+                modelFileInput.value = '';
+              }
+              renderFashionModelState();
+            }
+          };
+          reader.onerror = () => {
+            remaining -= 1;
+            if (remaining === 0) {
+              patchWorkspaceState({ fashionCustomModels: [...state.fashionCustomModels, ...newModels.filter((item) => item.previewUrl)] });
+              renderFashionModelState();
+            }
+          };
+          reader.readAsDataURL(file);
+        });
+      };
+
+      const restoreFashionState = () => {
+        const state = getFashionState();
+        if (state.fashionOutputSpec) {
+          const checkedOption = Array.from(specOptions).find((option) => option.value === state.fashionOutputSpec);
+          if (checkedOption) {
+            checkedOption.checked = true;
+          }
+        }
+        if (!isModelAvailable(state, state.fashionSelectedModelSource, state.fashionSelectedModelId)) {
+          patchWorkspaceState({
+            fashionSelectedModelSource: '',
+            fashionSelectedModelId: '',
+          });
+        }
+        renderFashionModelState();
+      };
+
+      if (modelTabs && modelTabs.length > 0) {
+        modelTabs.forEach((tab) => {
+          tab.addEventListener('click', function(event) {
+            event.preventDefault();
+            patchWorkspaceState({ fashionModelType: this.dataset.model === 'custom' ? 'custom' : 'ai' });
+            renderFashionModelState();
+          });
+        });
+      }
+
+      if (generateModelBtn) {
+        generateModelBtn.addEventListener('click', function() {
+          startModelGeneration();
+        });
+      }
+
+      if (customModelList) {
+        customModelList.addEventListener('click', function(event) {
+          const uploadButton = event.target.closest('#uploadModelBtn');
+          if (uploadButton) {
+            modelFileInput?.click();
+            return;
+          }
+          const modelCard = event.target.closest('[data-role="select-fashion-model"]');
+          if (!modelCard) {
+            return;
+          }
+          setSelectedModel(modelCard.dataset.source || '', modelCard.dataset.id || '');
+        });
+      }
+
+      if (fashionModelStage) {
+        fashionModelStage.addEventListener('click', function(event) {
+          const modelCard = event.target.closest('[data-role="select-fashion-model"]');
+          if (!modelCard) {
+            return;
+          }
+          setSelectedModel(modelCard.dataset.source || '', modelCard.dataset.id || '');
+        });
+      }
+
+      if (fashionSceneBody) {
+        fashionSceneBody.addEventListener('click', function(event) {
+          const poseCard = event.target.closest('[data-role="select-fashion-pose"]');
+          if (poseCard) {
+            setSelectedPose(poseCard.dataset.groupId || '', poseCard.dataset.poseId || '');
+            return;
+          }
+
+          const shotChip = event.target.closest('[data-role="toggle-fashion-shot-size"]');
+          if (shotChip) {
+            toggleSceneShotSize(shotChip.dataset.value || '');
+            return;
+          }
+
+          const viewChip = event.target.closest('[data-role="toggle-fashion-view-angle"]');
+          if (viewChip) {
+            toggleSceneViewAngle(viewChip.dataset.value || '');
+          }
+        });
+      }
+
+      if (fashionBackBtn) {
+        fashionBackBtn.addEventListener('click', function() {
+          setFashionFlowStep('model');
+        });
+      }
+
+      if (modelFileInput) {
+        modelFileInput.addEventListener('change', function() {
+          appendCustomModels(this.files);
+        });
+      }
+
+      if (specOptions && specOptions.length > 0) {
+        specOptions.forEach((option) => {
+          option.addEventListener('change', function() {
+            if (this.checked) {
+              patchWorkspaceState({ fashionOutputSpec: this.value });
+            }
+          });
+        });
+      }
+
+      window.addEventListener('beforeunload', function() {
+        if (generationTimer) {
+          window.clearTimeout(generationTimer);
+        }
+      });
+
+      restoreFashionState();
+    });
+  </script>
+</body>
+</html>
