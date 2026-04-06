@@ -1294,6 +1294,7 @@ def normalize_plan_type_list(raw_value, allowed_types, limit=3):
     return normalized
 
 
+def build_suite_plan(platform: str, selling_text: str, output_count: int, image_payloads, country: str, text_type: str, image_size_ratio: str, selected_style=None, mode: str = 'suite', product_json=None):
     _, type_rules = get_suite_type_rules(output_count)
     response_text = call_chat_completion(
         SUITE_PLAN_SYSTEM_PROMPT,
@@ -1637,6 +1638,42 @@ def decode_generated_image(item: dict):
     raise ValueError('图像生成接口未返回可用图片内容')
 
 
+
+def collect_streamed_generated_images(events):
+    generated_images = []
+    usage = None
+
+    for event in events:
+        if event is None:
+            continue
+
+        event_type = getattr(event, 'type', '') or ''
+        if event_type == 'image_generation.partial_succeeded':
+            b64_json = getattr(event, 'b64_json', None)
+            image_url = getattr(event, 'url', None)
+            if b64_json:
+                generated_images.append({'b64_json': b64_json})
+            elif image_url:
+                generated_images.append({'url': image_url})
+        elif event_type == 'image_generation.completed':
+            usage = getattr(event, 'usage', None)
+
+    if not generated_images:
+        raise ValueError('流式图像生成未返回可用图片内容')
+
+    if usage is not None:
+        for item in generated_images:
+            item['usage'] = usage
+
+    return generated_images
+
+
+
+def collect_streamed_generated_image(events):
+    return collect_streamed_generated_images(events)[0]
+
+
+
 def save_generated_image(task_id: str, sort: int, image_type: str, image_bytes: bytes, mime_type: str):
     cleanup_generated_suites(active_task_id=task_id)
     output_dir = GENERATED_SUITES_DIR / task_id
@@ -1735,10 +1772,13 @@ def build_plan_control_prompt(item: dict, all_types) -> str:
 
 
 
-def call_image_generation(client: OpenAI, prompt: str, image_payloads, image_size_ratio: str, text_type: str, country: str, product_json=None, image_type: str = '', plan_item=None, all_plan_types=None):
-    model = get_env('ARK_IMAGE_MODEL')
+def call_image_generation(client: OpenAI, prompt: str, image_payloads, image_size_ratio: str, text_type: str, country: str, product_json=None, image_type: str = '', plan_item=None, all_plan_types=None, max_images: int = 1):
+    model = get_optional_env('ARK_IMAGE_MODEL', 'doubao-seedream-5-0-260128')
     size = resolve_image_size(image_size_ratio)
     quality = get_optional_env('ARK_IMAGE_QUALITY', '')
+    watermark = get_optional_bool_env('ARK_IMAGE_WATERMARK', False)
+    sequential_mode = get_optional_env('ARK_SEQUENTIAL_IMAGE_GENERATION', 'auto')
+    sequential_max_images = get_optional_int_env('ARK_SEQUENTIAL_MAX_IMAGES', 1)
     normalized_product_json = normalize_product_json(product_json) if product_json else None
     product_json_text = build_product_json_prompt_text(normalized_product_json)
     must_keep = '；'.join((normalized_product_json or {}).get('must_keep') or []) or '未单独提取'
@@ -1796,28 +1836,39 @@ def call_image_generation(client: OpenAI, prompt: str, image_payloads, image_siz
         'prompt': enriched_prompt,
         'size': size,
         'response_format': 'b64_json',
+        'stream': True,
     }
 
-    extra_body = {'watermark': False}
+    extra_body = {
+        'watermark': watermark,
+        'sequential_image_generation': sequential_mode,
+        'sequential_image_generation_options': {
+            'max_images': max(1, min(max_images, sequential_max_images)),
+        },
+    }
     if image_payloads:
         extra_body['image'] = [payload['data_url'] for payload in image_payloads]
     if quality:
         extra_body['quality'] = quality
-    if extra_body:
-        request_payload['extra_body'] = extra_body
+    request_payload['extra_body'] = extra_body
+    app.logger.warning('ARK image request extra_body: %s', json.dumps(extra_body, ensure_ascii=False))
 
     response = client.images.generate(**request_payload)
-    response_payload = response.model_dump()
-    return pick_image_data_entry(response_payload.get('data'))
+    return collect_streamed_generated_images(response)
 
 
 def generate_suite_images(plan: dict, image_payloads, task_id: str, image_size_ratio: str, text_type: str, country: str, product_json=None):
     client = get_ark_client()
     images = []
     all_plan_types = [str(item.get('type', '')).strip() for item in plan.get('items', []) if str(item.get('type', '')).strip()]
+    plan_items = list(plan.get('items') or [])
+    sequential_max_images = max(get_optional_int_env('ARK_SEQUENTIAL_MAX_IMAGES', 1), 1)
+    index = 0
 
-    for item in plan['items']:
-        generated_item = call_image_generation(
+    while index < len(plan_items):
+        item = plan_items[index]
+        remaining_items = plan_items[index:]
+        generated_items = call_image_generation(
             client,
             item['prompt'],
             image_payloads,
@@ -1828,23 +1879,33 @@ def generate_suite_images(plan: dict, image_payloads, task_id: str, image_size_r
             item['type'],
             item,
             all_plan_types,
+            max_images=min(len(remaining_items), sequential_max_images),
         )
-        image_bytes, mime_type = decode_generated_image(generated_item)
-        download_name, relative_path, image_url = save_generated_image(task_id, item['sort'], item['type'], image_bytes, mime_type)
-        images.append(
-            {
-                'sort': item['sort'],
-                'kind': 'generated',
-                'type': item['type'],
-                'type_tag': item['type_tag'],
-                'title': item['title'],
-                'keywords': item['keywords'],
-                'prompt': item['prompt'],
-                'image_url': image_url,
-                'image_path': relative_path,
-                'download_name': download_name,
-            }
-        )
+
+        consumed_count = 0
+        for generated_item, plan_item in zip(generated_items, remaining_items):
+            image_bytes, mime_type = decode_generated_image(generated_item)
+            download_name, relative_path, image_url = save_generated_image(task_id, plan_item['sort'], plan_item['type'], image_bytes, mime_type)
+            images.append(
+                {
+                    'sort': plan_item['sort'],
+                    'kind': 'generated',
+                    'type': plan_item['type'],
+                    'type_tag': plan_item['type_tag'],
+                    'title': plan_item['title'],
+                    'keywords': plan_item['keywords'],
+                    'prompt': plan_item['prompt'],
+                    'image_url': image_url,
+                    'image_path': relative_path,
+                    'download_name': download_name,
+                }
+            )
+            consumed_count += 1
+
+        if consumed_count < 1:
+            raise ValueError('图像生成接口未返回可用图片内容')
+
+        index += consumed_count
 
     return images
 
@@ -1855,7 +1916,7 @@ def generate_aplus_images(plan: dict, image_payloads, task_id: str, image_size_r
     images = []
 
     for item in plan['items']:
-        generated_item = call_image_generation(
+        generated_items = call_image_generation(
             client,
             item['prompt'],
             image_payloads,
@@ -1864,7 +1925,9 @@ def generate_aplus_images(plan: dict, image_payloads, task_id: str, image_size_r
             country,
             product_json,
             item['type'],
+            max_images=1,
         )
+        generated_item = generated_items[0]
         image_bytes, mime_type = decode_generated_image(generated_item)
         download_name, relative_path, image_url = save_generated_image(task_id, item['sort'], item['type'], image_bytes, mime_type)
         images.append(
