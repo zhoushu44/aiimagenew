@@ -1,6 +1,0 @@
-[   23011ms] TypeError: Cannot read properties of null (reading 'value')
-    at renderTitleSuggestions (http://127.0.0.1:5078/static/js/workspace.js:906:40)
-    at HTMLButtonElement.<anonymous> (http://127.0.0.1:5078/static/js/workspace.js:1200:9)
-[   24203ms] [ERROR] Failed to load resource: the server responded with a status of 404 () @ https://example.com/fashion-hero.png:0
-[   24294ms] [ERROR] Failed to load resource: the server responded with a status of 404 () @ https://example.com/favicon.ico:0
-[   81482ms] [ERROR] Failed to load resource: the server responded with a status of 404 () @ https://example.com/fashion-hero.png:0

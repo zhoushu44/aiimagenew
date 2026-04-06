@@ -1,4 +1,0 @@
-[      28ms] ReferenceError: persistState is not defined
-    at http://127.0.0.1:5078/static/js/workspace.js:1363:41
-    at Array.forEach (<anonymous>)
-    at HTMLDocument.<anonymous> (http://127.0.0.1:5078/static/js/workspace.js:1359:42)
