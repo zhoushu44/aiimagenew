@@ -223,7 +223,6 @@
   <script>
     document.addEventListener('DOMContentLoaded', function() {
       const STORAGE_KEY = 'aiDesignState:fashion';
-      const MODEL_GENERATION_DELAY = 1400;
       const modelTabs = document.querySelectorAll('.model-tab');
       const aiModelConfig = document.getElementById('aiModelConfig');
       const customModelConfig = document.getElementById('customModelConfig');
@@ -238,7 +237,6 @@
       const fashionStepScene = document.getElementById('fashionStepScene');
       const fashionSceneBody = document.getElementById('fashionSceneBody');
       const specOptions = document.querySelectorAll('.spec-option input[type="radio"]');
-      let generationTimer = null;
 
       const readWorkspaceState = () => {
         try {
@@ -273,30 +271,51 @@
         }
         return models
           .filter((item) => item && typeof item === 'object')
-          .map((item) => ({
-            id: String(item.id || `custom-${Date.now()}`),
+          .map((item, index) => ({
+            id: String(item.id || `custom-${Date.now()}-${index}`),
             name: String(item.name || '我的模特').trim() || '我的模特',
             previewUrl: String(item.previewUrl || ''),
+            summary: String(item.summary || ''),
+            detailText: String(item.detailText || ''),
+            previewLabel: String(item.previewLabel || 'MY'),
+            createdAt: Number(item.createdAt || Date.now()),
+            imageUrl: String(item.imageUrl || item.previewUrl || ''),
+            imagePath: String(item.imagePath || ''),
+            downloadName: String(item.downloadName || ''),
+            prompt: String(item.prompt || ''),
+            gender: String(item.gender || ''),
+            age: String(item.age || ''),
+            ethnicity: String(item.ethnicity || ''),
+            bodyType: String(item.bodyType || ''),
+            appearanceDetails: String(item.appearanceDetails || ''),
           }))
           .filter((item) => item.previewUrl);
       };
 
-      const buildGeneratedModel = (state) => {
-        const gender = document.getElementById('genderSelect')?.value || '女';
-        const age = document.getElementById('ageSelect')?.value || '青年';
-        const ethnicity = document.getElementById('ethnicitySelect')?.value || '欧美白人';
-        const bodyType = document.getElementById('bodyTypeSelect')?.value || '标准';
-        const details = (document.getElementById('appearanceDetails')?.value || '').trim();
-        const summary = [gender, age, ethnicity, bodyType].filter(Boolean).join(' · ');
-        const detailText = details || '已按当前配置生成可用于服饰展示的模特。';
-        const stamp = Date.now();
+      const buildGeneratedModel = (response) => {
+        if (!response || typeof response !== 'object') {
+          return null;
+        }
+        const serverModel = response.model && typeof response.model === 'object' ? response.model : {};
+        const fallbackId = `ai-${Date.now()}`;
         return {
-          id: `ai-${stamp}`,
-          name: 'AI 基准模特',
-          summary,
-          detailText,
-          previewLabel: 'AI',
-          createdAt: stamp,
+          id: String(serverModel.id || fallbackId),
+          name: String(serverModel.name || 'AI 基准模特'),
+          summary: String(serverModel.summary || ''),
+          detailText: String(serverModel.detailText || serverModel.appearance_details || ''),
+          previewLabel: String(serverModel.previewLabel || 'AI'),
+          previewUrl: String(serverModel.previewUrl || response.image_url || serverModel.image_url || ''),
+          createdAt: Number(serverModel.createdAt || Date.now()),
+          taskId: String(serverModel.task_id || response.task_id || ''),
+          imageUrl: String(response.image_url || serverModel.image_url || serverModel.previewUrl || ''),
+          imagePath: String(response.image_path || serverModel.image_path || ''),
+          downloadName: String(response.download_name || serverModel.download_name || ''),
+          prompt: String(serverModel.prompt || ''),
+          gender: String(serverModel.gender || ''),
+          age: String(serverModel.age || ''),
+          ethnicity: String(serverModel.ethnicity || ''),
+          bodyType: String(serverModel.body_type || ''),
+          appearanceDetails: String(serverModel.appearance_details || ''),
         };
       };
 
@@ -323,6 +342,11 @@
               : [],
           }))
           .filter((group) => group.poses.length > 0);
+      };
+
+      const normalizeSingleSelectValue = (value, allowedValues) => {
+        const normalized = String(value || '').trim();
+        return allowedValues.includes(normalized) ? normalized : '';
       };
 
       const normalizeMultiSelectValues = (values, allowedValues) => {
@@ -364,10 +388,10 @@
                 ? 'error'
                 : 'idle',
           fashionSceneGroups: normalizeSceneGroups(state.fashionSceneGroups),
-          fashionSelectedSceneGroupId: typeof state.fashionSelectedSceneGroupId === 'string' ? state.fashionSelectedSceneGroupId : '',
-          fashionSelectedPoseId: typeof state.fashionSelectedPoseId === 'string' ? state.fashionSelectedPoseId : '',
-          fashionSelectedShotSizes: normalizeMultiSelectValues(state.fashionSelectedShotSizes, SHOT_SIZE_OPTIONS),
-          fashionSelectedViewAngles: normalizeMultiSelectValues(state.fashionSelectedViewAngles, VIEW_ANGLE_OPTIONS),
+          fashionSelectedSceneGroupIds: normalizeMultiSelectValues(state.fashionSelectedSceneGroupIds, normalizeSceneGroups(state.fashionSceneGroups).map((group) => group.id)),
+          fashionSelectedPoseIds: normalizeMultiSelectValues(state.fashionSelectedPoseIds, normalizeSceneGroups(state.fashionSceneGroups).flatMap((group) => group.poses.map((pose) => pose.id))),
+          fashionSelectedShotSizes: normalizeSingleSelectValue(state.fashionSelectedShotSizes, SHOT_SIZE_OPTIONS),
+          fashionSelectedViewAngles: normalizeSingleSelectValue(state.fashionSelectedViewAngles, VIEW_ANGLE_OPTIONS),
           fashionScenePrompt: typeof state.fashionScenePrompt === 'string' ? state.fashionScenePrompt : '',
           fashionSceneError: typeof state.fashionSceneError === 'string' ? state.fashionSceneError : '',
           fashionScenePlanRaw: state.fashionScenePlanRaw && typeof state.fashionScenePlanRaw === 'object'
@@ -376,15 +400,34 @@
         };
       };
 
-      const getSelectedSceneGroup = (state) => state.fashionSceneGroups.find((group) => group.id === state.fashionSelectedSceneGroupId) || null;
+      const getSelectedSceneGroups = (state) => state.fashionSceneGroups.filter((group) => state.fashionSelectedSceneGroupIds.includes(group.id));
 
-      const getSelectedScenePose = (state) => {
-        const group = getSelectedSceneGroup(state);
-        if (!group) {
-          return null;
-        }
-        return group.poses.find((pose) => pose.id === state.fashionSelectedPoseId) || null;
-      };
+      const getSelectedScenePoses = (state) => state.fashionSceneGroups.flatMap((group) => group.poses)
+        .filter((pose) => state.fashionSelectedPoseIds.includes(pose.id));
+
+      const getSelectedSceneEntries = (state) => state.fashionSelectedSceneGroupIds
+        .map((groupId) => {
+          const group = state.fashionSceneGroups.find((item) => item.id === groupId);
+          if (!group) {
+            return null;
+          }
+          const pose = group.poses.find((item) => state.fashionSelectedPoseIds.includes(item.id));
+          if (!pose) {
+            return null;
+          }
+          return { group, pose };
+        })
+        .filter(Boolean);
+
+      const getSelectedScenePrompt = (state) => getSelectedSceneEntries(state)
+        .map(({ group, pose }) => [group.prompt, pose.prompt].filter(Boolean).join('\n'))
+        .filter(Boolean)
+        .join('\n\n');
+
+      const buildCustomModelFromGenerated = (model) => ({
+        ...model,
+        previewLabel: 'MY',
+      });
 
       const buildFashionCtaState = (state) => {
         const hasSelectedModel = isModelAvailable(state, state.fashionSelectedModelSource, state.fashionSelectedModelId);
@@ -394,6 +437,7 @@
             disabled: true,
             label: '请选择模特',
             step: state.fashionFlowStep,
+            selectedSceneCount: 0,
           };
         }
         if (state.fashionFlowStep !== 'scene') {
@@ -402,6 +446,7 @@
             disabled: false,
             label: '生成推荐场景',
             step: 'model',
+            selectedSceneCount: 0,
           };
         }
         if (state.fashionSceneGenerationState === 'loading') {
@@ -410,6 +455,7 @@
             disabled: true,
             label: '生成中...',
             step: 'scene',
+            selectedSceneCount: 0,
           };
         }
         if (state.fashionSceneGenerationState === 'error') {
@@ -418,6 +464,7 @@
             disabled: false,
             label: '重新生成推荐场景',
             step: 'scene',
+            selectedSceneCount: 0,
           };
         }
         if (state.fashionSceneGenerationState !== 'done' || !state.fashionSceneGroups.length) {
@@ -426,32 +473,36 @@
             disabled: false,
             label: '生成推荐场景',
             step: 'scene',
+            selectedSceneCount: 0,
           };
         }
-        const hasPose = Boolean(getSelectedScenePose(state));
-        const hasShotSizes = state.fashionSelectedShotSizes.length > 0;
-        const hasViewAngles = state.fashionSelectedViewAngles.length > 0;
-        if (!hasPose) {
+        const selectedSceneCount = getSelectedSceneEntries(state).length;
+        const hasShotSize = Boolean(state.fashionSelectedShotSizes);
+        const hasViewAngle = Boolean(state.fashionSelectedViewAngles);
+        if (!selectedSceneCount) {
           return {
             hasSelectedModel: true,
             disabled: true,
-            label: '请选择姿态',
+            label: '请选择场景',
             step: 'scene',
+            selectedSceneCount: 0,
           };
         }
-        if (!hasShotSizes || !hasViewAngles) {
+        if (!hasShotSize || !hasViewAngle) {
           return {
             hasSelectedModel: true,
             disabled: true,
             label: '请选择景别和视角',
             step: 'scene',
+            selectedSceneCount,
           };
         }
         return {
           hasSelectedModel: true,
           disabled: false,
-          label: '生成服饰穿戴图',
+          label: `生成服饰穿戴图（${selectedSceneCount}个场景）`,
           step: 'scene',
+          selectedSceneCount,
         };
       };
 
@@ -488,6 +539,7 @@
       const buildModelCardMarkup = (model, options = {}) => {
         const isSelected = Boolean(options.selected);
         const source = options.source || 'custom';
+        const allowDelete = Boolean(options.allowDelete);
         const summary = model.summary || model.name || '';
         const detailText = model.detailText || (source === 'ai' ? '已生成，可直接用于推荐场景。' : '已上传，可直接用于推荐场景。');
         const previewLabel = model.previewLabel || (source === 'ai' ? 'AI' : 'MY');
@@ -495,7 +547,12 @@
           ? `<img src="${escapeHtml(model.previewUrl)}" alt="${escapeHtml(model.name || '模特预览')}">`
           : `<div class="fashion-model-card-placeholder">${escapeHtml(previewLabel)}</div>`;
         const infoMarkup = source === 'custom'
-          ? ''
+          ? `
+            <div class="fashion-model-info">
+              <div class="fashion-model-name">${escapeHtml(model.name || '我的模特')}</div>
+              ${summary ? `<div class="fashion-model-summary">${escapeHtml(summary)}</div>` : ''}
+            </div>
+          `
           : `
             <div class="fashion-model-info">
               <div class="fashion-model-name">${escapeHtml(model.name || '模特卡片')}</div>
@@ -513,6 +570,7 @@
             aria-pressed="${isSelected ? 'true' : 'false'}"
           >
             <span class="fashion-model-check" aria-hidden="true">✓</span>
+            ${allowDelete ? `<span class="fashion-model-delete" data-role="delete-fashion-model" data-id="${escapeHtml(model.id)}" aria-label="删除模特">×</span>` : ''}
             <div class="fashion-model-preview">${previewImage}</div>
             ${infoMarkup}
           </button>
@@ -542,7 +600,11 @@
           });
           return;
         }
+        const errorMarkup = state.fashionSceneError
+          ? `<div class="fashion-scene-feedback is-error"><div class="fashion-scene-feedback-title">生成失败</div><div class="fashion-scene-feedback-copy">${escapeHtml(state.fashionSceneError)}</div></div>`
+          : '';
         fashionModelStage.innerHTML = `
+          ${errorMarkup}
           <div class="fashion-model-stage-card is-empty">
             <div class="fashion-model-stage-icon" aria-hidden="true">✦</div>
             <div class="fashion-model-stage-title">暂无基准模特</div>
@@ -565,6 +627,7 @@
           ...state.fashionCustomModels.map((model) => buildModelCardMarkup(model, {
             selected: state.fashionSelectedModelSource === 'custom' && state.fashionSelectedModelId === model.id,
             source: 'custom',
+            allowDelete: true,
           })),
         ];
         customModelList.innerHTML = cards.join('');
@@ -582,8 +645,8 @@
           : '<span>生成基准模特</span>';
       };
 
-      const renderSceneOptionChips = (values, selectedValues, role) => values.map((value) => {
-        const isSelected = selectedValues.includes(value);
+      const renderSceneOptionChips = (values, selectedValue, role) => values.map((value) => {
+        const isSelected = selectedValue === value;
         return `
           <button
             class="fashion-scene-chip${isSelected ? ' is-selected' : ''}"
@@ -631,13 +694,13 @@
           return;
         }
 
-        const selectedGroup = getSelectedSceneGroup(state);
-        const selectedPose = getSelectedScenePose(state);
+        const selectedEntries = getSelectedSceneEntries(state);
 
         fashionSceneBody.innerHTML = `
           <div class="fashion-scene-groups">
             ${state.fashionSceneGroups.map((group) => {
-              const groupSelected = group.id === state.fashionSelectedSceneGroupId;
+              const selectedPose = group.poses.find((pose) => state.fashionSelectedPoseIds.includes(pose.id)) || null;
+              const groupSelected = state.fashionSelectedSceneGroupIds.includes(group.id) && Boolean(selectedPose);
               return `
                 <section class="fashion-scene-group${groupSelected ? ' is-selected' : ''}">
                   <div class="fashion-scene-group-head">
@@ -648,7 +711,7 @@
                   </div>
                   <div class="fashion-pose-grid">
                     ${group.poses.map((pose) => {
-                      const poseSelected = groupSelected && pose.id === state.fashionSelectedPoseId;
+                      const poseSelected = state.fashionSelectedPoseIds.includes(pose.id);
                       return `
                         <button
                           class="fashion-pose-card${poseSelected ? ' is-selected' : ''}"
@@ -658,7 +721,7 @@
                           data-pose-id="${escapeHtml(pose.id)}"
                           aria-pressed="${poseSelected ? 'true' : 'false'}"
                         >
-                          <span class="fashion-pose-card-tag">pose</span>
+                          <span class="fashion-pose-card-tag">${groupSelected && poseSelected ? 'selected' : 'pose'}</span>
                           <span class="fashion-pose-card-title">${escapeHtml(pose.title)}</span>
                           ${pose.subtitle ? `<span class="fashion-pose-card-copy">${escapeHtml(pose.subtitle)}</span>` : ''}
                         </button>
@@ -669,13 +732,21 @@
               `;
             }).join('')}
           </div>
-          ${selectedGroup && selectedPose ? `
+          ${selectedEntries.length ? `
             <section class="fashion-scene-selection-panel">
               <div class="fashion-scene-selection-head">
                 <div>
-                  <div class="fashion-scene-selection-title">已选姿态</div>
-                  <div class="fashion-scene-selection-copy">${escapeHtml(selectedGroup.title)} / ${escapeHtml(selectedPose.title)}</div>
+                  <div class="fashion-scene-selection-title">已选场景</div>
+                  <div class="fashion-scene-selection-copy">已选择 ${selectedEntries.length} 个场景，可继续设置统一景别与视角。</div>
                 </div>
+              </div>
+              <div class="fashion-scene-selection-list">
+                ${selectedEntries.map(({ group, pose }) => `
+                  <div class="fashion-scene-selection-item">
+                    <span class="fashion-scene-selection-item-title">${escapeHtml(group.title)}</span>
+                    <span class="fashion-scene-selection-item-copy">${escapeHtml(pose.title)}</span>
+                  </div>
+                `).join('')}
               </div>
               <div class="fashion-scene-option-block">
                 <div class="fashion-scene-option-label">镜头景别</div>
@@ -783,34 +854,52 @@
         if (!group || !pose) {
           return;
         }
+
+        const groupIds = state.fashionSelectedSceneGroupIds.slice();
+        const poseIds = state.fashionSelectedPoseIds.slice();
+        const existingPoseIds = group.poses.map((item) => item.id);
+        const existingPoseId = existingPoseIds.find((item) => poseIds.includes(item)) || '';
+        const isSameSelection = existingPoseId === pose.id && groupIds.includes(group.id);
+
+        const nextGroupIds = isSameSelection
+          ? groupIds.filter((item) => item !== group.id)
+          : groupIds.includes(group.id)
+            ? groupIds.slice()
+            : [...groupIds, group.id];
+        const nextPoseIds = poseIds.filter((item) => !existingPoseIds.includes(item));
+        if (!isSameSelection) {
+          nextPoseIds.push(pose.id);
+        }
+
+        const nextState = {
+          ...state,
+          fashionSelectedSceneGroupIds: nextGroupIds,
+          fashionSelectedPoseIds: nextPoseIds,
+        };
+
         patchWorkspaceState({
-          fashionSelectedSceneGroupId: group.id,
-          fashionSelectedPoseId: pose.id,
-          fashionScenePrompt: [group.prompt, pose.prompt].filter(Boolean).join('\n'),
+          fashionSelectedSceneGroupIds: nextGroupIds,
+          fashionSelectedPoseIds: nextPoseIds,
+          fashionScenePrompt: getSelectedScenePrompt(nextState),
         });
         renderFashionModelState();
       };
 
       const toggleSceneShotSize = (value) => {
-        const state = getFashionState();
         patchWorkspaceState({
-          fashionSelectedShotSizes: toggleMultiValue(state.fashionSelectedShotSizes, value),
+          fashionSelectedShotSizes: SHOT_SIZE_OPTIONS.includes(value) ? value : '',
         });
         renderFashionModelState();
       };
 
       const toggleSceneViewAngle = (value) => {
-        const state = getFashionState();
         patchWorkspaceState({
-          fashionSelectedViewAngles: toggleMultiValue(state.fashionSelectedViewAngles, value),
+          fashionSelectedViewAngles: VIEW_ANGLE_OPTIONS.includes(value) ? value : '',
         });
         renderFashionModelState();
       };
 
-      const startModelGeneration = () => {
-        if (generationTimer) {
-          window.clearTimeout(generationTimer);
-        }
+      const startModelGeneration = async () => {
         patchWorkspaceState({
           fashionModelGenerationState: 'loading',
           fashionGeneratedModel: null,
@@ -818,16 +907,60 @@
           fashionSelectedModelId: '',
         });
         renderFashionModelState();
-        generationTimer = window.setTimeout(() => {
-          const generatedModel = buildGeneratedModel(getFashionState());
+
+        const payload = {
+          gender: document.getElementById('genderSelect')?.value || '女',
+          age: document.getElementById('ageSelect')?.value || '青年',
+          ethnicity: document.getElementById('ethnicitySelect')?.value || '欧美白人',
+          body_type: document.getElementById('bodyTypeSelect')?.value || '标准',
+          appearance_details: (document.getElementById('appearanceDetails')?.value || '').trim(),
+          image_size_ratio: document.querySelector('input[name="outputSpec"]:checked')?.value || '3:4',
+        };
+
+        try {
+          const response = await fetch('/api/generate-fashion-model', {
+            method: 'POST',
+            headers: {
+              'Content-Type': 'application/json',
+            },
+            body: JSON.stringify(payload),
+          });
+          const result = await response.json().catch(() => ({}));
+          if (!response.ok || !result.success) {
+            throw new Error(result.error || '基准模特生成失败，请稍后重试');
+          }
+
+          const generatedModel = buildGeneratedModel(result);
+          if (!generatedModel || !generatedModel.previewUrl) {
+            throw new Error('生成成功，但未返回可预览的模特图片');
+          }
+
+          const currentState = getFashionState();
+          const savedModel = buildCustomModelFromGenerated(generatedModel);
+          const nextCustomModels = [
+            savedModel,
+            ...currentState.fashionCustomModels.filter((item) => item.id !== savedModel.id),
+          ];
+
           patchWorkspaceState({
             fashionModelGenerationState: 'done',
             fashionGeneratedModel: generatedModel,
+            fashionCustomModels: nextCustomModels,
             fashionSelectedModelSource: 'ai',
             fashionSelectedModelId: generatedModel.id,
+            fashionSceneError: '',
           });
-          renderFashionModelState();
-        }, MODEL_GENERATION_DELAY);
+        } catch (error) {
+          patchWorkspaceState({
+            fashionModelGenerationState: 'idle',
+            fashionGeneratedModel: null,
+            fashionSelectedModelSource: '',
+            fashionSelectedModelId: '',
+            fashionSceneError: error instanceof Error ? error.message : '基准模特生成失败，请稍后重试',
+          });
+        }
+
+        renderFashionModelState();
       };
 
       const appendCustomModels = (files) => {
@@ -901,13 +1034,30 @@
       }
 
       if (generateModelBtn) {
-        generateModelBtn.addEventListener('click', function() {
-          startModelGeneration();
+        generateModelBtn.addEventListener('click', async function() {
+          await startModelGeneration();
         });
       }
 
       if (customModelList) {
         customModelList.addEventListener('click', function(event) {
+          const deleteButton = event.target.closest('[data-role="delete-fashion-model"]');
+          if (deleteButton) {
+            event.preventDefault();
+            event.stopPropagation();
+            const modelId = deleteButton.dataset.id || '';
+            const state = getFashionState();
+            const nextCustomModels = state.fashionCustomModels.filter((item) => item.id !== modelId);
+            const shouldClearSelection = state.fashionSelectedModelSource === 'custom' && state.fashionSelectedModelId === modelId;
+            patchWorkspaceState({
+              fashionCustomModels: nextCustomModels,
+              fashionSelectedModelSource: shouldClearSelection ? '' : state.fashionSelectedModelSource,
+              fashionSelectedModelId: shouldClearSelection ? '' : state.fashionSelectedModelId,
+            });
+            renderFashionModelState();
+            return;
+          }
+
           const uploadButton = event.target.closest('#uploadModelBtn');
           if (uploadButton) {
             modelFileInput?.click();
@@ -973,12 +1123,6 @@
           });
         });
       }
-
-      window.addEventListener('beforeunload', function() {
-        if (generationTimer) {
-          window.clearTimeout(generationTimer);
-        }
-      });
 
       restoreFashionState();
     });

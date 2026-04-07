@@ -1,0 +1,202 @@
+- generic [ref=e2]:
+  - banner [ref=e3]:
+    - generic [ref=e4]:
+      - link "AI Commerce Console" [ref=e5] [cursor=pointer]:
+        - /url: /
+      - generic [ref=e6]:
+        - generic [ref=e7]: A+ Workspace / Minimal Tech Control
+        - generic [ref=e8]: A+详情页工作台
+  - main [ref=e9]:
+    - complementary [ref=e10]:
+      - navigation "功能导航" [ref=e11]:
+        - link "01 商品套图" [ref=e12] [cursor=pointer]:
+          - /url: /suite
+          - generic [ref=e13]: "01"
+          - generic [ref=e14]: 商品套图
+        - link "02 A+详情页" [ref=e15] [cursor=pointer]:
+          - /url: /aplus
+          - generic [ref=e16]: "02"
+          - generic [ref=e17]: A+详情页
+        - link "03 服饰穿戴" [ref=e18] [cursor=pointer]:
+          - /url: /fashion
+          - generic [ref=e19]: "03"
+          - generic [ref=e20]: 服饰穿戴
+      - generic [ref=e21]:
+        - generic [ref=e22]:
+          - generic [ref=e23]: source input
+          - heading "上传素材" [level=2] [ref=e24]
+        - generic [ref=e25]:
+          - generic [ref=e27]:
+            - button "上传图片" [ref=e28] [cursor=pointer]
+            - generic [ref=e29]: 详情页模块共用同一批参考素材
+          - generic [ref=e30]: 同一产品，最多3张
+      - generic [ref=e31]:
+        - generic [ref=e32]:
+          - generic [ref=e33]: strategy setup
+          - heading "策略配置" [level=2] [ref=e34]
+        - generic [ref=e35]:
+          - generic [ref=e36]:
+            - generic [ref=e37]: 目标平台
+            - combobox "目标平台" [ref=e38]:
+              - option "亚马逊" [selected]
+              - option "淘宝天猫1688"
+              - option "Temu"
+              - option "TikTok Shop"
+              - option "拼多多抖音电商"
+              - option "OZON"
+              - option "独立站"
+              - option "Shopee"
+              - option "阿里国际站"
+              - option "速卖通"
+              - option "SHEIN"
+              - option "京东"
+          - generic [ref=e39]:
+            - generic [ref=e40]: 国家参考
+            - combobox "国家参考" [ref=e41]:
+              - option "中国" [selected]
+              - option "美国"
+              - option "欧洲"
+              - option "俄罗斯"
+              - option "东南亚"
+              - option "西班牙"
+              - option "德国"
+              - option "日本"
+              - option "巴西"
+          - generic [ref=e42]:
+            - generic [ref=e43]: 文字类型
+            - combobox "文字类型" [ref=e44]:
+              - option "中文" [selected]
+              - option "英文"
+              - option "俄语"
+              - option "西语"
+              - option "德语"
+              - option "泰语"
+              - option "葡萄牙语"
+              - option "无文字"
+          - generic [ref=e45]:
+            - generic [ref=e46]: 输出比例
+            - combobox "输出比例" [ref=e47]:
+              - option "1:1" [selected]
+              - option "3:4"
+              - option "9:16"
+              - option "16:9"
+      - generic [ref=e48]:
+        - generic [ref=e49]:
+          - generic [ref=e50]:
+            - generic [ref=e51]: selling notes
+            - heading "核心卖点" [level=2] [ref=e52]
+          - button "✦ AI 帮写" [ref=e53] [cursor=pointer]:
+            - generic [ref=e54]: ✦
+            - generic [ref=e55]: AI 帮写
+        - generic [ref=e56]:
+          - generic [ref=e57]: 卖点输入
+          - textbox "卖点输入" [ref=e58]:
+            - /placeholder: "1. 产品名称\n2. 核心卖点\n3. 适用人群\n4. 期望场景\n5. 具体参数"
+      - generic [ref=e60]:
+        - generic [ref=e61]:
+          - generic [ref=e62]: style analysis
+          - heading "爆款风格分析" [level=2] [ref=e63]
+        - button "开始分析 ↻" [ref=e64] [cursor=pointer]:
+          - generic [ref=e65]: 开始分析
+          - generic [ref=e66]: ↻
+      - generic [ref=e68]:
+        - generic [ref=e69]:
+          - generic [ref=e70]:
+            - generic [ref=e71]: module selection
+            - heading "A+ 模块" [level=2] [ref=e72]
+          - generic [ref=e73]: 已选 4
+        - generic [ref=e74]:
+          - button "首屏主视觉 开场主图。" [ref=e75] [cursor=pointer]:
+            - generic [ref=e76]: 首屏主视觉
+            - generic [ref=e77]: 开场主图。
+          - button "使用场景图 真实使用场景。" [pressed] [ref=e78] [cursor=pointer]:
+            - generic [ref=e79]: 使用场景图
+            - generic [ref=e80]: 真实使用场景。
+          - button "场景氛围图 补充氛围感。" [pressed] [ref=e81] [cursor=pointer]:
+            - generic [ref=e82]: 场景氛围图
+            - generic [ref=e83]: 补充氛围感。
+          - button "品牌故事图 展示品牌调性。" [ref=e84] [cursor=pointer]:
+            - generic [ref=e85]: 品牌故事图
+            - generic [ref=e86]: 展示品牌调性。
+          - button "效果对比图 突出前后对比。" [ref=e87] [cursor=pointer]:
+            - generic [ref=e88]: 效果对比图
+            - generic [ref=e89]: 突出前后对比。
+          - button "工艺制作图 展示工艺细节。" [ref=e90] [cursor=pointer]:
+            - generic [ref=e91]: 工艺制作图
+            - generic [ref=e92]: 展示工艺细节。
+          - button "系列展示图 展示系列组合。" [ref=e93] [cursor=pointer]:
+            - generic [ref=e94]: 系列展示图
+            - generic [ref=e95]: 展示系列组合。
+          - button "售后保障图 说明服务保障。" [ref=e96] [cursor=pointer]:
+            - generic [ref=e97]: 售后保障图
+            - generic [ref=e98]: 说明服务保障。
+          - button "核心卖点图 聚焦核心优势。" [pressed] [ref=e99] [cursor=pointer]:
+            - generic [ref=e100]: 核心卖点图
+            - generic [ref=e101]: 聚焦核心优势。
+          - button "多角度图 展示不同角度。" [ref=e102] [cursor=pointer]:
+            - generic [ref=e103]: 多角度图
+            - generic [ref=e104]: 展示不同角度。
+          - button "商品细节图 放大关键细节。" [pressed] [ref=e105] [cursor=pointer]:
+            - generic [ref=e106]: 商品细节图
+            - generic [ref=e107]: 放大关键细节。
+          - button "尺寸/容量/尺码图 呈现规格信息。" [ref=e108] [cursor=pointer]:
+            - generic [ref=e109]: 尺寸/容量/尺码图
+            - generic [ref=e110]: 呈现规格信息。
+          - button "详细规格/参数表 整理参数数据。" [ref=e111] [cursor=pointer]:
+            - generic [ref=e112]: 详细规格/参数表
+            - generic [ref=e113]: 整理参数数据。
+          - button "配件/赠品图 列出包装内容。" [ref=e114] [cursor=pointer]:
+            - generic [ref=e115]: 配件/赠品图
+            - generic [ref=e116]: 列出包装内容。
+          - button "商品成分图 说明材质成分。" [ref=e117] [cursor=pointer]:
+            - generic [ref=e118]: 商品成分图
+            - generic [ref=e119]: 说明材质成分。
+          - button "使用建议图 补充使用提醒。" [ref=e120] [cursor=pointer]:
+            - generic [ref=e121]: 使用建议图
+            - generic [ref=e122]: 补充使用提醒。
+      - button "一键生成A+详情页" [ref=e124] [cursor=pointer]
+    - generic [ref=e127]:
+      - generic [ref=e128]:
+        - generic [ref=e129]:
+          - generic [ref=e130]: 01 / Module Console
+          - heading "AI A+详情页" [level=1] [ref=e131]
+          - paragraph [ref=e132]: 按平台、卖点与模块顺序生成更清晰的 A+ 结构图，方便继续排版和筛选。
+          - paragraph [ref=e133]: Module Logic / Ordered Output
+        - generic [ref=e134]:
+          - article [ref=e135]:
+            - generic [ref=e136]: module
+            - generic [ref=e137]: "04"
+            - generic [ref=e138]: 主视觉、卖点、细节、场景与服务信息分模块输出。
+          - article [ref=e139]:
+            - generic [ref=e140]: sequence
+            - generic [ref=e141]: 4 模块
+            - generic [ref=e142]: 按叙事顺序查看，更适合高信息密度页面。
+      - generic [ref=e143]:
+        - article [ref=e144]:
+          - generic [ref=e145]:
+            - generic [ref=e146]: aplus flow
+            - generic [ref=e147]: module
+          - generic [ref=e148]: 模块顺序更直接
+          - paragraph [ref=e149]: 从主视觉到细节与服务信息，结构更干净，阅读负担更低。
+          - generic [ref=e150]:
+            - generic [ref=e151]:
+              - generic [ref=e152]: mode
+              - generic [ref=e153]: module
+            - generic [ref=e154]:
+              - generic [ref=e155]: logic
+              - generic [ref=e156]: ordered
+            - generic [ref=e157]:
+              - generic [ref=e158]: output
+              - generic [ref=e159]: select
+        - article [ref=e160]:
+          - generic [ref=e161]: "01"
+          - generic [ref=e162]: 模块
+          - generic [ref=e163]: 按模块选择生成内容，保留清晰叙事层级。
+        - article [ref=e164]:
+          - generic [ref=e165]: "02"
+          - generic [ref=e166]: 卖点
+          - generic [ref=e167]: 卖点与风格分析继续驱动中段信息表达。
+        - article [ref=e168]:
+          - generic [ref=e169]: "03"
+          - generic [ref=e170]: 结果
+          - generic [ref=e171]: 统一预览、勾选、下载，不打断流程。

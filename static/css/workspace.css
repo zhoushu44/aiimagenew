@@ -885,6 +885,27 @@ body.fashion-page .fashion-model-card.is-selected .fashion-model-check {
   background: #2563eb;
   border-color: #2563eb;
 }
+body.fashion-page .fashion-model-delete {
+  position: absolute;
+  top: 8px;
+  right: 8px;
+  width: 24px;
+  height: 24px;
+  border-radius: 999px;
+  display: inline-grid;
+  place-items: center;
+  font-size: 16px;
+  line-height: 1;
+  color: rgba(15, 23, 42, 0.72);
+  background: rgba(255, 255, 255, 0.94);
+  border: 1px solid rgba(148, 163, 184, 0.48);
+  z-index: 2;
+}
+body.fashion-page .fashion-model-delete:hover {
+  color: #fff;
+  background: #ef4444;
+  border-color: #ef4444;
+}
 body.fashion-page .fashion-model-preview {
   min-height: 100px;
   border-radius: 14px;

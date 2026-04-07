@@ -349,9 +349,16 @@ document.addEventListener('DOMContentLoaded', () => {
         const sceneStep = rawState.fashionFlowStep === 'scene';
         const sceneGenerationState = rawState.fashionSceneGenerationState;
         const hasSceneGroups = Array.isArray(rawState.fashionSceneGroups) && rawState.fashionSceneGroups.length > 0;
-        const hasPose = Boolean(rawState.fashionSelectedSceneGroupId) && Boolean(rawState.fashionSelectedPoseId);
-        const hasShotSizes = Array.isArray(rawState.fashionSelectedShotSizes) && rawState.fashionSelectedShotSizes.length > 0;
-        const hasViewAngles = Array.isArray(rawState.fashionSelectedViewAngles) && rawState.fashionSelectedViewAngles.length > 0;
+        const selectedSceneGroupIds = Array.isArray(rawState.fashionSelectedSceneGroupIds)
+          ? rawState.fashionSelectedSceneGroupIds.filter((item, index, list) => item && list.indexOf(item) === index)
+          : [];
+        const selectedPoseIds = Array.isArray(rawState.fashionSelectedPoseIds)
+          ? rawState.fashionSelectedPoseIds.filter((item, index, list) => item && list.indexOf(item) === index)
+          : [];
+        const hasPose = selectedSceneGroupIds.length > 0 && selectedPoseIds.length >= selectedSceneGroupIds.length;
+        const hasShotSizes = Boolean(rawState.fashionSelectedShotSizes);
+        const hasViewAngles = Boolean(rawState.fashionSelectedViewAngles);
+        const selectedSceneCount = Math.min(selectedSceneGroupIds.length, selectedPoseIds.length);
 
         if (!hasSelectedModel) {
           return {
@@ -412,7 +419,7 @@ document.addEventListener('DOMContentLoaded', () => {
         return {
           hasSelectedModel: true,
           disabled: false,
-          label: '生成服饰穿戴图',
+          label: `生成服饰穿戴图（${selectedSceneCount}个场景）`,
           step: 'scene',
         };
       } catch (error) {
@@ -825,10 +832,10 @@ document.addEventListener('DOMContentLoaded', () => {
       syncFashionState({
         fashionSceneGenerationState: 'loading',
         fashionSceneGroups: [],
-        fashionSelectedSceneGroupId: '',
-        fashionSelectedPoseId: '',
-        fashionSelectedShotSizes: [],
-        fashionSelectedViewAngles: [],
+        fashionSelectedSceneGroupIds: [],
+        fashionSelectedPoseIds: [],
+        fashionSelectedShotSizes: '',
+        fashionSelectedViewAngles: '',
         fashionScenePrompt: '',
         fashionSceneError: '',
         fashionScenePlanRaw: null,
@@ -864,10 +871,10 @@ document.addEventListener('DOMContentLoaded', () => {
           fashionFlowStep: 'scene',
           fashionSceneGenerationState: 'error',
           fashionSceneGroups: [],
-          fashionSelectedSceneGroupId: '',
-          fashionSelectedPoseId: '',
-          fashionSelectedShotSizes: [],
-          fashionSelectedViewAngles: [],
+          fashionSelectedSceneGroupIds: [],
+          fashionSelectedPoseIds: [],
+          fashionSelectedShotSizes: '',
+          fashionSelectedViewAngles: '',
           fashionScenePrompt: '',
           fashionScenePlanRaw: null,
           fashionSceneError: error.message || '推荐场景生成失败，请稍后重试',
@@ -889,10 +896,10 @@ document.addEventListener('DOMContentLoaded', () => {
       const { formData, selectedStyle } = buildBaseGenerateFormData();
       formData.append('fashion_action', 'generate');
       formData.append('fashion_scene_plan', JSON.stringify(fashionState?.fashionScenePlanRaw || {}));
-      formData.append('fashion_scene_group_id', fashionState?.fashionSelectedSceneGroupId || '');
-      formData.append('fashion_pose_id', fashionState?.fashionSelectedPoseId || '');
-      formData.append('fashion_shot_sizes', JSON.stringify(fashionState?.fashionSelectedShotSizes || []));
-      formData.append('fashion_view_angles', JSON.stringify(fashionState?.fashionSelectedViewAngles || []));
+      formData.append('fashion_scene_group_ids', JSON.stringify(fashionState?.fashionSelectedSceneGroupIds || []));
+      formData.append('fashion_pose_ids', JSON.stringify(fashionState?.fashionSelectedPoseIds || []));
+      formData.append('fashion_shot_size', fashionState?.fashionSelectedShotSizes || '');
+      formData.append('fashion_view_angle', fashionState?.fashionSelectedViewAngles || '');
 
       resetResultStatus();
       resetResultState();
