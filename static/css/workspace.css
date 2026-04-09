@@ -790,8 +790,7 @@ body.fashion-page .fashion-pose-grid {
   gap: 10px;
 }
 body.fashion-page .fashion-pose-card {
-  display: grid;
-  gap: 6px;
+  display: block;
   padding: 14px;
   text-align: left;
   border-radius: 16px;
@@ -799,6 +798,91 @@ body.fashion-page .fashion-pose-card {
   background: rgba(255,255,255,0.9);
   cursor: pointer;
   transition: border-color 0.2s ease, box-shadow 0.2s ease, transform 0.2s ease;
+}
+body.fashion-page .fashion-pose-card .ai-product-image-poseHeader-is3wTu {
+  display: flex;
+  align-items: flex-start;
+  gap: 10px;
+}
+body.fashion-page .fashion-pose-card .ai-product-image-poseCheckbox-bRP6-Q {
+  width: 18px;
+  height: 18px;
+  flex: 0 0 18px;
+  margin-top: 2px;
+  border-radius: 999px;
+  border: 1.5px solid rgba(148, 163, 184, 0.9);
+  background: #fff;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+body.fashion-page .fashion-pose-checkmark {
+  color: #2563eb;
+  font-size: 10px;
+  line-height: 1;
+}
+body.fashion-page .fashion-pose-card.is-selected .ai-product-image-poseCheckbox-bRP6-Q {
+  border-color: #2563eb;
+  background: #eff6ff;
+}
+body.fashion-page .fashion-pose-card .ai-product-image-poseInfo-KVhsvQ {
+  min-width: 0;
+  flex: 1;
+}
+body.fashion-page .fashion-pose-card .ai-product-image-poseAction-sLCOCI {
+  margin: 0;
+  color: rgba(15, 23, 42, 0.82);
+  font-size: 11.7px;
+  line-height: 1.6;
+}
+body.fashion-page .fashion-pose-card .ai-product-image-cameraControls-50U-0g {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 8px;
+  margin-top: 8px;
+}
+body.fashion-page .fashion-pose-card .ai-product-image-controlItem-tRjNDa {
+  min-width: 0;
+}
+body.fashion-page .fashion-pose-select-wrap {
+  position: relative;
+  display: block;
+}
+body.fashion-page .fashion-pose-select-wrap::after {
+  content: '';
+  position: absolute;
+  top: 50%;
+  right: 8px;
+  width: 6px;
+  height: 6px;
+  border-right: 1.5px solid rgba(15, 23, 42, 0.55);
+  border-bottom: 1.5px solid rgba(15, 23, 42, 0.55);
+  transform: translateY(-65%) rotate(45deg);
+  pointer-events: none;
+}
+body.fashion-page .fashion-pose-select {
+  width: 100%;
+  min-height: 24px;
+  padding: 0 20px 0 8px;
+  border-radius: 8px;
+  border: 1px solid rgba(15, 23, 42, 0.08);
+  background: rgba(255, 255, 255, 0.92);
+  color: rgba(15, 23, 42, 0.82);
+  font-size: 9.75px;
+  line-height: 1.2;
+  appearance: none;
+  -webkit-appearance: none;
+  -moz-appearance: none;
+  outline: none;
+  box-shadow: none;
+}
+body.fashion-page .fashion-pose-select:focus {
+  border-color: rgba(59, 130, 246, 0.5);
+}
+@media (max-width: 900px) {
+  body.fashion-page .fashion-pose-card .ai-product-image-cameraControls-50U-0g {
+    grid-template-columns: 1fr;
+  }
 }
 body.fashion-page .fashion-pose-card:hover {
   transform: translateY(-1px);
@@ -813,6 +897,11 @@ body.fashion-page .fashion-scene-selection-panel {
   gap: 12px;
   padding: 16px;
 }
+body.fashion-page .fashion-scene-options-row {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 12px;
+}
 body.fashion-page .fashion-scene-option-block {
   display: grid;
   gap: 8px;
@@ -821,6 +910,11 @@ body.fashion-page .fashion-scene-chip-row {
   display: flex;
   flex-wrap: wrap;
   gap: 8px;
+}
+@media (max-width: 900px) {
+  body.fashion-page .fashion-scene-options-row {
+    grid-template-columns: 1fr;
+  }
 }
 body.fashion-page .fashion-scene-chip {
   min-height: 34px;
@@ -974,6 +1068,14 @@ body.fashion-page .generate-btn.fashion-generate-btn-active {
   }
   to {
     transform: rotate(360deg);
+  }
+}
+@keyframes result-skeleton-shimmer {
+  0% {
+    background-position: 200% 0;
+  }
+  100% {
+    background-position: -200% 0;
   }
 }
 .grid-2 { gap: 10px; grid-template-columns: repeat(2, minmax(0, 1fr)); }
@@ -1223,8 +1325,8 @@ body.fashion-page .result-view.active {
   gap: 6px;
 }
 .result-status-message {
-  display: none !important;
-  min-height: 0;
+  min-height: 20px;
+  display: block;
 }
 .toolbar {
   flex-wrap: wrap;
@@ -1373,6 +1475,45 @@ body.fashion-page .result-view.active {
 .result-card.is-reference,
 .result-card.reference-card {
   background: rgba(245,247,250,0.98);
+}
+.result-card-loading {
+  pointer-events: none;
+}
+.result-card-loading .result-image {
+  min-height: 280px;
+}
+.image-shape-loading,
+.skeleton-line,
+.skeleton-button {
+  position: relative;
+  overflow: hidden;
+  background: linear-gradient(90deg, rgba(226, 232, 240, 0.92) 25%, rgba(241, 245, 249, 0.98) 50%, rgba(226, 232, 240, 0.92) 75%);
+  background-size: 200% 100%;
+  animation: result-skeleton-shimmer 1.4s ease-in-out infinite;
+}
+.image-shape-loading {
+  min-height: 280px;
+  border-radius: 0;
+}
+.skeleton-line {
+  border-radius: 10px;
+}
+.skeleton-line-title {
+  min-height: 22px;
+  width: 72%;
+}
+.skeleton-line-label {
+  min-height: 12px;
+  width: 38%;
+}
+.skeleton-line-copy {
+  min-height: 36px;
+  width: 100%;
+}
+.skeleton-button {
+  min-height: 40px;
+  width: 100%;
+  border-radius: 12px;
 }
 .result-image {
   list-style: none;

@@ -312,6 +312,80 @@ document.addEventListener('DOMContentLoaded', () => {
 
     const getCurrentModeConfig = () => modeConfig[currentMode] || modeConfig.suite;
     const modePlanLabelMap = { suite: '套图', aplus: 'A+ 模块', fashion: '服饰穿搭图' };
+    const normalizeFashionSceneGroups = (groups) => {
+      if (!Array.isArray(groups)) {
+        return [];
+      }
+      return groups
+        .filter((group) => group && typeof group === 'object')
+        .map((group, groupIndex) => {
+          const groupId = String(group.id || `scene-group-${groupIndex + 1}`);
+          return {
+            id: groupId,
+            title: String(group.title || `场景组 ${groupIndex + 1}`),
+            subtitle: String(group.subtitle || group.summary || group.description || ''),
+            prompt: String(group.prompt || group.scene_prompt || group.scenePrompt || ''),
+            poses: Array.isArray(group.poses)
+              ? group.poses
+                .filter((pose) => pose && typeof pose === 'object')
+                .map((pose, poseIndex) => {
+                  const rawPoseId = String(pose.id || '').trim();
+                  return {
+                    id: rawPoseId.startsWith(`${groupId}-`) ? rawPoseId : `${groupId}-pose-${poseIndex + 1}`,
+                    title: String(pose.title || `姿态 ${poseIndex + 1}`),
+                    subtitle: String(pose.subtitle || pose.summary || pose.description || ''),
+                    prompt: String(pose.prompt || pose.pose_prompt || pose.scene_prompt || pose.posePrompt || ''),
+                  };
+                })
+              : [],
+          };
+        })
+        .filter((group) => group.poses.length > 0);
+    };
+    const normalizeFashionCameraValue = (value, allowedValues) => {
+      const normalized = String(value || '').trim();
+      return allowedValues.includes(normalized) ? normalized : '';
+    };
+    const inferFashionShotSize = (group, pose) => {
+      const text = [group?.title, group?.subtitle, group?.prompt, pose?.title, pose?.subtitle, pose?.prompt]
+        .filter(Boolean)
+        .join(' ');
+      if (/特写|近景|局部|细节|拉链|袖口|领口|纽扣|面料|纹理/.test(text)) {
+        return '特写';
+      }
+      if (/半身|上半身|胸像/.test(text)) {
+        return '半身';
+      }
+      if (/四分之三|3\/4|七分身|中景/.test(text)) {
+        return '四分之三';
+      }
+      if (/全身|全景|站立|直立|完整|通身|落地/.test(text)) {
+        return '全身';
+      }
+      return '半身';
+    };
+    const inferFashionViewAngle = (group, pose) => {
+      const text = [group?.title, group?.subtitle, group?.prompt, pose?.title, pose?.subtitle, pose?.prompt]
+        .filter(Boolean)
+        .join(' ');
+      if (/3\/4|四分之三|45度|斜侧|侧前方/.test(text)) {
+        return '3/4侧';
+      }
+      if (/背面|背影|后背|背部/.test(text)) {
+        return '背面';
+      }
+      if (/侧面|侧身|侧向/.test(text)) {
+        return '侧面';
+      }
+      if (/正面|正向|正对/.test(text)) {
+        return '正面';
+      }
+      return '正面';
+    };
+    const buildFashionPoseCameraSetting = (group, pose, currentSetting = {}) => ({
+      shotSize: normalizeFashionCameraValue(currentSetting.shotSize, ['全身', '四分之三', '半身', '特写']) || inferFashionShotSize(group, pose),
+      viewAngle: normalizeFashionCameraValue(currentSetting.viewAngle, ['正面', '侧面', '3/4侧', '背面']) || inferFashionViewAngle(group, pose),
+    });
     const compactText = (value = '', maxLength = 32) => {
       const normalized = String(value || '').replace(/\s+/g, ' ').trim();
       if (!normalized) {
@@ -329,10 +403,29 @@ document.addEventListener('DOMContentLoaded', () => {
             disabled: true,
             label: '请选择模特',
             step: 'model',
+            action: 'select_model',
           };
         }
 
         const rawState = JSON.parse(localStorage.getItem(STORAGE_KEY) || '{}');
+        const sceneGroups = normalizeFashionSceneGroups(rawState.fashionSceneGroups);
+        const validPoseIds = new Set(sceneGroups.flatMap((group) => group.poses.map((pose) => pose.id)));
+        const rawPoseCameraSettings = rawState.fashionPoseCameraSettings && typeof rawState.fashionPoseCameraSettings === 'object'
+          ? Object.entries(rawState.fashionPoseCameraSettings).reduce((acc, [poseId, setting]) => {
+              const normalizedPoseId = String(poseId || '').trim();
+              if (!normalizedPoseId || !validPoseIds.has(normalizedPoseId) || !setting || typeof setting !== 'object') {
+                return acc;
+              }
+              acc[normalizedPoseId] = setting;
+              return acc;
+            }, {})
+          : {};
+        const poseCameraSettings = sceneGroups.reduce((acc, group) => {
+          group.poses.forEach((pose) => {
+            acc[pose.id] = buildFashionPoseCameraSetting(group, pose, rawPoseCameraSettings[pose.id]);
+          });
+          return acc;
+        }, {});
         const selectedSource = rawState.fashionSelectedModelSource === 'custom'
           ? 'custom'
           : rawState.fashionSelectedModelSource === 'ai'
@@ -348,17 +441,14 @@ document.addEventListener('DOMContentLoaded', () => {
         const hasSelectedModel = selectedSource === 'ai' ? Boolean(generationDone) : Boolean(customSelected);
         const sceneStep = rawState.fashionFlowStep === 'scene';
         const sceneGenerationState = rawState.fashionSceneGenerationState;
-        const hasSceneGroups = Array.isArray(rawState.fashionSceneGroups) && rawState.fashionSceneGroups.length > 0;
-        const selectedSceneGroupIds = Array.isArray(rawState.fashionSelectedSceneGroupIds)
-          ? rawState.fashionSelectedSceneGroupIds.filter((item, index, list) => item && list.indexOf(item) === index)
-          : [];
+        const hasSceneGroups = sceneGroups.length > 0;
         const selectedPoseIds = Array.isArray(rawState.fashionSelectedPoseIds)
-          ? rawState.fashionSelectedPoseIds.filter((item, index, list) => item && list.indexOf(item) === index)
+          ? rawState.fashionSelectedPoseIds
+            .map((item) => String(item || '').trim())
+            .filter((item, index, list) => item && validPoseIds.has(item) && list.indexOf(item) === index)
           : [];
-        const hasPose = selectedSceneGroupIds.length > 0 && selectedPoseIds.length >= selectedSceneGroupIds.length;
-        const hasShotSizes = Boolean(rawState.fashionSelectedShotSizes);
-        const hasViewAngles = Boolean(rawState.fashionSelectedViewAngles);
-        const selectedSceneCount = Math.min(selectedSceneGroupIds.length, selectedPoseIds.length);
+        const selectedSceneCount = selectedPoseIds.length;
+        const hasPose = selectedSceneCount > 0;
 
         if (!hasSelectedModel) {
           return {
@@ -366,6 +456,7 @@ document.addEventListener('DOMContentLoaded', () => {
             disabled: true,
             label: '请选择模特',
             step: sceneStep ? 'scene' : 'model',
+            action: 'select_model',
           };
         }
         if (!sceneStep) {
@@ -374,6 +465,7 @@ document.addEventListener('DOMContentLoaded', () => {
             disabled: false,
             label: '生成推荐场景',
             step: 'model',
+            action: 'scene_plan',
           };
         }
         if (sceneGenerationState === 'loading') {
@@ -382,6 +474,7 @@ document.addEventListener('DOMContentLoaded', () => {
             disabled: true,
             label: '生成中...',
             step: 'scene',
+            action: 'loading',
           };
         }
         if (sceneGenerationState === 'error') {
@@ -390,6 +483,7 @@ document.addEventListener('DOMContentLoaded', () => {
             disabled: false,
             label: '重新生成推荐场景',
             step: 'scene',
+            action: 'scene_plan',
           };
         }
         if (sceneGenerationState !== 'done' || !hasSceneGroups) {
@@ -398,22 +492,16 @@ document.addEventListener('DOMContentLoaded', () => {
             disabled: false,
             label: '生成推荐场景',
             step: 'scene',
+            action: 'scene_plan',
           };
         }
         if (!hasPose) {
           return {
             hasSelectedModel: true,
             disabled: true,
-            label: '请选择姿态',
+            label: '请选择场景',
             step: 'scene',
-          };
-        }
-        if (!hasShotSizes || !hasViewAngles) {
-          return {
-            hasSelectedModel: true,
-            disabled: true,
-            label: '请选择景别和视角',
-            step: 'scene',
+            action: 'select_scene',
           };
         }
         return {
@@ -421,6 +509,7 @@ document.addEventListener('DOMContentLoaded', () => {
           disabled: false,
           label: `生成服饰穿戴图（${selectedSceneCount}个场景）`,
           step: 'scene',
+          action: 'generate',
         };
       } catch (error) {
         console.error('Failed to read fashion selection state:', error);
@@ -429,6 +518,7 @@ document.addEventListener('DOMContentLoaded', () => {
           disabled: true,
           label: '请选择模特',
           step: 'model',
+          action: 'select_model',
         };
       }
     };
@@ -784,6 +874,30 @@ document.addEventListener('DOMContentLoaded', () => {
       return null;
     };
 
+    const resetStaleFashionLoadingState = () => {
+      if (!isFashionPage) {
+        return;
+      }
+      try {
+        const rawState = JSON.parse(localStorage.getItem(STORAGE_KEY) || '{}');
+        const patch = {};
+
+        if (rawState.fashionModelGenerationState === 'loading') {
+          patch.fashionModelGenerationState = 'idle';
+        }
+        if (rawState.fashionSceneGenerationState === 'loading') {
+          patch.fashionSceneGenerationState = 'error';
+          patch.fashionSceneError = '上一次推荐场景生成未完成，请重新生成。';
+        }
+
+        if (Object.keys(patch).length) {
+          localStorage.setItem(STORAGE_KEY, JSON.stringify({ ...rawState, ...patch }));
+        }
+      } catch (error) {
+        console.error('Failed to reset stale fashion loading state:', error);
+      }
+    };
+
     const setFashionFlowStepState = (step) => {
       const api = getFashionWorkspaceApi();
       if (api && typeof api.setFlowStep === 'function') {
@@ -821,6 +935,41 @@ document.addEventListener('DOMContentLoaded', () => {
       return { formData, selectedStyle };
     };
 
+    const fetchJsonWithTimeout = async (url, options = {}, timeoutMs = 70000) => {
+      const controller = typeof AbortController === 'function' ? new AbortController() : null;
+      const timeoutId = controller
+        ? window.setTimeout(() => controller.abort(), timeoutMs)
+        : null;
+
+      try {
+        const response = await fetch(url, {
+          ...options,
+          signal: controller ? controller.signal : options.signal,
+        });
+        const responseText = await response.text();
+        let result = {};
+
+        if (responseText) {
+          try {
+            result = JSON.parse(responseText);
+          } catch (error) {
+            throw new Error(responseText.trim() || '服务端返回格式异常，请稍后重试');
+          }
+        }
+
+        return { response, result };
+      } catch (error) {
+        if (error?.name === 'AbortError') {
+          throw new Error('推荐场景生成超时，请稍后重试');
+        }
+        throw error;
+      } finally {
+        if (timeoutId) {
+          window.clearTimeout(timeoutId);
+        }
+      }
+    };
+
     const requestFashionScenePlan = async () => {
       const currentFashionState = getFashionSelectionState();
       applyFashionGenerateButtonState(currentFashionState);
@@ -834,8 +983,7 @@ document.addEventListener('DOMContentLoaded', () => {
         fashionSceneGroups: [],
         fashionSelectedSceneGroupIds: [],
         fashionSelectedPoseIds: [],
-        fashionSelectedShotSizes: '',
-        fashionSelectedViewAngles: '',
+        fashionPoseCameraSettings: {},
         fashionScenePrompt: '',
         fashionSceneError: '',
         fashionScenePlanRaw: null,
@@ -846,11 +994,10 @@ document.addEventListener('DOMContentLoaded', () => {
       try {
         const { formData } = buildBaseGenerateFormData();
         formData.append('fashion_action', 'scene_plan');
-        const response = await fetch('/api/generate-suite', {
+        const { response, result } = await fetchJsonWithTimeout('/api/generate-suite', {
           method: 'POST',
           body: formData,
         });
-        const result = await response.json();
         const scenePlan = result?.plan || null;
         const sceneGroups = Array.isArray(scenePlan?.scene_groups) ? scenePlan.scene_groups : [];
 
@@ -862,6 +1009,8 @@ document.addEventListener('DOMContentLoaded', () => {
           fashionFlowStep: 'scene',
           fashionSceneGenerationState: 'done',
           fashionSceneGroups: sceneGroups,
+          fashionSelectedSceneGroupIds: [],
+          fashionSelectedPoseIds: [],
           fashionSceneError: '',
           fashionScenePlanRaw: scenePlan,
         });
@@ -873,8 +1022,7 @@ document.addEventListener('DOMContentLoaded', () => {
           fashionSceneGroups: [],
           fashionSelectedSceneGroupIds: [],
           fashionSelectedPoseIds: [],
-          fashionSelectedShotSizes: '',
-          fashionSelectedViewAngles: '',
+          fashionPoseCameraSettings: {},
           fashionScenePrompt: '',
           fashionScenePlanRaw: null,
           fashionSceneError: error.message || '推荐场景生成失败，请稍后重试',
@@ -886,20 +1034,82 @@ document.addEventListener('DOMContentLoaded', () => {
     const submitFashionGenerate = async () => {
       const fashionApi = getFashionWorkspaceApi();
       const fashionState = fashionApi?.getState ? fashionApi.getState() : null;
-      const fashionCta = fashionState?.cta || getFashionSelectionState();
-      applyFashionGenerateButtonState(fashionCta);
-      if (fashionCta.disabled) {
+      const normalizedSelectedPoseIds = Array.isArray(fashionState?.fashionSelectedPoseIds)
+        ? fashionState.fashionSelectedPoseIds
+            .map((poseId) => String(poseId || '').trim())
+            .filter(Boolean)
+        : [];
+      const normalizedSelectedEntries = normalizedSelectedPoseIds.reduce((acc, poseId) => {
+        const selectedGroup = Array.isArray(fashionState?.fashionSceneGroups)
+          ? fashionState.fashionSceneGroups.find((group) => Array.isArray(group?.poses) && group.poses.some((pose) => pose.id === poseId))
+          : null;
+        const selectedPose = selectedGroup?.poses.find((pose) => pose.id === poseId);
+        if (!selectedGroup || !selectedPose) {
+          return acc;
+        }
+        acc.push({
+          group: selectedGroup,
+          pose: selectedPose,
+        });
+        return acc;
+      }, []);
+      const normalizedPoseCameraSettings = normalizedSelectedEntries.reduce((acc, entry) => {
+        acc[entry.pose.id] = buildFashionPoseCameraSetting(
+          entry.group,
+          entry.pose,
+          fashionState?.fashionPoseCameraSettings?.[entry.pose.id] || {},
+        );
+        return acc;
+      }, {});
+      const normalizedFashionState = fashionState
+        ? {
+            ...fashionState,
+            fashionSelectedPoseIds: normalizedSelectedEntries.map((entry) => entry.pose.id),
+            fashionSelectedSceneGroupIds: normalizedSelectedEntries.reduce((groupIds, entry) => {
+              if (!groupIds.includes(entry.group.id)) {
+                groupIds.push(entry.group.id);
+              }
+              return groupIds;
+            }, []),
+            fashionPoseCameraSettings: {
+              ...(fashionState?.fashionPoseCameraSettings || {}),
+              ...normalizedPoseCameraSettings,
+            },
+          }
+        : null;
+      const fashionCta = normalizedFashionState?.cta || getFashionSelectionState();
+      const canGenerateWithDefaults = Boolean(
+        normalizedFashionState
+        && normalizedFashionState.fashionFlowStep === 'scene'
+        && normalizedFashionState.fashionSceneGenerationState === 'done'
+        && normalizedSelectedEntries.length > 0,
+      );
+      applyFashionGenerateButtonState(canGenerateWithDefaults
+        ? {
+            ...fashionCta,
+            disabled: false,
+            label: `生成服饰穿戴图（${normalizedSelectedEntries.length}个场景）`,
+          }
+        : fashionCta);
+      if (!canGenerateWithDefaults && fashionCta.disabled) {
         return;
       }
 
       const config = getCurrentModeConfig();
       const { formData, selectedStyle } = buildBaseGenerateFormData();
       formData.append('fashion_action', 'generate');
-      formData.append('fashion_scene_plan', JSON.stringify(fashionState?.fashionScenePlanRaw || {}));
-      formData.append('fashion_scene_group_ids', JSON.stringify(fashionState?.fashionSelectedSceneGroupIds || []));
-      formData.append('fashion_pose_ids', JSON.stringify(fashionState?.fashionSelectedPoseIds || []));
-      formData.append('fashion_shot_size', fashionState?.fashionSelectedShotSizes || '');
-      formData.append('fashion_view_angle', fashionState?.fashionSelectedViewAngles || '');
+      formData.append('fashion_scene_plan', JSON.stringify(normalizedFashionState?.fashionScenePlanRaw || {}));
+      formData.append('fashion_scene_group_ids', JSON.stringify(normalizedSelectedEntries.map((entry) => entry.group.id)));
+      formData.append('fashion_pose_ids', JSON.stringify(normalizedFashionState?.fashionSelectedPoseIds || []));
+      const selectedPoseCameraSettings = normalizedSelectedEntries.map((entry) => {
+        const setting = normalizedFashionState?.fashionPoseCameraSettings?.[entry.pose.id] || {};
+        return {
+          pose_id: entry.pose.id,
+          shot_size: setting.shotSize || '',
+          view_angle: setting.viewAngle || '',
+        };
+      });
+      formData.append('fashion_pose_camera_settings', JSON.stringify(selectedPoseCameraSettings));
 
       resetResultStatus();
       resetResultState();
@@ -911,7 +1121,9 @@ document.addEventListener('DOMContentLoaded', () => {
       generateBtn.disabled = true;
       updateGenerateButtonLabel(config.planLoadingLabel);
       setResultStatus(selectedStyle?.title ? config.selectedPrefix.replace('{style}', selectedStyle.title) : config.defaultPrefix);
+      renderLoadingResultCards(fashionCta.selectedSceneCount || getCurrentOutputMetric() || 1);
       showResultView();
+      syncFashionState({ fashionFlowStep: 'result' });
       persistState();
 
       try {
@@ -944,11 +1156,11 @@ document.addEventListener('DOMContentLoaded', () => {
         saveStateToLocalStorage();
       } catch (error) {
         resetResultState();
+        syncFashionState({ fashionFlowStep: 'scene' });
         if (resultMeta) {
           resultMeta.textContent = '生成失败后可修改卖点、平台或素材后重试。';
         }
         setResultStatus(error.message || config.errorFallback, 'error');
-        showIntroView();
         persistState();
       } finally {
         applyFashionGenerateButtonState();
@@ -1364,6 +1576,30 @@ document.addEventListener('DOMContentLoaded', () => {
       persistState();
     };
 
+    const renderLoadingResultCards = (count = 6) => {
+      const safeCount = Math.max(1, Number(count) || 1);
+      resultGrid.innerHTML = Array.from({ length: safeCount }, (_, index) => `
+        <article class="result-card result-card-loading" aria-hidden="true">
+          <div class="result-image">
+            <div class="image-shape image-shape-loading"></div>
+            <div class="overlay-chip">
+              <span class="result-no">${String(index + 1).padStart(2, '0')}</span>
+            </div>
+          </div>
+          <div class="result-body">
+            <div class="result-topline">
+              <div class="card-title skeleton-line skeleton-line-title"></div>
+            </div>
+            <div class="small-label skeleton-line skeleton-line-label"></div>
+            <div class="card-sub skeleton-line skeleton-line-copy"></div>
+            <div class="card-actions">
+              <div class="card-action-btn skeleton-button"></div>
+            </div>
+          </div>
+        </article>
+      `).join('');
+    };
+
     const renderResultCards = (items = []) => {
       updateSelectionSummary();
       if (!items.length) {
@@ -1458,8 +1694,11 @@ document.addEventListener('DOMContentLoaded', () => {
       if (!resultStatusMessage) {
         return;
       }
+      const normalizedType = type
+        ? (String(type).startsWith('is-') ? String(type) : `is-${String(type)}`)
+        : '';
       resultStatusMessage.textContent = message || '';
-      resultStatusMessage.className = `result-status-message${type ? ` ${type}` : ''}`;
+      resultStatusMessage.className = `result-status-message${normalizedType ? ` ${normalizedType}` : ''}`;
       persistState();
     };
 
@@ -1816,6 +2055,7 @@ document.addEventListener('DOMContentLoaded', () => {
 
     renderAplusModuleCards();
     syncOutputCountSummary();
+    resetStaleFashionLoadingState();
 
     const restored = restoreStateFromLocalStorage();
     if (!restored) {
@@ -1924,7 +2164,7 @@ document.addEventListener('DOMContentLoaded', () => {
           if (!fashionState.hasSelectedModel) {
             return;
           }
-          if (fashionState.step !== 'scene' || fashionState.label === '生成推荐场景' || fashionState.label === '重新生成推荐场景') {
+          if (fashionState.action === 'scene_plan' || fashionState.step !== 'scene') {
             await requestFashionScenePlan();
             return;
           }

@@ -163,7 +163,6 @@
                   <span class="small-label">04 / Scene Planner</span>
                   <h2 class="fashion-scene-title">选择场景</h2>
                 </div>
-                <p class="fashion-scene-copy">先锁定姿态、镜头景别与视角，再进入最终服饰穿戴图生成。</p>
               </div>
               <div class="fashion-scene-body" id="fashionSceneBody"></div>
             </section>
@@ -258,6 +257,25 @@
         }
       };
 
+      const resetStaleFashionLoadingState = () => {
+        const state = readWorkspaceState();
+        const patch = {};
+
+        if (state.fashionModelGenerationState === 'loading') {
+          patch.fashionModelGenerationState = 'idle';
+        }
+        if (state.fashionSceneGenerationState === 'loading') {
+          patch.fashionSceneGenerationState = 'error';
+          patch.fashionSceneError = '上一次推荐场景生成未完成，请重新生成。';
+        }
+
+        if (Object.keys(patch).length) {
+          patchWorkspaceState(patch);
+        }
+      };
+
+      resetStaleFashionLoadingState();
+
       const escapeHtml = (value = '') => String(value)
         .replace(/&/g, '&amp;')
         .replace(/</g, '&lt;')
@@ -325,22 +343,28 @@
         }
         return groups
           .filter((group) => group && typeof group === 'object')
-          .map((group, groupIndex) => ({
-            id: String(group.id || `scene-group-${groupIndex + 1}`),
-            title: String(group.title || `场景组 ${groupIndex + 1}`),
-            subtitle: String(group.subtitle || group.summary || group.description || ''),
-            prompt: String(group.prompt || group.scene_prompt || group.scenePrompt || ''),
-            poses: Array.isArray(group.poses)
-              ? group.poses
-                .filter((pose) => pose && typeof pose === 'object')
-                .map((pose, poseIndex) => ({
-                  id: String(pose.id || `pose-${groupIndex + 1}-${poseIndex + 1}`),
-                  title: String(pose.title || `姿态 ${poseIndex + 1}`),
-                  subtitle: String(pose.subtitle || pose.summary || pose.description || ''),
-                  prompt: String(pose.prompt || pose.pose_prompt || pose.posePrompt || ''),
-                }))
-              : [],
-          }))
+          .map((group, groupIndex) => {
+            const groupId = String(group.id || `scene-group-${groupIndex + 1}`);
+            return {
+              id: groupId,
+              title: String(group.title || `场景组 ${groupIndex + 1}`),
+              subtitle: String(group.subtitle || group.summary || group.description || ''),
+              prompt: String(group.prompt || group.scene_prompt || group.scenePrompt || ''),
+              poses: Array.isArray(group.poses)
+                ? group.poses
+                  .filter((pose) => pose && typeof pose === 'object')
+                  .map((pose, poseIndex) => {
+                    const rawPoseId = String(pose.id || '').trim();
+                    return {
+                      id: rawPoseId.startsWith(`${groupId}-`) ? rawPoseId : `${groupId}-pose-${poseIndex + 1}`,
+                      title: String(pose.title || `姿态 ${poseIndex + 1}`),
+                      subtitle: String(pose.subtitle || pose.summary || pose.description || ''),
+                      prompt: String(pose.prompt || pose.pose_prompt || pose.scene_prompt || pose.posePrompt || ''),
+                    };
+                  })
+                : [],
+            };
+          })
           .filter((group) => group.poses.length > 0);
       };
 
@@ -362,9 +386,107 @@
       const SHOT_SIZE_OPTIONS = ['全身', '四分之三', '半身', '特写'];
       const VIEW_ANGLE_OPTIONS = ['正面', '侧面', '3/4侧', '背面'];
 
+      const normalizeFashionPoseCameraSettings = (rawSettings, sceneGroups) => {
+        const validPoseIds = new Set(
+          (Array.isArray(sceneGroups) ? sceneGroups : []).flatMap((group) =>
+            Array.isArray(group?.poses) ? group.poses.map((pose) => pose.id) : []
+          )
+        );
+        const nextSettings = {};
+        if (!rawSettings || typeof rawSettings !== 'object') {
+          return nextSettings;
+        }
+        Object.entries(rawSettings).forEach(([poseId, value]) => {
+          const normalizedPoseId = String(poseId || '').trim();
+          if (!normalizedPoseId || !validPoseIds.has(normalizedPoseId) || !value || typeof value !== 'object') {
+            return;
+          }
+          const shotSize = normalizeSingleSelectValue(value.shotSize, SHOT_SIZE_OPTIONS);
+          const viewAngle = normalizeSingleSelectValue(value.viewAngle, VIEW_ANGLE_OPTIONS);
+          if (!shotSize || !viewAngle) {
+            return;
+          }
+          nextSettings[normalizedPoseId] = { shotSize, viewAngle };
+        });
+        return nextSettings;
+      };
+
+      const inferFashionPoseShotSize = (group, pose) => {
+        const text = [group?.title, group?.subtitle, group?.prompt, pose?.title, pose?.subtitle, pose?.prompt]
+          .filter(Boolean)
+          .join(' ');
+        if (/特写|近景|局部|细节|拉链|袖口|领口|纽扣|面料|纹理/.test(text)) {
+          return '特写';
+        }
+        if (/半身|上半身|胸像/.test(text)) {
+          return '半身';
+        }
+        if (/四分之三|3\/4|七分身|中景/.test(text)) {
+          return '四分之三';
+        }
+        if (/全身|全景|站立|直立|完整|通身|落地/.test(text)) {
+          return '全身';
+        }
+        return '半身';
+      };
+
+      const inferFashionPoseViewAngle = (group, pose) => {
+        const text = [group?.title, group?.subtitle, group?.prompt, pose?.title, pose?.subtitle, pose?.prompt]
+          .filter(Boolean)
+          .join(' ');
+        if (/3\/4|四分之三|45度|斜侧|侧前方/.test(text)) {
+          return '3/4侧';
+        }
+        if (/背面|背影|后背|背部/.test(text)) {
+          return '背面';
+        }
+        if (/侧面|侧身|侧向/.test(text)) {
+          return '侧面';
+        }
+        if (/正面|正向|正对/.test(text)) {
+          return '正面';
+        }
+        return '正面';
+      };
+
+      const buildFashionPoseCameraSetting = (group, pose, currentSetting = {}) => ({
+        shotSize: normalizeSingleSelectValue(currentSetting.shotSize, SHOT_SIZE_OPTIONS) || inferFashionPoseShotSize(group, pose),
+        viewAngle: normalizeSingleSelectValue(currentSetting.viewAngle, VIEW_ANGLE_OPTIONS) || inferFashionPoseViewAngle(group, pose),
+      });
+
+      const ensureFashionPoseCameraSettings = (state) => {
+        const currentSettings = normalizeFashionPoseCameraSettings(state.fashionPoseCameraSettings, state.fashionSceneGroups);
+        const nextSettings = { ...currentSettings };
+        state.fashionSceneGroups.forEach((group) => {
+          group.poses.forEach((pose) => {
+            nextSettings[pose.id] = buildFashionPoseCameraSetting(group, pose, currentSettings[pose.id]);
+          });
+        });
+        return nextSettings;
+      };
+
+      const getFashionPoseCameraSetting = (state, group, pose) => {
+        const currentSettings = state?.fashionPoseCameraSettings && typeof state.fashionPoseCameraSettings === 'object'
+          ? state.fashionPoseCameraSettings
+          : {};
+        return buildFashionPoseCameraSetting(group, pose, currentSettings[pose.id]);
+      };
+
       const getFashionState = () => {
         const state = readWorkspaceState();
         const customModels = normalizeCustomModels(state.fashionCustomModels);
+        const sceneGroups = normalizeSceneGroups(state.fashionSceneGroups);
+        const selectedPoseIds = normalizeMultiSelectValues(
+          state.fashionSelectedPoseIds,
+          sceneGroups.flatMap((group) => group.poses.map((pose) => pose.id)),
+        );
+        const selectedSceneGroupIds = sceneGroups
+          .filter((group) => group.poses.some((pose) => selectedPoseIds.includes(pose.id)))
+          .map((group) => group.id);
+        const poseCameraSettings = ensureFashionPoseCameraSettings({
+          fashionSceneGroups: sceneGroups,
+          fashionPoseCameraSettings: state.fashionPoseCameraSettings,
+        });
         return {
           fashionModelType: state.fashionModelType === 'custom' ? 'custom' : 'ai',
           fashionModelGenerationState: state.fashionModelGenerationState === 'loading'
@@ -387,11 +509,10 @@
               : state.fashionSceneGenerationState === 'error'
                 ? 'error'
                 : 'idle',
-          fashionSceneGroups: normalizeSceneGroups(state.fashionSceneGroups),
-          fashionSelectedSceneGroupIds: normalizeMultiSelectValues(state.fashionSelectedSceneGroupIds, normalizeSceneGroups(state.fashionSceneGroups).map((group) => group.id)),
-          fashionSelectedPoseIds: normalizeMultiSelectValues(state.fashionSelectedPoseIds, normalizeSceneGroups(state.fashionSceneGroups).flatMap((group) => group.poses.map((pose) => pose.id))),
-          fashionSelectedShotSizes: normalizeSingleSelectValue(state.fashionSelectedShotSizes, SHOT_SIZE_OPTIONS),
-          fashionSelectedViewAngles: normalizeSingleSelectValue(state.fashionSelectedViewAngles, VIEW_ANGLE_OPTIONS),
+          fashionSceneGroups: sceneGroups,
+          fashionSelectedSceneGroupIds: selectedSceneGroupIds,
+          fashionSelectedPoseIds: selectedPoseIds,
+          fashionPoseCameraSettings: poseCameraSettings,
           fashionScenePrompt: typeof state.fashionScenePrompt === 'string' ? state.fashionScenePrompt : '',
           fashionSceneError: typeof state.fashionSceneError === 'string' ? state.fashionSceneError : '',
           fashionScenePlanRaw: state.fashionScenePlanRaw && typeof state.fashionScenePlanRaw === 'object'
@@ -405,19 +526,14 @@
       const getSelectedScenePoses = (state) => state.fashionSceneGroups.flatMap((group) => group.poses)
         .filter((pose) => state.fashionSelectedPoseIds.includes(pose.id));
 
-      const getSelectedSceneEntries = (state) => state.fashionSelectedSceneGroupIds
-        .map((groupId) => {
-          const group = state.fashionSceneGroups.find((item) => item.id === groupId);
-          if (!group) {
-            return null;
-          }
-          const pose = group.poses.find((item) => state.fashionSelectedPoseIds.includes(item.id));
-          if (!pose) {
-            return null;
-          }
-          return { group, pose };
-        })
-        .filter(Boolean);
+      const getSelectedSceneEntries = (state) => state.fashionSceneGroups
+        .flatMap((group) => group.poses
+          .filter((pose) => state.fashionSelectedPoseIds.includes(pose.id))
+          .map((pose) => ({
+            group,
+            pose,
+            cameraSetting: getFashionPoseCameraSetting(state, group, pose),
+          })));
 
       const getSelectedScenePrompt = (state) => getSelectedSceneEntries(state)
         .map(({ group, pose }) => [group.prompt, pose.prompt].filter(Boolean).join('\n'))
@@ -431,6 +547,7 @@
 
       const buildFashionCtaState = (state) => {
         const hasSelectedModel = isModelAvailable(state, state.fashionSelectedModelSource, state.fashionSelectedModelId);
+        const selectedEntries = getSelectedSceneEntries(state);
         if (!hasSelectedModel) {
           return {
             hasSelectedModel: false,
@@ -438,6 +555,7 @@
             label: '请选择模特',
             step: state.fashionFlowStep,
             selectedSceneCount: 0,
+            action: 'select_model',
           };
         }
         if (state.fashionFlowStep !== 'scene') {
@@ -447,6 +565,7 @@
             label: '生成推荐场景',
             step: 'model',
             selectedSceneCount: 0,
+            action: 'scene_plan',
           };
         }
         if (state.fashionSceneGenerationState === 'loading') {
@@ -456,6 +575,7 @@
             label: '生成中...',
             step: 'scene',
             selectedSceneCount: 0,
+            action: 'loading',
           };
         }
         if (state.fashionSceneGenerationState === 'error') {
@@ -465,6 +585,7 @@
             label: '重新生成推荐场景',
             step: 'scene',
             selectedSceneCount: 0,
+            action: 'scene_plan',
           };
         }
         if (state.fashionSceneGenerationState !== 'done' || !state.fashionSceneGroups.length) {
@@ -474,11 +595,10 @@
             label: '生成推荐场景',
             step: 'scene',
             selectedSceneCount: 0,
+            action: 'scene_plan',
           };
         }
-        const selectedSceneCount = getSelectedSceneEntries(state).length;
-        const hasShotSize = Boolean(state.fashionSelectedShotSizes);
-        const hasViewAngle = Boolean(state.fashionSelectedViewAngles);
+        const selectedSceneCount = selectedEntries.length;
         if (!selectedSceneCount) {
           return {
             hasSelectedModel: true,
@@ -486,15 +606,7 @@
             label: '请选择场景',
             step: 'scene',
             selectedSceneCount: 0,
-          };
-        }
-        if (!hasShotSize || !hasViewAngle) {
-          return {
-            hasSelectedModel: true,
-            disabled: true,
-            label: '请选择景别和视角',
-            step: 'scene',
-            selectedSceneCount,
+            action: 'select_scene',
           };
         }
         return {
@@ -503,6 +615,7 @@
           label: `生成服饰穿戴图（${selectedSceneCount}个场景）`,
           step: 'scene',
           selectedSceneCount,
+          action: 'generate',
         };
       };
 
@@ -658,6 +771,10 @@
         `;
       }).join('');
 
+      const renderSceneSelectOptions = (values, selectedValue) => values.map((value) => `
+        <option value="${escapeHtml(value)}"${selectedValue === value ? ' selected' : ''}>${escapeHtml(value)}</option>
+      `).join('');
+
       const renderFashionSceneState = (state) => {
         if (!fashionSceneBody) {
           return;
@@ -695,12 +812,14 @@
         }
 
         const selectedEntries = getSelectedSceneEntries(state);
+        const hasCompleteCameraSettings = selectedEntries.length > 0
+          && selectedEntries.every(({ cameraSetting }) => cameraSetting.shotSize && cameraSetting.viewAngle);
 
         fashionSceneBody.innerHTML = `
           <div class="fashion-scene-groups">
             ${state.fashionSceneGroups.map((group) => {
               const selectedPose = group.poses.find((pose) => state.fashionSelectedPoseIds.includes(pose.id)) || null;
-              const groupSelected = state.fashionSelectedSceneGroupIds.includes(group.id) && Boolean(selectedPose);
+              const groupSelected = Boolean(selectedPose);
               return `
                 <section class="fashion-scene-group${groupSelected ? ' is-selected' : ''}">
                   <div class="fashion-scene-group-head">
@@ -712,6 +831,7 @@
                   <div class="fashion-pose-grid">
                     ${group.poses.map((pose) => {
                       const poseSelected = state.fashionSelectedPoseIds.includes(pose.id);
+                      const cameraSetting = getFashionPoseCameraSetting(state, group, pose);
                       return `
                         <button
                           class="fashion-pose-card${poseSelected ? ' is-selected' : ''}"
@@ -721,9 +841,30 @@
                           data-pose-id="${escapeHtml(pose.id)}"
                           aria-pressed="${poseSelected ? 'true' : 'false'}"
                         >
-                          <span class="fashion-pose-card-tag">${groupSelected && poseSelected ? 'selected' : 'pose'}</span>
-                          <span class="fashion-pose-card-title">${escapeHtml(pose.title)}</span>
-                          ${pose.subtitle ? `<span class="fashion-pose-card-copy">${escapeHtml(pose.subtitle)}</span>` : ''}
+                          <div class="ai-product-image-poseHeader-is3wTu">
+                            <div class="ai-product-image-poseCheckbox-bRP6-Q">${poseSelected ? '<span class="fashion-pose-checkmark" aria-hidden="true">✓</span>' : ''}</div>
+                            <div class="ai-product-image-poseInfo-KVhsvQ">
+                              <p class="ai-product-image-poseAction-sLCOCI">${escapeHtml(pose.title)}${pose.subtitle ? `，${escapeHtml(pose.subtitle)}` : ''}</p>
+                            </div>
+                          </div>
+                          ${poseSelected ? `
+                            <div class="ai-product-image-cameraControls-50U-0g">
+                              <div class="ai-product-image-controlItem-tRjNDa">
+                                <label class="fashion-pose-select-wrap">
+                                  <select class="fashion-pose-select" data-role="select-fashion-shot-size" data-pose-id="${escapeHtml(pose.id)}" aria-label="镜头景别">
+                                    ${renderSceneSelectOptions(SHOT_SIZE_OPTIONS, cameraSetting.shotSize)}
+                                  </select>
+                                </label>
+                              </div>
+                              <div class="ai-product-image-controlItem-tRjNDa">
+                                <label class="fashion-pose-select-wrap">
+                                  <select class="fashion-pose-select" data-role="select-fashion-view-angle" data-pose-id="${escapeHtml(pose.id)}" aria-label="视角">
+                                    ${renderSceneSelectOptions(VIEW_ANGLE_OPTIONS, cameraSetting.viewAngle)}
+                                  </select>
+                                </label>
+                              </div>
+                            </div>
+                          ` : ''}
                         </button>
                       `;
                     }).join('')}
@@ -732,36 +873,6 @@
               `;
             }).join('')}
           </div>
-          ${selectedEntries.length ? `
-            <section class="fashion-scene-selection-panel">
-              <div class="fashion-scene-selection-head">
-                <div>
-                  <div class="fashion-scene-selection-title">已选场景</div>
-                  <div class="fashion-scene-selection-copy">已选择 ${selectedEntries.length} 个场景，可继续设置统一景别与视角。</div>
-                </div>
-              </div>
-              <div class="fashion-scene-selection-list">
-                ${selectedEntries.map(({ group, pose }) => `
-                  <div class="fashion-scene-selection-item">
-                    <span class="fashion-scene-selection-item-title">${escapeHtml(group.title)}</span>
-                    <span class="fashion-scene-selection-item-copy">${escapeHtml(pose.title)}</span>
-                  </div>
-                `).join('')}
-              </div>
-              <div class="fashion-scene-option-block">
-                <div class="fashion-scene-option-label">镜头景别</div>
-                <div class="fashion-scene-chip-row">
-                  ${renderSceneOptionChips(SHOT_SIZE_OPTIONS, state.fashionSelectedShotSizes, 'toggle-fashion-shot-size')}
-                </div>
-              </div>
-              <div class="fashion-scene-option-block">
-                <div class="fashion-scene-option-label">视角</div>
-                <div class="fashion-scene-chip-row">
-                  ${renderSceneOptionChips(VIEW_ANGLE_OPTIONS, state.fashionSelectedViewAngles, 'toggle-fashion-view-angle')}
-                </div>
-              </div>
-            </section>
-          ` : ''}
         `;
       };
 
@@ -855,46 +966,82 @@
           return;
         }
 
-        const groupIds = state.fashionSelectedSceneGroupIds.slice();
-        const poseIds = state.fashionSelectedPoseIds.slice();
-        const existingPoseIds = group.poses.map((item) => item.id);
-        const existingPoseId = existingPoseIds.find((item) => poseIds.includes(item)) || '';
-        const isSameSelection = existingPoseId === pose.id && groupIds.includes(group.id);
+        const isSelected = state.fashionSelectedPoseIds.includes(pose.id);
+        const nextPoseIds = isSelected
+          ? state.fashionSelectedPoseIds.filter((item) => item !== pose.id)
+          : [...state.fashionSelectedPoseIds, pose.id];
 
-        const nextGroupIds = isSameSelection
-          ? groupIds.filter((item) => item !== group.id)
-          : groupIds.includes(group.id)
-            ? groupIds.slice()
-            : [...groupIds, group.id];
-        const nextPoseIds = poseIds.filter((item) => !existingPoseIds.includes(item));
-        if (!isSameSelection) {
-          nextPoseIds.push(pose.id);
-        }
-
+        const nextGroupIds = state.fashionSceneGroups
+          .filter((item) => item.poses.some((groupPose) => nextPoseIds.includes(groupPose.id)))
+          .map((item) => item.id);
         const nextState = {
           ...state,
           fashionSelectedSceneGroupIds: nextGroupIds,
           fashionSelectedPoseIds: nextPoseIds,
         };
 
+        const nextPoseCameraSettings = { ...ensureFashionPoseCameraSettings(state) };
+        if (!isSelected) {
+          nextPoseCameraSettings[pose.id] = buildFashionPoseCameraSetting(group, pose, nextPoseCameraSettings[pose.id]);
+        }
+
         patchWorkspaceState({
           fashionSelectedSceneGroupIds: nextGroupIds,
           fashionSelectedPoseIds: nextPoseIds,
+          fashionPoseCameraSettings: nextPoseCameraSettings,
           fashionScenePrompt: getSelectedScenePrompt(nextState),
         });
         renderFashionModelState();
       };
 
-      const toggleSceneShotSize = (value) => {
+      const toggleSceneShotSize = (poseId, value) => {
+        const state = getFashionState();
+        const normalizedPoseId = String(poseId || '').trim();
+        if (!normalizedPoseId) {
+          return;
+        }
+        const selectedEntry = state.fashionSceneGroups
+          .flatMap((group) => group.poses.map((pose) => ({ group, pose })))
+          .find(({ pose }) => pose.id === normalizedPoseId);
+        if (!selectedEntry) {
+          return;
+        }
+        const currentSettings = ensureFashionPoseCameraSettings(state);
+        const currentSetting = buildFashionPoseCameraSetting(selectedEntry.group, selectedEntry.pose, currentSettings[normalizedPoseId]);
         patchWorkspaceState({
-          fashionSelectedShotSizes: SHOT_SIZE_OPTIONS.includes(value) ? value : '',
+          fashionPoseCameraSettings: {
+            ...currentSettings,
+            [normalizedPoseId]: {
+              ...currentSetting,
+              shotSize: SHOT_SIZE_OPTIONS.includes(value) ? value : currentSetting.shotSize,
+            },
+          },
         });
         renderFashionModelState();
       };
 
-      const toggleSceneViewAngle = (value) => {
+      const toggleSceneViewAngle = (poseId, value) => {
+        const state = getFashionState();
+        const normalizedPoseId = String(poseId || '').trim();
+        if (!normalizedPoseId) {
+          return;
+        }
+        const selectedEntry = state.fashionSceneGroups
+          .flatMap((group) => group.poses.map((pose) => ({ group, pose })))
+          .find(({ pose }) => pose.id === normalizedPoseId);
+        if (!selectedEntry) {
+          return;
+        }
+        const currentSettings = ensureFashionPoseCameraSettings(state);
+        const currentSetting = buildFashionPoseCameraSetting(selectedEntry.group, selectedEntry.pose, currentSettings[normalizedPoseId]);
         patchWorkspaceState({
-          fashionSelectedViewAngles: VIEW_ANGLE_OPTIONS.includes(value) ? value : '',
+          fashionPoseCameraSettings: {
+            ...currentSettings,
+            [normalizedPoseId]: {
+              ...currentSetting,
+              viewAngle: VIEW_ANGLE_OPTIONS.includes(value) ? value : currentSetting.viewAngle,
+            },
+          },
         });
         renderFashionModelState();
       };
@@ -1014,12 +1161,17 @@
             checkedOption.checked = true;
           }
         }
+        const statePatch = {
+          fashionSelectedSceneGroupIds: state.fashionSelectedSceneGroupIds,
+          fashionSelectedPoseIds: state.fashionSelectedPoseIds,
+          fashionPoseCameraSettings: ensureFashionPoseCameraSettings(state),
+          fashionScenePrompt: getSelectedScenePrompt(state),
+        };
         if (!isModelAvailable(state, state.fashionSelectedModelSource, state.fashionSelectedModelId)) {
-          patchWorkspaceState({
-            fashionSelectedModelSource: '',
-            fashionSelectedModelId: '',
-          });
+          statePatch.fashionSelectedModelSource = '';
+          statePatch.fashionSelectedModelId = '';
         }
+        patchWorkspaceState(statePatch);
         renderFashionModelState();
       };
 
@@ -1083,6 +1235,18 @@
 
       if (fashionSceneBody) {
         fashionSceneBody.addEventListener('click', function(event) {
+          const shotSelect = event.target.closest('[data-role="select-fashion-shot-size"]');
+          if (shotSelect) {
+            event.stopPropagation();
+            return;
+          }
+
+          const viewSelect = event.target.closest('[data-role="select-fashion-view-angle"]');
+          if (viewSelect) {
+            event.stopPropagation();
+            return;
+          }
+
           const poseCard = event.target.closest('[data-role="select-fashion-pose"]');
           if (poseCard) {
             setSelectedPose(poseCard.dataset.groupId || '', poseCard.dataset.poseId || '');
@@ -1091,13 +1255,26 @@
 
           const shotChip = event.target.closest('[data-role="toggle-fashion-shot-size"]');
           if (shotChip) {
-            toggleSceneShotSize(shotChip.dataset.value || '');
+            toggleSceneShotSize(shotChip.dataset.poseId || '', shotChip.dataset.value || '');
             return;
           }
 
           const viewChip = event.target.closest('[data-role="toggle-fashion-view-angle"]');
           if (viewChip) {
-            toggleSceneViewAngle(viewChip.dataset.value || '');
+            toggleSceneViewAngle(viewChip.dataset.poseId || '', viewChip.dataset.value || '');
+          }
+        });
+
+        fashionSceneBody.addEventListener('change', function(event) {
+          const shotSelect = event.target.closest('[data-role="select-fashion-shot-size"]');
+          if (shotSelect) {
+            toggleSceneShotSize(shotSelect.dataset.poseId || '', shotSelect.value || '');
+            return;
+          }
+
+          const viewSelect = event.target.closest('[data-role="select-fashion-view-angle"]');
+          if (viewSelect) {
+            toggleSceneViewAngle(viewSelect.dataset.poseId || '', viewSelect.value || '');
           }
         });
       }

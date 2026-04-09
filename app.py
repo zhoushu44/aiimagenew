@@ -15,6 +15,8 @@ import requests
 from dotenv import load_dotenv
 from flask import Flask, jsonify, request, send_file, send_from_directory, url_for
 from openai import APIError, APIStatusError, OpenAI
+from requests.adapters import HTTPAdapter
+from urllib3.util.retry import Retry
 from werkzeug.exceptions import RequestEntityTooLarge
 
 BASE_DIR = Path(__file__).resolve().parent
@@ -734,6 +736,27 @@ def build_multimodal_content(prompt_text: str, image_files):
     return content
 
 
+CHAT_COMPLETION_RETRYABLE_STATUS_CODES = {429, 502, 503, 504}
+
+
+def create_chat_completion_session():
+    retry = Retry(
+        total=2,
+        connect=2,
+        read=2,
+        status=2,
+        backoff_factor=0.8,
+        allowed_methods=frozenset({'POST'}),
+        status_forcelist=CHAT_COMPLETION_RETRYABLE_STATUS_CODES,
+        raise_on_status=False,
+    )
+    adapter = HTTPAdapter(max_retries=retry)
+    session = requests.Session()
+    session.mount('https://', adapter)
+    session.mount('http://', adapter)
+    return session
+
+
 def call_chat_completion(system_prompt: str, user_content, temperature: float = 0.7):
     api_key = get_env('OPENAI_API_KEY')
     base_url = get_env('OPENAI_BASE_URL').rstrip('/')
@@ -748,15 +771,31 @@ def call_chat_completion(system_prompt: str, user_content, temperature: float = 
         'temperature': temperature,
     }
 
-    response = requests.post(
-        f'{base_url}/chat/completions',
-        headers={
-            'Authorization': f'Bearer {api_key}',
-            'Content-Type': 'application/json',
-        },
-        json=payload,
-        timeout=60,
-    )
+    try:
+        with create_chat_completion_session() as session:
+            response = session.post(
+                f'{base_url}/chat/completions',
+                headers={
+                    'Authorization': f'Bearer {api_key}',
+                    'Content-Type': 'application/json',
+                },
+                json=payload,
+                timeout=60,
+            )
+    except requests.exceptions.SSLError as exc:
+        app.logger.exception('Chat completion SSL failure: base_url=%s model=%s', base_url, model)
+        raise RuntimeError(
+            json.dumps(
+                {
+                    'error': '模型接口 SSL 连接异常，请稍后重试',
+                    'details': str(exc),
+                },
+                ensure_ascii=False,
+            )
+        ) from exc
+    except requests.RequestException as exc:
+        app.logger.exception('Chat completion request failure: base_url=%s model=%s', base_url, model)
+        raise
     raw_response_text = response.text
     app.logger.warning(
         'Chat completion response: base_url=%s model=%s status=%s body=%s',
@@ -1376,7 +1415,8 @@ def parse_fashion_scene_plan(text: str):
             if not isinstance(pose, dict):
                 raise ValueError(f'场景规划结果格式异常：第 {group_index} 组第 {pose_index} 个姿态必须为对象')
 
-            pose_id = str(pose.get('id', '')).strip() or f'{group_id}-pose-{pose_index}'
+            raw_pose_id = str(pose.get('id', '')).strip()
+            pose_id = raw_pose_id if raw_pose_id.startswith(f'{group_id}-') else f'{group_id}-pose-{pose_index}'
             pose_title = str(pose.get('title', '')).strip()
             pose_description = str(pose.get('description', '')).strip()
             pose_scene_prompt = str(pose.get('scene_prompt', '')).strip()
@@ -1498,33 +1538,181 @@ def find_fashion_scene_selection(scene_groups, scene_group_id: str, pose_id: str
 
 
 def parse_fashion_scene_selections(scene_groups, scene_group_ids, pose_ids):
-    if not scene_group_ids:
-        raise ValueError('请至少选择 1 个场景')
-    if len(scene_group_ids) != len(pose_ids):
-        raise ValueError('场景与姿态选择数量不一致')
-
-    normalized_entries = []
+    normalized_group_ids = []
     seen_group_ids = set()
-
-    for scene_group_id, pose_id in zip(scene_group_ids, pose_ids):
+    for scene_group_id in scene_group_ids or []:
         normalized_group_id = str(scene_group_id or '').strip()
-        normalized_pose_id = str(pose_id or '').strip()
-        if not normalized_group_id or not normalized_pose_id:
-            raise ValueError('请选择有效的场景和姿态')
-        if normalized_group_id in seen_group_ids:
-            raise ValueError('场景选择存在重复，请重新选择')
-        selected_group, selected_pose = find_fashion_scene_selection(scene_groups, normalized_group_id, normalized_pose_id)
-        normalized_entries.append(
-            {
-                'scene_group_id': normalized_group_id,
-                'pose_id': normalized_pose_id,
-                'group': selected_group,
-                'pose': selected_pose,
-            }
-        )
+        if not normalized_group_id or normalized_group_id in seen_group_ids:
+            continue
+        normalized_group_ids.append(normalized_group_id)
         seen_group_ids.add(normalized_group_id)
 
+    normalized_pose_ids = []
+    seen_pose_ids = set()
+    for pose_id in pose_ids or []:
+        normalized_pose_id = str(pose_id or '').strip()
+        if not normalized_pose_id or normalized_pose_id in seen_pose_ids:
+            continue
+        normalized_pose_ids.append(normalized_pose_id)
+        seen_pose_ids.add(normalized_pose_id)
+
+    if not normalized_pose_ids:
+        raise ValueError('请至少选择 1 个场景')
+
+    normalized_entries = []
+    matched_group_ids = set()
+
+    for normalized_pose_id in normalized_pose_ids:
+        matched_group = None
+        matched_pose = None
+
+        for group in scene_groups or []:
+            for pose in group.get('poses') or []:
+                if pose.get('id') == normalized_pose_id:
+                    matched_group = group
+                    matched_pose = pose
+                    break
+            if matched_group and matched_pose:
+                break
+
+        if not matched_group or not matched_pose:
+            raise ValueError('请选择有效的姿态方案')
+
+        matched_group_id = str(matched_group.get('id') or '').strip()
+        if normalized_group_ids and matched_group_id not in seen_group_ids:
+            raise ValueError('请选择有效的场景组')
+
+        normalized_entries.append(
+            {
+                'scene_group_id': matched_group_id,
+                'pose_id': normalized_pose_id,
+                'group': matched_group,
+                'pose': matched_pose,
+            }
+        )
+        matched_group_ids.add(matched_group_id)
+
+    unused_group_ids = [group_id for group_id in normalized_group_ids if group_id not in matched_group_ids]
+    if unused_group_ids:
+        raise ValueError('请选择有效的场景和姿态')
+
     return normalized_entries
+
+
+
+def infer_fashion_pose_shot_size(selected_group: dict, selected_pose: dict) -> str:
+    text = ' '.join(
+        str(value or '').strip()
+        for value in [
+            selected_group.get('title'),
+            selected_group.get('description'),
+            selected_group.get('scene_prompt'),
+            selected_pose.get('title'),
+            selected_pose.get('description'),
+            selected_pose.get('scene_prompt'),
+        ]
+        if str(value or '').strip()
+    )
+    if re.search(r'特写|近景|局部|细节|拉链|袖口|领口|纽扣|面料|纹理', text):
+        return '特写'
+    if re.search(r'半身|上半身|胸像', text):
+        return '半身'
+    if re.search(r'四分之三|3/4|七分身|中景', text):
+        return '四分之三'
+    if re.search(r'全身|全景|站立|直立|完整|通身|落地', text):
+        return '全身'
+    return '半身'
+
+
+
+def infer_fashion_pose_view_angle(selected_group: dict, selected_pose: dict) -> str:
+    text = ' '.join(
+        str(value or '').strip()
+        for value in [
+            selected_group.get('title'),
+            selected_group.get('description'),
+            selected_group.get('scene_prompt'),
+            selected_pose.get('title'),
+            selected_pose.get('description'),
+            selected_pose.get('scene_prompt'),
+        ]
+        if str(value or '').strip()
+    )
+    if re.search(r'3/4|四分之三|45度|斜侧|侧前方', text):
+        return '3/4侧'
+    if re.search(r'背面|背影|后背|背部', text):
+        return '背面'
+    if re.search(r'侧面|侧身|侧向', text):
+        return '侧面'
+    if re.search(r'正面|正向|正对', text):
+        return '正面'
+    return '正面'
+
+
+
+def build_fashion_pose_camera_setting(selected_group: dict, selected_pose: dict, current_setting=None):
+    setting = current_setting if isinstance(current_setting, dict) else {}
+    shot_size = str(setting.get('shot_size') or '').strip() or infer_fashion_pose_shot_size(selected_group, selected_pose)
+    view_angle = str(setting.get('view_angle') or '').strip() or infer_fashion_pose_view_angle(selected_group, selected_pose)
+    return {
+        'shot_size': shot_size,
+        'view_angle': view_angle,
+    }
+
+
+
+def parse_fashion_pose_camera_settings(raw_value: str, selections):
+    normalized = (raw_value or '').strip()
+    if not normalized:
+        return {
+            str(selection.get('pose_id') or '').strip(): build_fashion_pose_camera_setting(
+                selection.get('group') or {},
+                selection.get('pose') or {},
+            )
+            for selection in (selections or [])
+            if str(selection.get('pose_id') or '').strip()
+        }
+
+    try:
+        payload = json.loads(normalized)
+    except json.JSONDecodeError as exc:
+        raise ValueError('场景镜头参数格式异常，请重新选择') from exc
+
+    if not isinstance(payload, list):
+        raise ValueError('场景镜头参数格式异常，请重新选择')
+
+    selection_map = {
+        str(selection.get('pose_id') or '').strip(): selection
+        for selection in (selections or [])
+        if str(selection.get('pose_id') or '').strip()
+    }
+    camera_settings = {}
+
+    for item in payload:
+        if not isinstance(item, dict):
+            continue
+        pose_id = str(item.get('pose_id') or '').strip()
+        if not pose_id or pose_id not in selection_map:
+            continue
+        selection = selection_map[pose_id]
+        camera_settings[pose_id] = build_fashion_pose_camera_setting(
+            selection.get('group') or {},
+            selection.get('pose') or {},
+            {
+                'shot_size': str(item.get('shot_size') or '').strip(),
+                'view_angle': str(item.get('view_angle') or '').strip(),
+            },
+        )
+
+    for selection in selections or []:
+        pose_id = str(selection.get('pose_id') or '').strip()
+        if pose_id and pose_id not in camera_settings:
+            camera_settings[pose_id] = build_fashion_pose_camera_setting(
+                selection.get('group') or {},
+                selection.get('pose') or {},
+            )
+
+    return camera_settings
 
 
 
@@ -1568,20 +1756,28 @@ def build_fashion_generation_prompt(platform: str, selling_text: str, country: s
 
 
 
-def build_fashion_generation_prompts(platform: str, selling_text: str, country: str, text_type: str, image_size_ratio: str, selected_style, scene_plan: dict, selections, shot_size: str, view_angle: str):
+def build_fashion_generation_prompts(platform: str, selling_text: str, country: str, text_type: str, image_size_ratio: str, selected_style, scene_plan: dict, selections, pose_camera_settings):
     if not selections:
         raise ValueError('请至少选择 1 个场景')
 
-    shot_sizes = [shot_size] if shot_size else []
-    view_angles = [view_angle] if view_angle else []
     prompts = []
     for selection in selections:
+        pose_id = str(selection.get('pose_id') or '').strip()
+        camera_setting = pose_camera_settings.get(pose_id) or {}
+        shot_size = str(camera_setting.get('shot_size') or '').strip()
+        view_angle = str(camera_setting.get('view_angle') or '').strip()
+        if not shot_size:
+            raise ValueError('请为每个场景选择景别')
+        if not view_angle:
+            raise ValueError('请为每个场景选择视角')
         prompts.append(
             {
                 'scene_group_id': selection['scene_group_id'],
-                'pose_id': selection['pose_id'],
+                'pose_id': pose_id,
                 'group': selection['group'],
                 'pose': selection['pose'],
+                'shot_size': shot_size,
+                'view_angle': view_angle,
                 'prompt': build_fashion_generation_prompt(
                     platform,
                     selling_text,
@@ -1592,8 +1788,8 @@ def build_fashion_generation_prompts(platform: str, selling_text: str, country: 
                     scene_plan,
                     selection['group'],
                     selection['pose'],
-                    shot_sizes,
-                    view_angles,
+                    [shot_size] if shot_size else [],
+                    [view_angle] if view_angle else [],
                 ),
             }
         )
@@ -2385,15 +2581,12 @@ def generate_suite():
             scene_plan = parse_fashion_scene_plan_payload(request.form.get('fashion_scene_plan', ''))
             scene_group_ids = parse_json_string_list(request.form.get('fashion_scene_group_ids', ''), '场景')
             pose_ids = parse_json_string_list(request.form.get('fashion_pose_ids', ''), '姿态')
-            shot_size = (request.form.get('fashion_shot_size', '') or '').strip()
-            view_angle = (request.form.get('fashion_view_angle', '') or '').strip()
-
-            if not shot_size:
-                raise ValueError('请选择景别')
-            if not view_angle:
-                raise ValueError('请选择视角')
 
             selections = parse_fashion_scene_selections(scene_plan.get('scene_groups') or [], scene_group_ids, pose_ids)
+            pose_camera_settings = parse_fashion_pose_camera_settings(
+                request.form.get('fashion_pose_camera_settings', ''),
+                selections,
+            )
             prompt_entries = build_fashion_generation_prompts(
                 platform,
                 selling_text,
@@ -2403,8 +2596,7 @@ def generate_suite():
                 selected_style,
                 scene_plan,
                 selections,
-                shot_size,
-                view_angle,
+                pose_camera_settings,
             )
 
             task_id = uuid.uuid4().hex
@@ -2421,25 +2613,45 @@ def generate_suite():
                     )
                 )
 
-            generated_items = call_image_generation(
-                get_ark_client(),
-                prompt_entries[0]['prompt'] if len(prompt_entries) == 1 else '\n\n'.join(
-                    f"第 {index} 张：\n{entry['prompt']}" for index, entry in enumerate(prompt_entries, start=1)
-                ),
-                planning_payloads,
-                image_size_ratio,
-                text_type,
-                country,
-                product_json,
-                'fashion-look',
-                max_images=len(prompt_entries),
-            )
-            if len(generated_items) < len(prompt_entries):
-                raise RuntimeError('生成结果数量不足，请稍后重试')
-
             images = []
+            failed_prompt_entries = []
             for index, prompt_entry in enumerate(prompt_entries, start=1):
-                image_bytes, mime_type = decode_generated_image(generated_items[index - 1])
+                app.logger.warning(
+                    'Fashion image generation start: index=%s total=%s title=%s shot_size=%s view_angle=%s',
+                    index,
+                    len(prompt_entries),
+                    prompt_entry['pose'].get('title') or f'服饰穿搭图 {index}',
+                    prompt_entry.get('shot_size', ''),
+                    prompt_entry.get('view_angle', ''),
+                )
+                generated_items = call_image_generation(
+                    get_ark_client(),
+                    prompt_entry['prompt'],
+                    planning_payloads,
+                    image_size_ratio,
+                    text_type,
+                    country,
+                    product_json,
+                    'fashion-look',
+                    max_images=1,
+                )
+                generated_count = len(generated_items) if isinstance(generated_items, list) else 0
+                app.logger.warning(
+                    'Fashion image generation result: index=%s total=%s generated_count=%s title=%s',
+                    index,
+                    len(prompt_entries),
+                    generated_count,
+                    prompt_entry['pose'].get('title') or f'服饰穿搭图 {index}',
+                )
+                if not generated_items:
+                    failed_prompt_entries.append(
+                        {
+                            'index': index,
+                            'title': prompt_entry['pose'].get('title') or f'服饰穿搭图 {index}',
+                        }
+                    )
+                    continue
+                image_bytes, mime_type = decode_generated_image(generated_items[0])
                 download_name, relative_path, image_url = save_generated_image(task_id, index, 'fashion-look', image_bytes, mime_type)
                 images.append(
                     {
@@ -2448,13 +2660,18 @@ def generate_suite():
                         'type': '服饰穿搭图',
                         'type_tag': 'Look',
                         'title': prompt_entry['pose'].get('title') or f'服饰穿搭图 {index}',
-                        'keywords': [shot_size, view_angle],
+                        'keywords': [prompt_entry.get('shot_size', ''), prompt_entry.get('view_angle', '')],
                         'prompt': prompt_entry['prompt'],
                         'image_url': image_url,
                         'image_path': relative_path,
                         'download_name': download_name,
                     }
                 )
+
+            if not images:
+                failure_titles = '、'.join(item['title'] for item in failed_prompt_entries[:3])
+                failure_hint = f'（失败场景：{failure_titles}）' if failure_titles else ''
+                raise RuntimeError(f'生成结果数量不足，请稍后重试{failure_hint}')
 
             return jsonify(
                 {
@@ -2471,8 +2688,7 @@ def generate_suite():
                     'fashion_selection': {
                         'scene_group_ids': scene_group_ids,
                         'pose_ids': pose_ids,
-                        'shot_size': shot_size,
-                        'view_angle': view_angle,
+                        'pose_camera_settings': pose_camera_settings,
                     },
                 }
             )
