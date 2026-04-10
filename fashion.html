@@ -185,7 +185,7 @@
                     <button class="tool-btn" id="downloadSelectedBtn" type="button">下载</button>
                   </div>
                 </div>
-                <p class="result-meta" id="resultMeta">系统将根据服饰商品图、平台策略、卖点与风格参考生成服饰穿戴结果。</p>
+                <p class="result-meta" id="resultMeta">系统将根据服饰商品图、已选模特与场景设置生成服饰穿戴结果。</p>
                 <div class="result-status-message" id="resultStatusMessage"></div>
                 <div class="title-suggestion-panel" id="titleSuggestionPanel" hidden></div>
               </div>
@@ -1126,6 +1126,9 @@
               id: `custom-${Date.now()}-${index}-${Math.random().toString(36).slice(2, 7)}`,
               name: (file.name || '我的模特').replace(/\.[^.]+$/, ''),
               previewUrl: typeof reader.result === 'string' ? reader.result : '',
+              imageUrl: typeof reader.result === 'string' ? reader.result : '',
+              imagePath: '',
+              downloadName: file.name || '',
             });
             remaining -= 1;
             if (remaining === 0) {

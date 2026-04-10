@@ -167,38 +167,56 @@ STYLE_ANALYSIS_USER_PROMPT_TEMPLATE = """请结合当前商品图片与核心卖
 {{"styles":[{{"title":"","reasoning":"","colors":["#000000","#FFFFFF","#CCCCCC"]}}]}}
 """
 
+FASHION_OUTPUT_VERIFIER_SYSTEM_PROMPT = (
+    '你是服饰穿搭成图质检助手。'
+    '你会收到 3 张图片，顺序固定为：第 1 张是待检查的生成结果，第 2 张是必须出镜的模特参考图，第 3 张是必须穿到模特身上的商品图。'
+    '你必须严格检查：生成结果里是否真的出现了清晰可见的人体/模特、是否与参考模特保持同一人物身份、是否让该模特穿上了商品图中的同一件服饰、是否出现了任何新增可见文字。'
+    '只允许输出合法 JSON，不要输出代码块、解释或额外文字。'
+)
+
+FASHION_OUTPUT_VERIFIER_USER_PROMPT_TEMPLATE = """请严格检查这 3 张图片（顺序固定：1=生成结果，2=模特参考，3=商品图），并返回 JSON：
+{{
+  "model_present": true,
+  "same_model_identity": true,
+  "wearing_product": true,
+  "extra_text_present": false,
+  "passed": true,
+  "score": 0,
+  "failed_checks": [""],
+  "reason": ""
+}}
+
+判定要求：
+1. model_present：只有当第 1 张图里明显出现真实模特/人体主体时才为 true；如果只是衣服平铺、挂拍、白底单品、无头模特、裁切到看不出人物身份，都必须为 false。
+2. same_model_identity：只有当第 1 张图中的出镜人物，与第 2 张参考图是同一模特身份时才为 true；若换人、性别不符、脸型发型明显不一致、只剩身体看不出是否同一人，都为 false。
+3. wearing_product：只有当第 1 张图中的模特，穿着第 3 张商品图里的同一件服饰主体，且款式、颜色、结构、图案、logo/字样位置总体一致时才为 true；若只是相似衣服、只保留部分特征、没真正穿到人身上，都为 false。
+4. extra_text_present：只要第 1 张图出现任何新增可见文字、数字、水印、海报字、标签字、背景招牌字、字幕或角标，就为 true。商品原本自带且与商品图一致的 logo / 印花文字不算新增文字。
+5. passed：只有当 model_present=true、same_model_identity=true、wearing_product=true、extra_text_present=false 时才为 true。
+6. score：0-100，越高表示越符合要求。
+7. failed_checks：从 ["model_present", "same_model_identity", "wearing_product", "extra_text_present"] 中返回未通过项；若都通过则返回空数组。
+8. reason：用一句中文简洁说明判定依据，20-80 字。
+
+务必保守判定；不确定时按失败处理。"""
+
+FASHION_OUTPUT_MAX_VERIFY_ATTEMPTS = 1
+
 FASHION_SCENE_PLAN_SYSTEM_PROMPT = (
     '你是服饰穿搭视觉策划专家，擅长围绕服装主体一致性、模特外观、镜头语言与场景氛围，'
     '为前端生成可直接渲染的场景推荐 JSON。你必须只输出合法 JSON，不要附加解释。'
 )
 
-FASHION_SCENE_PLAN_USER_PROMPT_TEMPLATE = """请基于当前服装商品图与模特参考，为服饰穿搭生成推荐场景方案。
-
-目标平台：
-{platform}
-
-国家参考：
-{country}
-
-文字类型：
-{text_type}
+FASHION_SCENE_PLAN_USER_PROMPT_TEMPLATE = """请基于当前服装商品图与当前已选模特参考，为服饰穿搭生成推荐场景方案。
 
 输出比例：
 {image_size_ratio}
 
-核心卖点：
-{selling_text}
-
-风格参考：
-{style_reference}
-
 要求：
 1. 商品图用于锁定服饰主体、颜色、材质、版型、图案与细节一致性，不得替换商品主体。
-2. 模特参考图只用于锁定人物外观、穿着承载对象、姿态方向与镜头气质。
+2. 当前已选模特参考图只用于锁定人物身份、外观、脸部特征、发型、肤感、体态比例与整体气质，后续最终成图必须继续沿用该模特，不得切换成其他人物。
 3. 需要输出 4 组推荐场景，每组 4 个模块方案。
 4. 场景描述要适合电商服饰穿搭图，避免过于复杂或喧宾夺主的背景。
 5. 每个模块都要清楚区分姿态、构图与镜头感，便于前端做多选场景。
-6. scene_prompt 与 poses.scene_prompt 都必须是可直接用于后续生图拼接的中文短句，突出服装一致性优先。
+6. scene_prompt 与 poses.scene_prompt 都必须是可直接用于后续生图拼接的中文短句，突出服装一致性与模特一致性优先。
 7. 只返回如下 JSON 结构，不要返回 Markdown：
 {{
   "summary": "整体推荐说明",
@@ -571,12 +589,11 @@ def build_task_name(platform: str, mode: str, count: int) -> str:
     if mode == 'aplus':
         mode_label = 'A+详情页'
         count_label = '模块'
-    elif mode == 'fashion':
-        mode_label = '服饰穿搭'
-        count_label = '张'
-    else:
-        mode_label = '爆款套图'
-        count_label = '张'
+        return f'{platform}{mode_label}-{count}{count_label}-{datetime.now().strftime("%m%d-%H%M%S")}'
+    if mode == 'fashion':
+        return f'服饰穿搭-{count}张-{datetime.now().strftime("%m%d-%H%M%S")}'
+    mode_label = '爆款套图'
+    count_label = '张'
     return f'{platform}{mode_label}-{count}{count_label}-{datetime.now().strftime("%m%d-%H%M%S")}'
 
 
@@ -613,12 +630,10 @@ def validate_image_file(file_storage, content: bytes):
         raise ValueError(f'图片 {filename} 超过单张大小限制（{UPLOAD_MAX_FILE_BYTES // (1024 * 1024)}MB）')
     if extension not in ALLOWED_IMAGE_EXTENSIONS:
         raise ValueError(f'图片 {filename} 格式不受支持，仅支持 JPG、PNG、WEBP、GIF、BMP')
-    if declared_mime_type not in ALLOWED_IMAGE_MIME_TYPES:
-        raise ValueError(f'图片 {filename} MIME 类型不受支持：{declared_mime_type or "未知类型"}')
+    if declared_mime_type and declared_mime_type not in ALLOWED_IMAGE_MIME_TYPES:
+        raise ValueError(f'图片 {filename} MIME 类型不受支持：{declared_mime_type}')
     if not detected_mime_type:
         raise ValueError(f'图片 {filename} 不是有效的图片文件')
-    if detected_mime_type != declared_mime_type:
-        raise ValueError(f'图片 {filename} 文件内容与类型声明不一致')
 
     return detected_mime_type
 
@@ -1417,16 +1432,22 @@ def parse_fashion_scene_plan(text: str):
     }
 
 
+FASHION_DEFAULT_PLATFORM = '服饰穿搭'
+FASHION_DEFAULT_COUNTRY = '中国'
+FASHION_DEFAULT_TEXT_TYPE = '中文'
+FASHION_DEFAULT_SELLING_TEXT = ''
+FASHION_DEFAULT_SELECTED_STYLE = None
+
+
+
 def build_fashion_scene_plan_prompt(platform: str, selling_text: str, country: str, text_type: str, image_size_ratio: str, selected_style=None):
     return FASHION_SCENE_PLAN_USER_PROMPT_TEMPLATE.format(
-        platform=platform,
-        country=country or '中国',
-        text_type=text_type or '中文',
         image_size_ratio=image_size_ratio or '1:1',
-        selling_text=selling_text or '（未填写）',
-        style_reference=build_style_reference_text(selected_style),
     )
 
+
+
+FASHION_SCENE_PLAN_MODEL_TIMEOUT_SECONDS = 120
 
 
 def build_fashion_scene_plan(platform: str, selling_text: str, image_payloads, country: str, text_type: str, image_size_ratio: str, selected_style=None):
@@ -1437,7 +1458,7 @@ def build_fashion_scene_plan(platform: str, selling_text: str, image_payloads, c
             image_payloads,
         ),
         temperature=0.85,
-        timeout_seconds=120,
+        timeout_seconds=FASHION_SCENE_PLAN_MODEL_TIMEOUT_SECONDS,
     )
     return parse_fashion_scene_plan(response_text)
 
@@ -1680,25 +1701,97 @@ def parse_fashion_pose_camera_settings(raw_value: str, selections):
 
 
 
-def build_fashion_generation_prompt(platform: str, selling_text: str, country: str, text_type: str, image_size_ratio: str, selected_style, scene_plan: dict, selected_group: dict, selected_pose: dict, shot_sizes, view_angles):
+def parse_fashion_selected_model_payload(form):
+    source = (form.get('fashion_selected_model_source', '') or '').strip()
+    model_id = (form.get('fashion_selected_model_id', '') or '').strip()
+    model_name = (form.get('fashion_selected_model_name', '') or '').strip()
+    gender = (form.get('fashion_selected_model_gender', '') or '').strip()
+    age = (form.get('fashion_selected_model_age', '') or '').strip()
+    ethnicity = (form.get('fashion_selected_model_ethnicity', '') or '').strip()
+    body_type = (form.get('fashion_selected_model_body_type', '') or '').strip()
+    appearance_details = (form.get('fashion_selected_model_appearance_details', '') or '').strip()
+    summary = (form.get('fashion_selected_model_summary', '') or '').strip()
+    detail_text = (form.get('fashion_selected_model_detail_text', '') or '').strip()
+
+    if not source:
+        raise ValueError('缺少当前已选模特来源，请重新选择模特后再生成')
+    if source not in {'ai', 'custom'}:
+        raise ValueError('当前已选模特来源无效，请重新选择模特后再生成')
+    if not model_id:
+        raise ValueError('缺少当前已选模特 ID，请重新选择模特后再生成')
+
+    selected_payloads = get_image_payloads_from_request('fashion_selected_model_image', limit=1)
+    if not selected_payloads:
+        raise ValueError('缺少当前已选模特图片，请重新选择模特后再生成')
+
+    selected_payload = selected_payloads[0]
+    filename = str(selected_payload.get('filename') or '').strip()
+    if source == 'ai' and not filename:
+        raise ValueError('AI 基准模特图片信息异常，请重新生成或重新选择后再试')
+    if source == 'custom' and not filename:
+        raise ValueError('自定义模特图片信息异常，请重新上传或重新选择后再试')
+
+    return {
+        'source': source,
+        'id': model_id,
+        'name': model_name,
+        'gender': gender,
+        'age': age,
+        'ethnicity': ethnicity,
+        'body_type': body_type,
+        'appearance_details': appearance_details,
+        'summary': summary,
+        'detail_text': detail_text,
+        'payload': selected_payload,
+        'debug': {
+            'source': source,
+            'id': model_id,
+            'name': model_name,
+            'filename': filename,
+            'mime_type': str(selected_payload.get('mime_type') or '').strip(),
+            'byte_size': len(selected_payload.get('bytes') or b''),
+            'gender': gender,
+            'age': age,
+            'ethnicity': ethnicity,
+            'body_type': body_type,
+        },
+    }
+
+
+def build_fashion_selected_model_identity_text(selected_model: dict):
+    model_name = str((selected_model or {}).get('name') or '').strip()
+    gender = str((selected_model or {}).get('gender') or '').strip()
+    age = str((selected_model or {}).get('age') or '').strip()
+    ethnicity = str((selected_model or {}).get('ethnicity') or '').strip()
+    body_type = str((selected_model or {}).get('body_type') or '').strip()
+    appearance_details = str((selected_model or {}).get('appearance_details') or '').strip()
+    summary = str((selected_model or {}).get('summary') or '').strip()
+    detail_text = str((selected_model or {}).get('detail_text') or '').strip()
+
+    identity_parts = [value for value in [gender, age, ethnicity, body_type] if value]
+    identity_summary = '、'.join(identity_parts) if identity_parts else '未提供'
+    appearance_summary = appearance_details or detail_text or summary or '未提供'
+    model_label = model_name or '当前已选模特'
+    return (
+        f'模特名称：{model_label}\n'
+        f'模特身份标签：{identity_summary}\n'
+        f'模特外观补充：{appearance_summary}'
+    )
+
+
+def build_fashion_generation_prompt(platform: str, selling_text: str, country: str, text_type: str, image_size_ratio: str, selected_style, selected_model: dict, scene_plan: dict, selected_group: dict, selected_pose: dict, shot_sizes, view_angles):
     shot_text = '、'.join(shot_sizes) if shot_sizes else '未指定'
     angle_text = '、'.join(view_angles) if view_angles else '未指定'
-    style_reference = build_style_reference_text(selected_style)
     scene_summary = str(scene_plan.get('summary', '')).strip() or '未提供'
     scene_prompt = str(scene_plan.get('scene_prompt', '')).strip() or ''
     group_prompt = str(selected_group.get('scene_prompt', '')).strip() or ''
     pose_prompt = str(selected_pose.get('scene_prompt', '')).strip() or ''
-
-    text_rule = '画面中不要生成任何标题、卖点文案或说明文字。' if (text_type or '中文') == '无文字' else f'若需要文字表达，使用{text_type or "中文"}组织极少量且自然的电商表达。'
+    selected_model_identity_text = build_fashion_selected_model_identity_text(selected_model)
 
     return (
-        f'请生成 1 张服饰穿戴图，严格围绕商品图与模特参考完成最终画面。\n\n'
-        f'目标平台：{platform}\n'
-        f'国家参考：{country or "中国"}\n'
-        f'说明文字种类：{text_type or "中文"}\n'
+        f'请生成 1 张服饰穿戴图。产品穿在模特身上，必须清晰可见真人模特完整上身展示该商品，不能只出衣服。\n\n'
         f'图片尺寸比例参考：{image_size_ratio or "1:1"}\n'
-        f'核心卖点：{selling_text or "（未填写）"}\n'
-        f'风格参考：\n{style_reference}\n\n'
+        f'当前已选模特身份锚点：\n{selected_model_identity_text}\n'
         f'场景规划摘要：{scene_summary}\n'
         f'整组场景提示：{scene_prompt or "未提供"}\n'
         f'已选场景组：{selected_group.get("title", "未命名场景组")}\n'
@@ -1710,17 +1803,21 @@ def build_fashion_generation_prompt(platform: str, selling_text: str, country: s
         f'镜头景别：{shot_text}\n'
         f'视角选择：{angle_text}\n\n'
         f'执行要求：\n'
-        f'1. 商品图用于严格锁定服饰主体，必须保持款式、颜色、材质、版型、图案与细节一致，不得替换商品本身。\n'
-        f'2. 模特参考图只用于锁定人物外观、体态、穿着承载对象与人物气质，不得改变商品主体。\n'
-        f'3. 画面必须体现已选场景组、姿态、镜头景别与视角信息，背景简洁，服务于服装展示。\n'
-        f'4. 优先输出适合电商服饰穿戴展示的完整成图，突出服装上身效果、版型、面料垂感与搭配氛围。\n'
-        f'5. {text_rule}\n'
-        f'6. 若卖点、场景氛围、生活方式表达与地区有关，优先参考国家信息。'
+        f'1. 严格使用提供的模特图作为最终出镜人物，保持同一张脸、发型、气质、肤感与身形特征；禁止换人、禁止变性别、禁止混入其他模特特征。\n'
+        f'2. 严格使用提供的商品图作为服饰主体，保持款式、颜色、结构、材质、版型、图案、logo 位置与细节一致；禁止替换商品本身。\n'
+        f'3. 商品图只负责锁定衣服，模特图只负责锁定穿着者，二者必须同时生效；不能只参考商品图，也不能只参考模特图。\n'
+        f'4. 最终人物必须与“当前已选模特身份锚点”一致；若场景、姿态、镜头与模特身份锚点冲突，必须优先服从模特身份锚点。\n'
+        f'5. 画面必须体现已选场景组、姿态、镜头景别与视角信息，背景简洁，服务于服装展示，不得让背景喧宾夺主。\n'
+        f'6. 必须输出适合电商展示的真人模特穿搭成图，禁止只生成衣服、禁止平铺挂拍、禁止无头模特、禁止把人物裁切到无法识别身份。\n'
+        f'7. 优先突出模特穿着商品后的上身效果、版型、面料垂感与真实穿搭氛围，让人一眼看出“这是当前已选模特穿着当前商品图中的同一件服饰”。\n'
+        f'8. 严禁生成任何新增可见文字元素：汉字、英文、数字、logo 文案、水印、字幕、角标、标签字样、吊牌字样、排版字、海报字、印刷覆盖字都不允许出现。\n'
+        f'9. 若商品本体原始设计中自带品牌标识、logo、印花文字或标签细节，只能按商品图原样保留，不得新增、篡改、放大、改写或替换成新的文字内容。\n'
+        f'10. 不要出现海报排版、广告字、背景标牌、店招、墙面文字、包装外额外字样、吊牌放大展示、字幕条、水印角标。'
     )
 
 
 
-def build_fashion_generation_prompts(platform: str, selling_text: str, country: str, text_type: str, image_size_ratio: str, selected_style, scene_plan: dict, selections, pose_camera_settings):
+def build_fashion_generation_prompts(platform: str, selling_text: str, country: str, text_type: str, image_size_ratio: str, selected_style, selected_model: dict, scene_plan: dict, selections, pose_camera_settings):
     if not selections:
         raise ValueError('请至少选择 1 个场景')
 
@@ -1749,6 +1846,7 @@ def build_fashion_generation_prompts(platform: str, selling_text: str, country: 
                     text_type,
                     image_size_ratio,
                     selected_style,
+                    selected_model,
                     scene_plan,
                     selection['group'],
                     selection['pose'],
@@ -1758,6 +1856,92 @@ def build_fashion_generation_prompts(platform: str, selling_text: str, country: 
             }
         )
     return prompts
+
+
+
+def parse_fashion_output_verification(text: str):
+    cleaned = strip_code_fences(text)
+    try:
+        payload = json.loads(cleaned)
+    except json.JSONDecodeError as exc:
+        raise ValueError(f'服饰成图质检结果格式异常：{exc}') from exc
+
+    if not isinstance(payload, dict):
+        raise ValueError('服饰成图质检结果格式异常：返回值必须为对象')
+
+    failed_checks = payload.get('failed_checks')
+    if not isinstance(failed_checks, list):
+        failed_checks = []
+    normalized_failed_checks = []
+    allowed_failed_checks = {'model_present', 'same_model_identity', 'wearing_product', 'extra_text_present'}
+    for item in failed_checks:
+        value = str(item or '').strip()
+        if value in allowed_failed_checks and value not in normalized_failed_checks:
+            normalized_failed_checks.append(value)
+
+    reason = str(payload.get('reason', '')).strip()
+    if not reason:
+        raise ValueError('服饰成图质检结果格式异常：reason 不能为空')
+
+    try:
+        score = int(payload.get('score', 0))
+    except (TypeError, ValueError):
+        raise ValueError('服饰成图质检结果格式异常：score 必须为整数') from None
+    score = max(0, min(score, 100))
+
+    result = {
+        'model_present': bool(payload.get('model_present')),
+        'same_model_identity': bool(payload.get('same_model_identity')),
+        'wearing_product': bool(payload.get('wearing_product')),
+        'extra_text_present': bool(payload.get('extra_text_present')),
+        'passed': bool(payload.get('passed')),
+        'score': score,
+        'failed_checks': normalized_failed_checks,
+        'reason': reason,
+    }
+
+    expected_passed = (
+        result['model_present']
+        and result['same_model_identity']
+        and result['wearing_product']
+        and not result['extra_text_present']
+    )
+    result['passed'] = expected_passed
+
+    if expected_passed:
+        result['failed_checks'] = []
+    else:
+        computed_failed_checks = []
+        if not result['model_present']:
+            computed_failed_checks.append('model_present')
+        if not result['same_model_identity']:
+            computed_failed_checks.append('same_model_identity')
+        if not result['wearing_product']:
+            computed_failed_checks.append('wearing_product')
+        if result['extra_text_present']:
+            computed_failed_checks.append('extra_text_present')
+        result['failed_checks'] = computed_failed_checks
+
+    return result
+
+
+
+def verify_fashion_generated_output(generated_payload: dict, selected_model_payload: dict, product_payloads):
+    if not generated_payload:
+        raise ValueError('缺少待质检的服饰生成结果')
+    if not selected_model_payload:
+        raise ValueError('缺少模特参考图，无法执行服饰成图质检')
+    if not product_payloads:
+        raise ValueError('缺少商品图，无法执行服饰成图质检')
+
+    verification_payloads = [generated_payload, selected_model_payload, product_payloads[0]]
+    response_text = call_chat_completion(
+        FASHION_OUTPUT_VERIFIER_SYSTEM_PROMPT,
+        build_multimodal_content(FASHION_OUTPUT_VERIFIER_USER_PROMPT_TEMPLATE, verification_payloads),
+        temperature=0,
+        timeout_seconds=90,
+    )
+    return parse_fashion_output_verification(response_text)
 
 
 
@@ -1946,13 +2130,17 @@ def pick_image_data_entry(data):
 
 def decode_generated_image(item: dict):
     if item.get('b64_json'):
-        return base64.b64decode(item['b64_json']), 'image/png'
+        image_bytes = base64.b64decode(item['b64_json'])
+        detected_mime_type = sniff_image_mime_type(image_bytes)
+        return image_bytes, detected_mime_type or 'image/png'
 
     if item.get('url'):
         response = requests.get(item['url'], timeout=120)
         response.raise_for_status()
-        mime_type = response.headers.get('Content-Type', 'image/png').split(';', 1)[0].strip()
-        return response.content, mime_type
+        image_bytes = response.content
+        header_mime_type = response.headers.get('Content-Type', 'image/png').split(';', 1)[0].strip()
+        detected_mime_type = sniff_image_mime_type(image_bytes)
+        return image_bytes, detected_mime_type or header_mime_type or 'image/png'
 
     raise ValueError('图像生成接口未返回可用图片内容')
 
@@ -2123,6 +2311,13 @@ def call_image_generation(client: OpenAI, prompt: str, image_payloads, image_siz
         type_specific_rules = (
             '- 当前图类型：使用场景图。必须表现商品正在被真实使用，而不是静态拿着展示；优先采用操作中、接触中、桌面使用中、收纳取用中等动态关系。\n'
             '- 这张图禁止复用首屏主视觉图或核心卖点图的站位、朝向、裁切、商品位置与版式骨架，人物姿势、商品相对位置、镜头距离必须明显不同。\n'
+        )
+    elif image_type == 'fashion-look':
+        type_specific_rules = (
+            '- 当前图类型：服饰穿搭图。最终画面必须是“清晰可见的真人模特穿着商品”的完整穿搭成图；禁止只出衣服、禁止平铺挂拍、禁止无头模特、禁止裁切到看不出人物身份、禁止把商品单独陈列当成最终结果。\n'
+            '- 若同时提供商品图与模特参考图，必须优先使用商品图锁定服饰主体，使用模特参考图锁定最终出镜人物身份、脸部、发型、肤感、体态比例与整体气质；禁止替换为其他人物，禁止混入其他模特特征。\n'
+            '- 该图是服饰最终成图，不允许生成任何新增可见文字元素：标题、卖点文案、说明字、logo 文案、水印、字幕、角标、标签字样、吊牌字样、排版字、海报字都禁止出现。\n'
+            '- 若商品本体原始设计自带品牌标识、logo、印花文字或标签细节，只能按商品图原样保留，不得新增、改写、放大或替换。\n'
         )
     enriched_prompt = (
         f'{prompt}\n\n'
@@ -2518,30 +2713,55 @@ def generate_suite():
 
         if mode == 'fashion':
             fashion_action = (request.form.get('fashion_action', 'generate') or 'generate').strip() or 'generate'
-            planning_payloads = image_payloads + fashion_reference_payloads
+            fashion_platform = FASHION_DEFAULT_PLATFORM
+            fashion_selling_text = FASHION_DEFAULT_SELLING_TEXT
+            fashion_country = FASHION_DEFAULT_COUNTRY
+            fashion_text_type = FASHION_DEFAULT_TEXT_TYPE
+            fashion_selected_style = FASHION_DEFAULT_SELECTED_STYLE
+            if fashion_action == 'scene_plan':
+                selected_model = parse_fashion_selected_model_payload(request.form)
+                planning_payloads = image_payloads + [selected_model['payload']]
+            else:
+                selected_model = None
+                planning_payloads = image_payloads
             if not planning_payloads:
                 return jsonify({'success': False, 'error': '请至少上传商品图或模特参考图'}), 400
 
             if fashion_action == 'scene_plan':
                 scene_plan = build_fashion_scene_plan(
-                    platform,
-                    selling_text,
+                    fashion_platform,
+                    fashion_selling_text,
                     planning_payloads,
-                    country,
-                    text_type,
+                    fashion_country,
+                    fashion_text_type,
                     image_size_ratio,
-                    selected_style,
+                    fashion_selected_style,
                 )
+                fashion_debug = {
+                    'selected_model': selected_model.get('debug'),
+                    'product_image_count': len(image_payloads),
+                    'generation_payload_order': ['images'] * len(image_payloads) + ['fashion_selected_model_image'],
+                }
                 return jsonify(
                     {
                         'success': True,
                         'mode': 'fashion',
                         'fashion_action': 'scene_plan',
                         'plan': scene_plan,
-                        'selected_style': selected_style,
+                        'selected_style': fashion_selected_style,
+                        'fashion_debug': fashion_debug,
+                        'fashion_selection': {
+                            'selected_model': {
+                                'source': selected_model['source'],
+                                'id': selected_model['id'],
+                                'name': selected_model['name'],
+                            },
+                        },
                     }
                 )
 
+            selected_model = parse_fashion_selected_model_payload(request.form)
+            selected_model_payload = selected_model['payload']
             scene_plan = parse_fashion_scene_plan_payload(request.form.get('fashion_scene_plan', ''))
             scene_group_ids = parse_json_string_list(request.form.get('fashion_scene_group_ids', ''), '场景')
             pose_ids = parse_json_string_list(request.form.get('fashion_pose_ids', ''), '姿态')
@@ -2552,31 +2772,38 @@ def generate_suite():
                 selections,
             )
             prompt_entries = build_fashion_generation_prompts(
-                platform,
-                selling_text,
-                country,
-                text_type,
+                fashion_platform,
+                fashion_selling_text,
+                fashion_country,
+                fashion_text_type,
                 image_size_ratio,
-                selected_style,
+                fashion_selected_style,
+                selected_model,
                 scene_plan,
                 selections,
                 pose_camera_settings,
             )
 
             task_id = uuid.uuid4().hex
-            task_name = build_task_name(platform, 'fashion', len(prompt_entries))
+            task_name = build_task_name(fashion_platform, 'fashion', len(prompt_entries))
             generated_at = build_generated_at()
             reference_images = build_reference_images(task_id, image_payloads, source='product')
-            if fashion_reference_payloads:
-                reference_images.extend(
-                    build_reference_images(
-                        task_id,
-                        fashion_reference_payloads,
-                        source='fashion_reference',
-                        start_sort=len(reference_images) + 1,
-                    )
+            reference_images.extend(
+                build_reference_images(
+                    task_id,
+                    [selected_model_payload],
+                    source='fashion_reference',
+                    start_sort=len(reference_images) + 1,
                 )
+            )
 
+            fashion_generation_payloads = image_payloads + [selected_model_payload]
+            fashion_debug = {
+                'selected_model': selected_model.get('debug'),
+                'product_image_count': len(image_payloads),
+                'generation_payload_order': ['images'] * len(image_payloads) + ['fashion_selected_model_image'],
+            }
+            max_verify_attempts = max(1, get_optional_int_env('FASHION_OUTPUT_MAX_VERIFY_ATTEMPTS', FASHION_OUTPUT_MAX_VERIFY_ATTEMPTS))
             images = []
             failed_prompt_entries = []
             for index, prompt_entry in enumerate(prompt_entries, start=1):
@@ -2588,34 +2815,76 @@ def generate_suite():
                     prompt_entry.get('shot_size', ''),
                     prompt_entry.get('view_angle', ''),
                 )
-                generated_items = call_image_generation(
-                    get_ark_client(),
-                    prompt_entry['prompt'],
-                    planning_payloads,
-                    image_size_ratio,
-                    text_type,
-                    country,
-                    product_json,
-                    'fashion-look',
-                    max_images=1,
-                )
-                generated_count = len(generated_items) if isinstance(generated_items, list) else 0
-                app.logger.warning(
-                    'Fashion image generation result: index=%s total=%s generated_count=%s title=%s',
-                    index,
-                    len(prompt_entries),
-                    generated_count,
-                    prompt_entry['pose'].get('title') or f'服饰穿搭图 {index}',
-                )
-                if not generated_items:
+                verification = None
+                generated_items = []
+                image_bytes = None
+                mime_type = 'image/png'
+                for attempt in range(1, max_verify_attempts + 1):
+                    generated_items = call_image_generation(
+                        get_ark_client(),
+                        prompt_entry['prompt'],
+                        fashion_generation_payloads,
+                        image_size_ratio,
+                        '无文字',
+                        fashion_country,
+                        product_json,
+                        'fashion-look',
+                        max_images=1,
+                    )
+                    generated_count = len(generated_items) if isinstance(generated_items, list) else 0
+                    app.logger.warning(
+                        'Fashion image generation result: index=%s total=%s attempt=%s generated_count=%s title=%s',
+                        index,
+                        len(prompt_entries),
+                        attempt,
+                        generated_count,
+                        prompt_entry['pose'].get('title') or f'服饰穿搭图 {index}',
+                    )
+                    if not generated_items:
+                        continue
+                    image_bytes, mime_type = decode_generated_image(generated_items[0])
+                    generated_payload = {
+                        'filename': f'fashion-look-{index:02d}.png',
+                        'mime_type': mime_type,
+                        'bytes': image_bytes,
+                        'base64': base64.b64encode(image_bytes).decode('utf-8'),
+                        'data_url': f'data:{mime_type};base64,{base64.b64encode(image_bytes).decode("utf-8")}',
+                    }
+                    verification = verify_fashion_generated_output(
+                        generated_payload,
+                        selected_model_payload,
+                        image_payloads,
+                    )
+                    app.logger.warning(
+                        'Fashion output verification: index=%s attempt=%s passed=%s score=%s failed_checks=%s reason=%s',
+                        index,
+                        attempt,
+                        verification.get('passed'),
+                        verification.get('score'),
+                        ','.join(verification.get('failed_checks') or []),
+                        verification.get('reason', ''),
+                    )
+                    if verification.get('passed'):
+                        break
+                if not generated_items or image_bytes is None:
                     failed_prompt_entries.append(
                         {
                             'index': index,
                             'title': prompt_entry['pose'].get('title') or f'服饰穿搭图 {index}',
+                            'reason': '生成结果为空',
                         }
                     )
                     continue
-                image_bytes, mime_type = decode_generated_image(generated_items[0])
+                if not verification or not verification.get('passed'):
+                    failed_prompt_entries.append(
+                        {
+                            'index': index,
+                            'title': prompt_entry['pose'].get('title') or f'服饰穿搭图 {index}',
+                            'reason': (verification or {}).get('reason', '质检未通过'),
+                            'failed_checks': (verification or {}).get('failed_checks', []),
+                        }
+                    )
+                    continue
                 download_name, relative_path, image_url = save_generated_image(task_id, index, 'fashion-look', image_bytes, mime_type)
                 images.append(
                     {
@@ -2629,13 +2898,18 @@ def generate_suite():
                         'image_url': image_url,
                         'image_path': relative_path,
                         'download_name': download_name,
+                        'verification': verification,
                     }
                 )
 
             if not images:
                 failure_titles = '、'.join(item['title'] for item in failed_prompt_entries[:3])
+                failure_reason = '；'.join(
+                    item['reason'] for item in failed_prompt_entries[:2] if str(item.get('reason') or '').strip()
+                )
                 failure_hint = f'（失败场景：{failure_titles}）' if failure_titles else ''
-                raise RuntimeError(f'生成结果数量不足，请稍后重试{failure_hint}')
+                failure_reason_hint = f'：{failure_reason}' if failure_reason else ''
+                raise RuntimeError(f'生成结果未通过模特/文字质检，请稍后重试{failure_hint}{failure_reason_hint}')
 
             return jsonify(
                 {
@@ -2645,11 +2919,20 @@ def generate_suite():
                     'task_id': task_id,
                     'task_name': task_name,
                     'generated_at': generated_at,
-                    'plan': scene_plan,
-                    'selected_style': selected_style,
+                    'selected_style': fashion_selected_style,
+                    'fashion_debug': fashion_debug,
                     'reference_images': reference_images,
                     'images': images,
                     'fashion_selection': {
+                        'selected_model': {
+                            'source': selected_model['source'],
+                            'id': selected_model['id'],
+                            'name': selected_model['name'],
+                            'gender': selected_model.get('gender', ''),
+                            'age': selected_model.get('age', ''),
+                            'ethnicity': selected_model.get('ethnicity', ''),
+                            'body_type': selected_model.get('body_type', ''),
+                        },
                         'scene_group_ids': scene_group_ids,
                         'pose_ids': pose_ids,
                         'pose_camera_settings': pose_camera_settings,

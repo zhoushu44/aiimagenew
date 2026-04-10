@@ -220,13 +220,13 @@ document.addEventListener('DOMContentLoaded', () => {
         generateBtnLabel: '一键生成服饰穿戴图',
         planLoadingLabel: '正在分析服饰穿搭方案',
         imageLoadingLabel: '正在生成服饰穿戴图，请稍候',
-        initialResultMeta: '系统将根据服饰商品图、平台策略、卖点与风格参考生成服饰穿戴结果。',
+        initialResultMeta: '系统将根据服饰商品图、已选模特与场景设置生成服饰穿戴结果。',
         initialTaskSummary: '统一输出为适合服装展示、筛选下载与继续排版的结果结构。',
         resultFallback: '已生成服饰穿戴结果',
         itemFallback: '已生成该服饰展示结果。',
         successFallback: '已完成 {count} 张服饰结果生成',
         errorFallback: '服饰穿戴生成失败，请稍后重试',
-        selectedPrefix: '正在分析服饰穿搭方案，并吸收「{style}」风格参考，请稍候…',
+        selectedPrefix: '正在分析已选场景并生成服饰穿搭方案，请稍候…',
         defaultPrefix: '正在分析服饰穿搭方案，请稍候…',
         imageProgress: '正在生成服饰穿戴图，请稍候…',
         outputStatLabel: '输出张数',
@@ -297,7 +297,12 @@ document.addEventListener('DOMContentLoaded', () => {
     const getPlatformLabel = () => platformSelect?.value || '亚马逊';
     const getCountryReference = () => countrySelect?.value || '中国';
     const getTextType = () => textTypeSelect?.value || '中文';
-    const getImageSizeRatio = () => imageSizeSelect?.value || '1:1';
+    const getImageSizeRatio = () => {
+      if (isFashionPage) {
+        return document.querySelector('input[name="outputSpec"]:checked')?.value || '3:4';
+      }
+      return imageSizeSelect?.value || '1:1';
+    };
 
     const getStyleLoadingLabel = () => platformLoadingLabels[getPlatformLabel()] || `正在分析 ${getPlatformLabel()} 趋势`;
 
@@ -909,6 +914,129 @@ document.addEventListener('DOMContentLoaded', () => {
       return syncFashionState({ fashionFlowStep: step === 'scene' || step === 'result' ? step : 'model' });
     };
 
+    const resolveFashionSelectedModel = (fashionState) => {
+      if (!fashionState || typeof fashionState !== 'object') {
+        return null;
+      }
+      const selectedSource = fashionState.fashionSelectedModelSource === 'custom'
+        ? 'custom'
+        : fashionState.fashionSelectedModelSource === 'ai'
+          ? 'ai'
+          : '';
+      const selectedId = typeof fashionState.fashionSelectedModelId === 'string'
+        ? fashionState.fashionSelectedModelId.trim()
+        : '';
+      if (!selectedSource || !selectedId) {
+        return null;
+      }
+      const selectedModel = selectedSource === 'ai'
+        ? (fashionState.fashionGeneratedModel && fashionState.fashionGeneratedModel.id === selectedId
+          ? fashionState.fashionGeneratedModel
+          : null)
+        : (Array.isArray(fashionState.fashionCustomModels)
+          ? fashionState.fashionCustomModels.find((model) => model && model.id === selectedId)
+          : null);
+      if (!selectedModel) {
+        return null;
+      }
+      return {
+        source: selectedSource,
+        id: selectedId,
+        model: selectedModel,
+      };
+    };
+
+    const resolveFashionSelectedModelFile = async (selectedModel) => {
+      if (!selectedModel || typeof selectedModel !== 'object') {
+        return null;
+      }
+      const imageUrl = typeof selectedModel.imageUrl === 'string' ? selectedModel.imageUrl.trim() : '';
+      const previewUrl = typeof selectedModel.previewUrl === 'string' ? selectedModel.previewUrl.trim() : '';
+      const candidateDataUrl = imageUrl.startsWith('data:') ? imageUrl : previewUrl.startsWith('data:') ? previewUrl : '';
+      const extensionFromMime = (mimeType = '') => {
+        const normalizedMimeType = String(mimeType || '').trim().toLowerCase();
+        if (normalizedMimeType === 'image/jpeg') {
+          return 'jpg';
+        }
+        if (normalizedMimeType === 'image/svg+xml') {
+          return 'svg';
+        }
+        return normalizedMimeType.split('/')[1] || 'png';
+      };
+      const safeNameFromMime = (mimeType = 'image/png') => {
+        const normalizedExtension = extensionFromMime(mimeType);
+        const rawDownloadName = typeof selectedModel.downloadName === 'string' ? selectedModel.downloadName.trim() : '';
+        if (rawDownloadName) {
+          const lastDotIndex = rawDownloadName.lastIndexOf('.');
+          const baseName = lastDotIndex > 0 ? rawDownloadName.slice(0, lastDotIndex) : rawDownloadName;
+          return `${baseName || selectedModel.id || 'fashion-model'}.${normalizedExtension}`;
+        }
+        return `${selectedModel.id || 'fashion-model'}.${normalizedExtension}`;
+      };
+
+      if (candidateDataUrl) {
+        try {
+          const match = candidateDataUrl.match(/^data:([^;,]+)?(;base64)?,(.*)$/);
+          if (!match) {
+            return null;
+          }
+          const mimeType = match[1] || 'image/png';
+          const isBase64 = Boolean(match[2]);
+          const rawContent = match[3] || '';
+          const byteString = isBase64 ? atob(rawContent) : decodeURIComponent(rawContent);
+          const bytes = new Uint8Array(byteString.length);
+          for (let index = 0; index < byteString.length; index += 1) {
+            bytes[index] = byteString.charCodeAt(index);
+          }
+          return new File([bytes], safeNameFromMime(mimeType), { type: mimeType });
+        } catch (error) {
+          console.error('Failed to rebuild selected fashion model file from data URL:', error);
+        }
+      }
+
+      const candidateRemoteUrl = imageUrl || previewUrl;
+      if (!candidateRemoteUrl) {
+        return null;
+      }
+
+      try {
+        const response = await fetch(candidateRemoteUrl);
+        if (!response.ok) {
+          return null;
+        }
+        const blob = await response.blob();
+        const mimeType = blob.type || 'image/png';
+        return new File([blob], safeNameFromMime(mimeType), { type: mimeType });
+      } catch (error) {
+        console.error('Failed to fetch selected fashion model file:', error);
+        return null;
+      }
+    };
+
+    const appendFashionSelectedModelToFormData = async (formData, fashionState, missingImageMessage = '当前已选模特图片缺失，请重新选择或重新上传后再继续') => {
+      const selectedFashionModel = resolveFashionSelectedModel(fashionState);
+      if (!selectedFashionModel) {
+        throw new Error('当前已选模特不存在，请重新选择后再继续');
+      }
+      const selectedFashionModelFile = await resolveFashionSelectedModelFile(selectedFashionModel.model);
+      if (!selectedFashionModelFile) {
+        throw new Error(missingImageMessage);
+      }
+      const selectedModel = selectedFashionModel.model || {};
+      formData.append('fashion_selected_model_source', selectedFashionModel.source);
+      formData.append('fashion_selected_model_id', selectedFashionModel.id);
+      formData.append('fashion_selected_model_name', selectedModel.name || '');
+      formData.append('fashion_selected_model_gender', selectedModel.gender || '');
+      formData.append('fashion_selected_model_age', selectedModel.age || '');
+      formData.append('fashion_selected_model_ethnicity', selectedModel.ethnicity || '');
+      formData.append('fashion_selected_model_body_type', selectedModel.bodyType || '');
+      formData.append('fashion_selected_model_appearance_details', selectedModel.appearanceDetails || '');
+      formData.append('fashion_selected_model_summary', selectedModel.summary || '');
+      formData.append('fashion_selected_model_detail_text', selectedModel.detailText || '');
+      formData.append('fashion_selected_model_image', selectedFashionModelFile);
+      return selectedFashionModel;
+    };
+
     const buildBaseGenerateFormData = () => {
       const formData = new FormData();
       const selectedStyle = getSelectedStyle();
@@ -937,7 +1065,17 @@ document.addEventListener('DOMContentLoaded', () => {
       return { formData, selectedStyle };
     };
 
-    const fetchJsonWithTimeout = async (url, options = {}, timeoutMs = 70000) => {
+    const buildFashionGenerateFormData = () => {
+      const formData = new FormData();
+      formData.append('mode', 'fashion');
+      formData.append('image_size_ratio', getImageSizeRatio());
+      appendFilesToFormData(formData, 'images', getProductFiles(), 5);
+      return formData;
+    };
+
+    const FASHION_SCENE_PLAN_REQUEST_TIMEOUT_MS = 125000;
+
+    const fetchJsonWithTimeout = async (url, options = {}, timeoutMs = 70000, timeoutMessage = '推荐场景生成超时，请稍后重试') => {
       const controller = typeof AbortController === 'function' ? new AbortController() : null;
       const timeoutId = controller
         ? window.setTimeout(() => controller.abort(), timeoutMs)
@@ -962,7 +1100,7 @@ document.addEventListener('DOMContentLoaded', () => {
         return { response, result };
       } catch (error) {
         if (error?.name === 'AbortError') {
-          throw new Error('推荐场景生成超时，请稍后重试');
+          throw new Error(timeoutMessage);
         }
         throw error;
       } finally {
@@ -973,9 +1111,12 @@ document.addEventListener('DOMContentLoaded', () => {
     };
 
     const requestFashionScenePlan = async () => {
-      const currentFashionState = getFashionSelectionState();
+      const fashionApi = getFashionWorkspaceApi();
+      const fashionState = fashionApi?.getState ? fashionApi.getState() : null;
+      const currentFashionState = fashionState?.cta || getFashionSelectionState();
       applyFashionGenerateButtonState(currentFashionState);
       if (!currentFashionState.hasSelectedModel) {
+        setResultStatus('请先选择模特后再生成推荐场景。', 'error');
         return;
       }
 
@@ -994,12 +1135,17 @@ document.addEventListener('DOMContentLoaded', () => {
       setResultStatus('正在生成推荐场景...', '');
 
       try {
-        const { formData } = buildBaseGenerateFormData();
+        const formData = buildFashionGenerateFormData();
+        await appendFashionSelectedModelToFormData(
+          formData,
+          fashionState,
+          '当前已选模特图片缺失，请重新选择或重新上传后再生成推荐场景',
+        );
         formData.append('fashion_action', 'scene_plan');
         const { response, result } = await fetchJsonWithTimeout('/api/generate-suite', {
           method: 'POST',
           body: formData,
-        });
+        }, FASHION_SCENE_PLAN_REQUEST_TIMEOUT_MS, '推荐场景生成等待超时，请稍后重试');
         const scenePlan = result?.plan || null;
         const sceneGroups = Array.isArray(scenePlan?.scene_groups) ? scenePlan.scene_groups : [];
 
@@ -1098,7 +1244,8 @@ document.addEventListener('DOMContentLoaded', () => {
       }
 
       const config = getCurrentModeConfig();
-      const { formData, selectedStyle } = buildBaseGenerateFormData();
+      const formData = buildFashionGenerateFormData();
+      await appendFashionSelectedModelToFormData(formData, normalizedFashionState, '当前已选模特图片缺失，请重新选择或重新上传后再生成');
       formData.append('fashion_action', 'generate');
       formData.append('fashion_scene_plan', JSON.stringify(normalizedFashionState?.fashionScenePlanRaw || {}));
       formData.append('fashion_scene_group_ids', JSON.stringify(normalizedSelectedEntries.map((entry) => entry.group.id)));
@@ -1116,13 +1263,11 @@ document.addEventListener('DOMContentLoaded', () => {
       resetResultStatus();
       resetResultState();
       if (resultMeta) {
-        resultMeta.textContent = selectedStyle?.title
-          ? config.selectedPrefix.replace('{style}', selectedStyle.title)
-          : config.initialResultMeta;
+        resultMeta.textContent = config.initialResultMeta;
       }
       generateBtn.disabled = true;
       updateGenerateButtonLabel(config.planLoadingLabel);
-      setResultStatus(selectedStyle?.title ? config.selectedPrefix.replace('{style}', selectedStyle.title) : config.defaultPrefix);
+      setResultStatus(config.defaultPrefix);
       renderLoadingResultCards(fashionCta.selectedSceneCount || getCurrentOutputMetric() || 1);
       showResultView();
       syncFashionState({ fashionFlowStep: 'result' });
@@ -1153,14 +1298,14 @@ document.addEventListener('DOMContentLoaded', () => {
         selectedResultKeys = new Set();
         updateTaskSummary(result);
         renderResultCards(currentResultItems);
-        setResultStatus(result.plan?.summary || config.successFallback.replace('{count}', String(getCurrentOutputMetric(result))), 'success');
+        setResultStatus(config.successFallback.replace('{count}', String(getCurrentOutputMetric(result))), 'success');
         syncFashionState({ fashionFlowStep: 'result' });
         saveStateToLocalStorage();
       } catch (error) {
         resetResultState();
         syncFashionState({ fashionFlowStep: 'scene' });
         if (resultMeta) {
-          resultMeta.textContent = '生成失败后可修改卖点、平台或素材后重试。';
+          resultMeta.textContent = '生成失败后可修改商品图、模特或场景设置后重试。';
         }
         setResultStatus(error.message || config.errorFallback, 'error');
         persistState();
@@ -1437,10 +1582,11 @@ document.addEventListener('DOMContentLoaded', () => {
     };
 
     const updateTaskSummary = (result) => {
-      const selectedStyleMeta = buildSelectedStyleMeta(result.selected_style);
+      const isFashion = (result.mode || currentMode) === 'fashion';
+      const selectedStyleMeta = isFashion ? '' : buildSelectedStyleMeta(result.selected_style);
       taskSummaryLine.textContent = selectedStyleMeta
         ? `${result.plan?.summary || '已生成可管理的任务结果。'} · ${selectedStyleMeta}`
-        : (result.plan?.summary || '已生成可管理的任务结果。');
+        : (isFashion ? '已生成服饰穿戴结果。' : (result.plan?.summary || '已生成可管理的任务结果。'));
       resultMeta.textContent = buildResultMeta(result);
       updateSelectionSummary();
       persistState();
@@ -2164,6 +2310,7 @@ document.addEventListener('DOMContentLoaded', () => {
           const fashionState = getFashionSelectionState();
           applyFashionGenerateButtonState(fashionState);
           if (!fashionState.hasSelectedModel) {
+            setResultStatus('请先选择模特后再继续。', 'error');
             return;
           }
           if (fashionState.action === 'scene_plan' || fashionState.step !== 'scene') {
