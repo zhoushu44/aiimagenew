@@ -3,6 +3,7 @@
 
 # Claude / local tooling
 .claude/
+.playwright-mcp/
 
 # Python cache and local envs
 __pycache__/
@@ -14,6 +15,17 @@ venv/
 
 # Generated outputs
 generated-suites/
+
+# Debug logs and local snapshots
+*.log
+aplus-*.yml
+fashion-*.json
+fashion-*.yml
+suite-snapshot.yml
+browser-console-verify.log
+aplus-compact-check.png
+fashion_browser_debug.png
+1.png
 
 # OS / editor temp files
 .DS_Store

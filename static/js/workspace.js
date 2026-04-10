@@ -316,7 +316,6 @@ document.addEventListener('DOMContentLoaded', () => {
     };
 
     const getCurrentModeConfig = () => modeConfig[currentMode] || modeConfig.suite;
-    const modePlanLabelMap = { suite: '套图', aplus: 'A+ 模块', fashion: '服饰穿搭图' };
     const normalizeFashionSceneGroups = (groups) => {
       if (!Array.isArray(groups)) {
         return [];
@@ -415,22 +414,6 @@ document.addEventListener('DOMContentLoaded', () => {
         const rawState = JSON.parse(localStorage.getItem(STORAGE_KEY) || '{}');
         const sceneGroups = normalizeFashionSceneGroups(rawState.fashionSceneGroups);
         const validPoseIds = new Set(sceneGroups.flatMap((group) => group.poses.map((pose) => pose.id)));
-        const rawPoseCameraSettings = rawState.fashionPoseCameraSettings && typeof rawState.fashionPoseCameraSettings === 'object'
-          ? Object.entries(rawState.fashionPoseCameraSettings).reduce((acc, [poseId, setting]) => {
-              const normalizedPoseId = String(poseId || '').trim();
-              if (!normalizedPoseId || !validPoseIds.has(normalizedPoseId) || !setting || typeof setting !== 'object') {
-                return acc;
-              }
-              acc[normalizedPoseId] = setting;
-              return acc;
-            }, {})
-          : {};
-        const poseCameraSettings = sceneGroups.reduce((acc, group) => {
-          group.poses.forEach((pose) => {
-            acc[pose.id] = buildFashionPoseCameraSetting(group, pose, rawPoseCameraSettings[pose.id]);
-          });
-          return acc;
-        }, {});
         const selectedSource = rawState.fashionSelectedModelSource === 'custom'
           ? 'custom'
           : rawState.fashionSelectedModelSource === 'ai'
@@ -1290,7 +1273,9 @@ document.addEventListener('DOMContentLoaded', () => {
         const result = await response.json();
 
         if (!response.ok || !result.success || !Array.isArray(result.images)) {
-          throw new Error(result.error || config.errorFallback);
+          const detailMessage = typeof result.details === 'string' ? result.details.trim() : '';
+          const baseMessage = result.error || config.errorFallback;
+          throw new Error(detailMessage ? `${baseMessage}｜${detailMessage}` : baseMessage);
         }
 
         currentResult = result;
