@@ -757,74 +757,37 @@ def create_chat_completion_session():
     return session
 
 
-def call_chat_completion(system_prompt: str, user_content, temperature: float = 0.7):
-    api_key = get_env('OPENAI_API_KEY')
-    base_url = get_env('OPENAI_BASE_URL').rstrip('/')
+def call_chat_completion(system_prompt: str, user_content, temperature: float = 0.7, timeout_seconds: int = 60):
+    client = OpenAI(
+        api_key=get_env('OPENAI_API_KEY'),
+        base_url=get_env('OPENAI_BASE_URL').rstrip('/'),
+    )
     model = get_env('OPENAI_MODEL')
 
-    payload = {
-        'model': model,
-        'messages': [
+    response = client.chat.completions.create(
+        model=model,
+        messages=[
             {'role': 'system', 'content': system_prompt},
             {'role': 'user', 'content': user_content},
         ],
-        'temperature': temperature,
-    }
+        temperature=temperature,
+        timeout=timeout_seconds,
+    )
 
     try:
-        with create_chat_completion_session() as session:
-            response = session.post(
-                f'{base_url}/chat/completions',
-                headers={
-                    'Authorization': f'Bearer {api_key}',
-                    'Content-Type': 'application/json',
-                },
-                json=payload,
-                timeout=60,
-            )
-    except requests.exceptions.SSLError as exc:
-        app.logger.exception('Chat completion SSL failure: base_url=%s model=%s', base_url, model)
-        raise RuntimeError(
-            json.dumps(
-                {
-                    'error': '模型接口 SSL 连接异常，请稍后重试',
-                    'details': str(exc),
-                },
-                ensure_ascii=False,
-            )
-        ) from exc
-    except requests.RequestException as exc:
-        app.logger.exception('Chat completion request failure: base_url=%s model=%s', base_url, model)
-        raise
-    raw_response_text = response.text
+        raw_response_text = response.model_dump_json(indent=2)
+    except Exception:
+        raw_response_text = str(response)
     app.logger.warning(
-        'Chat completion response: base_url=%s model=%s status=%s body=%s',
-        base_url,
+        'Chat completion response: model=%s body=%s',
         model,
-        response.status_code,
         raw_response_text,
     )
 
-    if response.status_code >= 400:
-        try:
-            error_payload = response.json()
-        except ValueError:
-            error_payload = raw_response_text.strip()
-        raise RuntimeError(
-            json.dumps(
-                {
-                    'error': f'模型接口调用失败（HTTP {response.status_code}）',
-                    'details': error_payload,
-                },
-                ensure_ascii=False,
-            )
-        )
-
-    data = response.json()
-    message = ((data.get('choices') or [{}])[0].get('message') or {})
-    text = message.get('content', '')
+    message = ((getattr(response, 'choices', None) or [None])[0] or {}).message
+    text = getattr(message, 'content', '') if message else ''
     if isinstance(text, list):
-        text = ''.join(part.get('text', '') for part in text if isinstance(part, dict))
+        text = ''.join(part.text for part in text if getattr(part, 'text', None))
     elif text is None:
         text = ''
     text = str(text).strip() if text else ''
@@ -832,9 +795,9 @@ def call_chat_completion(system_prompt: str, user_content, temperature: float = 
     if not text:
         fallback_fields = ['reasoning_content']
         for field in fallback_fields:
-            fallback_text = message.get(field, '')
+            fallback_text = getattr(message, field, '') if message else ''
             if isinstance(fallback_text, list):
-                fallback_text = ''.join(part.get('text', '') for part in fallback_text if isinstance(part, dict))
+                fallback_text = ''.join(part.text for part in fallback_text if getattr(part, 'text', None))
             elif fallback_text is None:
                 fallback_text = ''
             fallback_text = str(fallback_text).strip() if fallback_text else ''
@@ -1474,6 +1437,7 @@ def build_fashion_scene_plan(platform: str, selling_text: str, image_payloads, c
             image_payloads,
         ),
         temperature=0.85,
+        timeout_seconds=120,
     )
     return parse_fashion_scene_plan(response_text)
 

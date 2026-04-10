@@ -439,7 +439,8 @@ document.addEventListener('DOMContentLoaded', () => {
           && Array.isArray(rawState.fashionCustomModels)
           && rawState.fashionCustomModels.some((item) => item && item.id === selectedId);
         const hasSelectedModel = selectedSource === 'ai' ? Boolean(generationDone) : Boolean(customSelected);
-        const sceneStep = rawState.fashionFlowStep === 'scene';
+        const isSceneCapableStep = rawState.fashionFlowStep === 'scene' || rawState.fashionFlowStep === 'result';
+        const currentStep = rawState.fashionFlowStep === 'result' ? 'result' : isSceneCapableStep ? 'scene' : 'model';
         const sceneGenerationState = rawState.fashionSceneGenerationState;
         const hasSceneGroups = sceneGroups.length > 0;
         const selectedPoseIds = Array.isArray(rawState.fashionSelectedPoseIds)
@@ -455,11 +456,11 @@ document.addEventListener('DOMContentLoaded', () => {
             hasSelectedModel: false,
             disabled: true,
             label: '请选择模特',
-            step: sceneStep ? 'scene' : 'model',
+            step: currentStep,
             action: 'select_model',
           };
         }
-        if (!sceneStep) {
+        if (!isSceneCapableStep) {
           return {
             hasSelectedModel: true,
             disabled: false,
@@ -473,7 +474,7 @@ document.addEventListener('DOMContentLoaded', () => {
             hasSelectedModel: true,
             disabled: true,
             label: '生成中...',
-            step: 'scene',
+            step: currentStep,
             action: 'loading',
           };
         }
@@ -482,7 +483,7 @@ document.addEventListener('DOMContentLoaded', () => {
             hasSelectedModel: true,
             disabled: false,
             label: '重新生成推荐场景',
-            step: 'scene',
+            step: currentStep,
             action: 'scene_plan',
           };
         }
@@ -491,7 +492,7 @@ document.addEventListener('DOMContentLoaded', () => {
             hasSelectedModel: true,
             disabled: false,
             label: '生成推荐场景',
-            step: 'scene',
+            step: currentStep,
             action: 'scene_plan',
           };
         }
@@ -500,7 +501,7 @@ document.addEventListener('DOMContentLoaded', () => {
             hasSelectedModel: true,
             disabled: true,
             label: '请选择场景',
-            step: 'scene',
+            step: currentStep,
             action: 'select_scene',
           };
         }
@@ -508,8 +509,9 @@ document.addEventListener('DOMContentLoaded', () => {
           hasSelectedModel: true,
           disabled: false,
           label: `生成服饰穿戴图（${selectedSceneCount}个场景）`,
-          step: 'scene',
+          step: currentStep,
           action: 'generate',
+          selectedSceneCount,
         };
       } catch (error) {
         console.error('Failed to read fashion selection state:', error);
@@ -528,7 +530,7 @@ document.addEventListener('DOMContentLoaded', () => {
         hasSelectedModel: Boolean(state.hasSelectedModel),
         disabled: Boolean(state.disabled),
         label: state.label || '请选择模特',
-        step: state.step === 'scene' ? 'scene' : 'model',
+        step: state.step === 'scene' || state.step === 'result' ? state.step : 'model',
       };
       if (!generateBtn) {
         return;

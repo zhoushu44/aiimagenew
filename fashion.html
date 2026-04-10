@@ -548,6 +548,7 @@
       const buildFashionCtaState = (state) => {
         const hasSelectedModel = isModelAvailable(state, state.fashionSelectedModelSource, state.fashionSelectedModelId);
         const selectedEntries = getSelectedSceneEntries(state);
+        const isSceneCapableStep = state.fashionFlowStep === 'scene' || state.fashionFlowStep === 'result';
         if (!hasSelectedModel) {
           return {
             hasSelectedModel: false,
@@ -558,7 +559,7 @@
             action: 'select_model',
           };
         }
-        if (state.fashionFlowStep !== 'scene') {
+        if (!isSceneCapableStep) {
           return {
             hasSelectedModel: true,
             disabled: false,
@@ -573,7 +574,7 @@
             hasSelectedModel: true,
             disabled: true,
             label: '生成中...',
-            step: 'scene',
+            step: state.fashionFlowStep,
             selectedSceneCount: 0,
             action: 'loading',
           };
@@ -583,7 +584,7 @@
             hasSelectedModel: true,
             disabled: false,
             label: '重新生成推荐场景',
-            step: 'scene',
+            step: state.fashionFlowStep,
             selectedSceneCount: 0,
             action: 'scene_plan',
           };
@@ -593,7 +594,7 @@
             hasSelectedModel: true,
             disabled: false,
             label: '生成推荐场景',
-            step: 'scene',
+            step: state.fashionFlowStep,
             selectedSceneCount: 0,
             action: 'scene_plan',
           };
@@ -604,7 +605,7 @@
             hasSelectedModel: true,
             disabled: true,
             label: '请选择场景',
-            step: 'scene',
+            step: state.fashionFlowStep,
             selectedSceneCount: 0,
             action: 'select_scene',
           };
@@ -613,7 +614,7 @@
           hasSelectedModel: true,
           disabled: false,
           label: `生成服饰穿戴图（${selectedSceneCount}个场景）`,
-          step: 'scene',
+          step: state.fashionFlowStep,
           selectedSceneCount,
           action: 'generate',
         };

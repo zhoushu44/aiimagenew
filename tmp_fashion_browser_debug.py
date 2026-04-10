@@ -8,8 +8,8 @@ import os
 import time
 
 url = 'http://127.0.0.1:5078/fashion'
-image_path = r'E:\360MoveData\Users\Administrator\Desktop\新建文件夹\aiimagenew\1.png'
-output_dir = r'E:\360MoveData\Users\Administrator\Desktop\新建文件夹\aiimagenew'
+image_path = r'C:\Users\zs\Desktop\49\aiimagenew\1.png'
+output_dir = r'C:\Users\zs\Desktop\49\aiimagenew'
 state_path = os.path.join(output_dir, 'fashion_browser_debug.json')
 screenshot_path = os.path.join(output_dir, 'fashion_browser_debug.png')
 selectors = {
