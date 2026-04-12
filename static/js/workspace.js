@@ -179,6 +179,32 @@ document.addEventListener('DOMContentLoaded', () => {
         imageProgress: '正在生成套图，请稍候…',
         outputStatLabel: '输出张数',
       },
+      mode2: {
+        heroEyebrow: '01 / Multi Image Lab',
+        title: 'AI模式2多图生成',
+        description: '未上传图片时走文生图，上传 1 张或多张商品图时走图生图，适合快速验证 prompt 与成图方向。',
+        note: 'Single Output / Prompt First / Edit Or Generate',
+        resultEyebrow: '02 / Single Output',
+        resultTitle: '模式2结果',
+        resultSelectAllLabel: '全选当前图片',
+        outputSystemLabel: 'single output',
+        outputSystemMeta: '模式2固定单图输出，可直接预览、下载并继续调整提示词。',
+        gridLogicLabel: 'generation path',
+        gridLogicMeta: '自动根据是否上传图片切换文生图或图生图。',
+        generateBtnLabel: '生成模式2图像',
+        planLoadingLabel: '正在准备模式2请求',
+        imageLoadingLabel: '正在生成模式2图片，请稍候',
+        initialResultMeta: '系统将根据提示词与可选参考图生成 1 张模式2图片。',
+        initialTaskSummary: '固定单图输出，适合快速试 prompt 和验证图生图效果。',
+        resultFallback: '已生成模式2结果',
+        itemFallback: '已生成模式2结果。',
+        successFallback: '已完成模式2生成',
+        errorFallback: '模式2生成失败，请稍后重试',
+        selectedPrefix: '正在准备模式2生成，并吸收「{style}」风格参考，请稍候…',
+        defaultPrefix: '正在准备模式2生成，请稍候…',
+        imageProgress: '模式2正在生成，请稍候…',
+        outputStatLabel: '输出张数',
+      },
       aplus: {
         heroEyebrow: '01 / Module Console',
         title: 'AI A+详情页',
@@ -265,6 +291,7 @@ document.addEventListener('DOMContentLoaded', () => {
     const PAGE_MODE = document.body.dataset.pageMode || 'suite';
     const isAplusPage = PAGE_MODE === 'aplus';
     const isFashionPage = PAGE_MODE === 'fashion';
+    const isMode2Page = PAGE_MODE === 'mode2';
     let currentMode = PAGE_MODE;
     let selectedOutputCount = 6;
     let selectedAplusModules = new Set(isAplusPage
@@ -617,8 +644,12 @@ document.addEventListener('DOMContentLoaded', () => {
     };
 
     const getCurrentOutputMetric = (result = currentResult) => {
-      if ((result?.mode || currentMode) === 'aplus') {
+      const activeMode = result?.mode || currentMode;
+      if (activeMode === 'aplus') {
         return result?.plan?.module_count || result?.images?.length || Math.max(selectedAplusModules.size, 1);
+      }
+      if (activeMode === 'mode2' || activeMode === 'mode2-text2image' || activeMode === 'mode2-image-edit') {
+        return result?.plan?.output_count || result?.images?.length || selectedOutputCount;
       }
       return result?.plan?.output_count || result?.images?.length || selectedOutputCount;
     };
@@ -630,6 +661,14 @@ document.addEventListener('DOMContentLoaded', () => {
       if (currentMode === 'aplus') {
         outputCountValue.textContent = formatOutputCount(selectedAplusModules.size);
         gridLogicValue.textContent = `${selectedAplusModules.size} 模块`;
+        return;
+      }
+      if (currentMode === 'mode2') {
+        outputCountValue.textContent = formatOutputCount(selectedOutputCount);
+        gridLogicValue.textContent = currentFiles.length ? '图生图' : '文生图';
+        if (moreActions) {
+          moreActions.hidden = true;
+        }
         return;
       }
       outputCountValue.textContent = formatOutputCount(selectedOutputCount);
@@ -661,7 +700,7 @@ document.addEventListener('DOMContentLoaded', () => {
 
     const setMode = (mode, options = {}) => {
       const { preserveResultState = false, skipPersist = false } = options;
-      currentMode = ['suite', 'aplus', 'fashion'].includes(mode) ? mode : PAGE_MODE;
+      currentMode = ['suite', 'mode2', 'aplus', 'fashion'].includes(mode) ? mode : PAGE_MODE;
       const config = getCurrentModeConfig();
       navItems.forEach((item) => {
         const isActive = item.dataset.mode === currentMode;
@@ -672,7 +711,7 @@ document.addEventListener('DOMContentLoaded', () => {
         aplusModulesSection.hidden = currentMode !== 'aplus';
       }
       if (moreActions) {
-        moreActions.hidden = currentMode === 'aplus';
+        moreActions.hidden = currentMode === 'aplus' || currentMode === 'mode2';
       }
       heroEyebrow.textContent = config.heroEyebrow;
       heroTitle.textContent = config.title;
@@ -1019,6 +1058,136 @@ document.addEventListener('DOMContentLoaded', () => {
       formData.append('fashion_selected_model_image', selectedFashionModelFile);
       return selectedFashionModel;
     };
+
+    const buildMode2Prompt = () => {
+      const parts = [
+        sellingInput ? sellingInput.value.trim() : '',
+        `平台：${getPlatformLabel()}`,
+        `国家：${getCountryReference()}`,
+        `文字：${getTextType()}`,
+      ].filter(Boolean);
+      return parts.join('\n');
+    };
+
+    const getMode2RequestedOutputCount = () => Math.max(1, Number(selectedOutputCount) || 1);
+
+    const cloneFormData = (formData) => {
+      const cloned = new FormData();
+      formData.forEach((value, key) => {
+        cloned.append(key, value);
+      });
+      return cloned;
+    };
+
+    const normalizeMode2Result = (result) => {
+      if (!result || typeof result !== 'object') {
+        return null;
+      }
+      const normalizedMode = String(result.mode || '').trim();
+      const modeKey = normalizedMode.startsWith('mode2') ? normalizedMode : 'mode2';
+      return {
+        ...result,
+        mode: modeKey,
+        task_name: result.task_name || '模式2单图任务',
+        generated_at: result.generated_at || new Date().toLocaleString('zh-CN', { hour12: false }),
+        plan: result.plan || {
+          output_count: 1,
+          summary: normalizedMode === 'mode2-image-edit'
+            ? '已完成模式2图生图生成。'
+            : '已完成模式2文生图生成。',
+        },
+        images: [{
+          title: normalizedMode === 'mode2-image-edit' ? '模式2图生图' : '模式2文生图',
+          type: normalizedMode === 'mode2-image-edit' ? '图生图' : '文生图',
+          type_tag: 'Mode2',
+          image_url: result.image_url,
+          image_path: result.image_path,
+          download_name: result.download_name,
+          prompt: result.prompt,
+          model: result.model,
+          sort: 1,
+          kind: 'generated',
+          keywords: [normalizedMode === 'mode2-image-edit' ? '图生图' : '文生图', getImageSizeRatio()],
+        }],
+      };
+    };
+
+    const buildMode2AggregateResult = (results) => {
+      const normalizedResults = Array.isArray(results)
+        ? results.map((item) => normalizeMode2Result(item)).filter(Boolean)
+        : [];
+      if (!normalizedResults.length) {
+        return null;
+      }
+      const baseResult = normalizedResults[0];
+      const aggregatedImages = normalizedResults.flatMap((item, resultIndex) => {
+        const generatedItems = Array.isArray(item.images) ? item.images : [];
+        return generatedItems.map((generatedItem, imageIndex) => ({
+          ...generatedItem,
+          sort: resultIndex + imageIndex + 1,
+          title: generatedItem.title || `模式2结果 ${resultIndex + imageIndex + 1}`,
+        }));
+      });
+      return {
+        ...baseResult,
+        task_name: baseResult.task_name || `模式2单图任务（${aggregatedImages.length}张）`,
+        plan: {
+          ...(baseResult.plan || {}),
+          output_count: aggregatedImages.length,
+          summary: aggregatedImages.length > 1
+            ? `已完成模式2生成，共 ${aggregatedImages.length} 张。`
+            : (baseResult.plan?.summary || '已完成模式2生成。'),
+        },
+        images: aggregatedImages,
+      };
+    };
+
+    const generateMode2Results = async (endpoint, formData, outputCount) => {
+      const requests = [];
+      for (let index = 0; index < outputCount; index += 1) {
+        const requestFormData = cloneFormData(formData);
+        const response = await fetch(endpoint, {
+          method: 'POST',
+          body: requestFormData,
+        });
+        const rawResult = await response.json();
+        const result = normalizeMode2Result(rawResult);
+        if (!response.ok || !result?.success || !Array.isArray(result.images)) {
+          const detailMessage = typeof result?.details === 'string' ? result.details.trim() : '';
+          const baseMessage = result?.error || '模式2生成失败，请稍后重试';
+          throw new Error(detailMessage ? `${baseMessage}｜${detailMessage}` : baseMessage);
+        }
+        requests.push(result);
+      }
+      return buildMode2AggregateResult(requests);
+    };
+
+    const resolveGenerateRequest = (formData) => {
+      if (currentMode === 'aplus') {
+        return { endpoint: '/api/generate-aplus', isMode2: false };
+      }
+      if (currentMode === 'mode2') {
+        const productFiles = getProductFiles();
+        const prompt = buildMode2Prompt();
+        if (!prompt) {
+          throw new Error('请先填写核心卖点或提示词后再生成。');
+        }
+        formData.delete('mode');
+        formData.delete('selling_text');
+        formData.delete('product_json');
+        formData.delete('selected_style_title');
+        formData.delete('selected_style_reasoning');
+        formData.delete('selected_style_colors');
+        formData.delete('output_count');
+        formData.append('prompt', prompt);
+        return {
+          endpoint: productFiles.length ? '/api/generate-mode2-image-edit' : '/api/generate-mode2-text2image',
+          isMode2: true,
+        };
+      }
+      return { endpoint: '/api/generate-suite', isMode2: false };
+    };
+
 
     const buildBaseGenerateFormData = () => {
       const formData = new FormData();
@@ -1418,11 +1587,15 @@ document.addEventListener('DOMContentLoaded', () => {
 
     const buildResultMeta = (result) => {
       const styleMeta = buildSelectedStyleMeta(result.selected_style);
-      const isAplus = (result.mode || currentMode) === 'aplus';
+      const activeMode = result.mode || currentMode;
+      const isAplus = activeMode === 'aplus';
+      const isMode2 = activeMode === 'mode2' || activeMode === 'mode2-text2image' || activeMode === 'mode2-image-edit';
       const parts = [
         result.task_name ? `任务：${result.task_name}` : '',
         result.generated_at ? `生成时间：${result.generated_at}` : '',
-        isAplus ? (result.plan?.module_count ? `模块数量：${result.plan.module_count}` : '') : (result.plan?.output_count ? `输出张数：${result.plan.output_count}` : ''),
+        isAplus
+          ? (result.plan?.module_count ? `模块数量：${result.plan.module_count}` : '')
+          : (isMode2 ? (result.plan?.output_count ? `输出张数：${result.plan.output_count}` : '') : (result.plan?.output_count ? `输出张数：${result.plan.output_count}` : '')),
         styleMeta,
       ].filter(Boolean);
       return parts.join(' · ') || getCurrentModeConfig().resultFallback;
@@ -1447,6 +1620,21 @@ document.addEventListener('DOMContentLoaded', () => {
     const normalizeResultItems = (result) => {
       const referenceItems = Array.isArray(result.reference_images) ? result.reference_images : [];
       const generatedItems = Array.isArray(result.images) ? result.images : [];
+      const activeMode = result?.mode || currentMode;
+      const mode2GeneratedItems = !generatedItems.length && ['mode2', 'mode2-text2image', 'mode2-image-edit'].includes(activeMode) && result.image_url
+        ? [{
+            title: activeMode === 'mode2-image-edit' ? '模式2图生图' : '模式2文生图',
+            type: activeMode === 'mode2-image-edit' ? '图生图' : '文生图',
+            type_tag: 'Mode2',
+            image_url: result.image_url,
+            image_path: result.image_path,
+            download_name: result.download_name,
+            prompt: result.prompt,
+            model: result.model,
+            sort: 1,
+            kind: 'generated',
+          }]
+        : [];
 
       return [
         ...referenceItems.map((item, index) => ({
@@ -1455,7 +1643,7 @@ document.addEventListener('DOMContentLoaded', () => {
           sort: item.sort || index + 1,
           kind: item.kind || 'reference',
         })),
-        ...generatedItems
+        ...[...generatedItems, ...mode2GeneratedItems]
           .slice()
           .sort((a, b) => (a.sort || 0) - (b.sort || 0))
           .map((item, index) => ({
@@ -1567,11 +1755,18 @@ document.addEventListener('DOMContentLoaded', () => {
     };
 
     const updateTaskSummary = (result) => {
-      const isFashion = (result.mode || currentMode) === 'fashion';
-      const selectedStyleMeta = isFashion ? '' : buildSelectedStyleMeta(result.selected_style);
+      const activeMode = result.mode || currentMode;
+      const isFashion = activeMode === 'fashion';
+      const isMode2 = activeMode === 'mode2' || activeMode === 'mode2-text2image' || activeMode === 'mode2-image-edit';
+      const selectedStyleMeta = (isFashion || isMode2) ? '' : buildSelectedStyleMeta(result.selected_style);
+      const defaultSummary = isFashion
+        ? '已生成服饰穿戴结果。'
+        : (isMode2
+          ? (activeMode === 'mode2-image-edit' ? '已生成模式2图生图结果。' : '已生成模式2文生图结果。')
+          : '已生成可管理的任务结果。');
       taskSummaryLine.textContent = selectedStyleMeta
-        ? `${result.plan?.summary || '已生成可管理的任务结果。'} · ${selectedStyleMeta}`
-        : (isFashion ? '已生成服饰穿戴结果。' : (result.plan?.summary || '已生成可管理的任务结果。'));
+        ? `${result.plan?.summary || defaultSummary} · ${selectedStyleMeta}`
+        : (result.plan?.summary || defaultSummary);
       resultMeta.textContent = buildResultMeta(result);
       updateSelectionSummary();
       persistState();
@@ -1911,6 +2106,9 @@ document.addEventListener('DOMContentLoaded', () => {
         }
 
         currentResult = state.currentResult || null;
+        if (currentResult && ['mode2-text2image', 'mode2-image-edit'].includes(currentResult.mode)) {
+          currentResult = normalizeMode2Result(currentResult) || currentResult;
+        }
         currentProductJson = state.currentProductJson && typeof state.currentProductJson === 'object'
           ? state.currentProductJson
           : null;
@@ -2307,14 +2505,21 @@ document.addEventListener('DOMContentLoaded', () => {
         }
         const { formData, selectedStyle } = buildBaseGenerateFormData();
         const config = getCurrentModeConfig();
-        const endpoint = currentMode === 'aplus' ? '/api/generate-aplus' : '/api/generate-suite';
+        let requestConfig;
+        try {
+          requestConfig = resolveGenerateRequest(formData);
+        } catch (error) {
+          setResultStatus(error.message || config.errorFallback, 'error');
+          return;
+        }
+        const { endpoint, isMode2 } = requestConfig;
         if (currentMode === 'aplus') {
           if (!selectedAplusModules.size) {
             setResultStatus('请至少选择 1 个 A+ 模块后再生成。', 'error');
             return;
           }
           formData.append('selected_modules', JSON.stringify(Array.from(selectedAplusModules)));
-        } else {
+        } else if (!isMode2) {
           formData.append('output_count', String(selectedOutputCount));
         }
 
@@ -2329,26 +2534,25 @@ document.addEventListener('DOMContentLoaded', () => {
         updateGenerateButtonLabel(config.planLoadingLabel);
         setResultStatus(selectedStyle?.title ? config.selectedPrefix.replace('{style}', selectedStyle.title) : config.defaultPrefix);
         showResultView();
+        renderLoadingResultCards(isMode2 ? getMode2RequestedOutputCount() : (currentMode === 'aplus' ? selectedAplusModules.size : selectedOutputCount));
         persistState();
 
         try {
-          const responsePromise = fetch(endpoint, {
-            method: 'POST',
-            body: formData,
-          });
-
-          window.setTimeout(() => {
-            if (generateBtn.disabled) {
-              updateGenerateButtonLabel(config.imageLoadingLabel);
-              setResultStatus(config.imageProgress);
+          let result;
+          if (isMode2) {
+            result = await generateMode2Results(endpoint, formData, getMode2RequestedOutputCount());
+          } else {
+            const response = await fetch(endpoint, {
+              method: 'POST',
+              body: formData,
+            });
+            const rawResult = await response.json();
+            result = rawResult;
+            if (!response.ok || !result?.success || !Array.isArray(result.images)) {
+              const detailMessage = typeof result?.details === 'string' ? result.details.trim() : '';
+              const baseMessage = result?.error || config.errorFallback;
+              throw new Error(detailMessage ? `${baseMessage}｜${detailMessage}` : baseMessage);
             }
-          }, 1200);
-
-          const response = await responsePromise;
-          const result = await response.json();
-
-          if (!response.ok || !result.success || !Array.isArray(result.images)) {
-            throw new Error(result.error || config.errorFallback);
           }
 
           currentResult = result;

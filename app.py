@@ -1,15 +1,18 @@
 import base64
 import binascii
 import io
+import ipaddress
 import json
 import mimetypes
 import os
 import re
 import shutil
+import socket
 import uuid
 import zipfile
 from datetime import datetime, timedelta
 from pathlib import Path
+from urllib.parse import urljoin, urlparse
 
 import requests
 from dotenv import load_dotenv
@@ -45,6 +48,11 @@ UPLOAD_MAX_FILE_BYTES = max(int((os.getenv('UPLOAD_MAX_FILE_BYTES') or str(8 * 1
 GENERATED_SUITE_RETENTION_DAYS = max(int((os.getenv('GENERATED_SUITE_RETENTION_DAYS') or '7').strip() or 0), 0)
 GENERATED_SUITE_RETENTION_COUNT = max(int((os.getenv('GENERATED_SUITE_RETENTION_COUNT') or '20').strip() or 0), 0)
 GENERATED_SUITES_DIR = BASE_DIR / 'generated-suites'
+MODE2_ALLOWED_IMAGE_HOSTS = {
+    host.strip().lower()
+    for host in (os.getenv('MODE2_ALLOWED_IMAGE_HOSTS') or '').split(',')
+    if host.strip()
+}
 app.config['MAX_CONTENT_LENGTH'] = UPLOAD_MAX_BYTES
 
 SYSTEM_PROMPT = (
@@ -2122,6 +2130,174 @@ def get_ark_client() -> OpenAI:
     )
 
 
+def get_mode2_client() -> OpenAI:
+    return OpenAI(
+        api_key=get_env('MODE2_OPENAI_API_KEY'),
+        base_url=get_env('MODE2_OPENAI_BASE_URL').rstrip('/'),
+    )
+
+
+def resolve_mode2_image_size(ratio: str, resolution: str) -> str:
+    normalized_ratio = (ratio or '').strip() or get_optional_env('MODE2_DEFAULT_RATIO', '1:1')
+    normalized_resolution = (resolution or '').strip()
+    if normalized_resolution:
+        return normalized_resolution
+    if normalized_ratio in IMAGE_SIZE_RATIO_MAP:
+        return IMAGE_SIZE_RATIO_MAP[normalized_ratio]
+    return get_optional_env('MODE2_DEFAULT_RESOLUTION', '2048x2048')
+
+
+def get_mode2_sample_strength(sample_strength: str) -> float:
+    raw_value = (sample_strength or '').strip() or get_optional_env('MODE2_DEFAULT_SAMPLE_STRENGTH', '0.65')
+    try:
+        return float(raw_value)
+    except ValueError as exc:
+        raise ValueError('sample_strength 必须为数字') from exc
+
+
+def is_private_ip_address(hostname: str) -> bool:
+    try:
+        addresses = socket.getaddrinfo(hostname, None)
+    except socket.gaierror as exc:
+        raise ValueError('参考图片链接域名解析失败') from exc
+
+    for address_family, _, _, _, sockaddr in addresses:
+        if address_family == socket.AF_INET:
+            ip = ipaddress.ip_address(sockaddr[0])
+        elif address_family == socket.AF_INET6:
+            ip = ipaddress.ip_address(sockaddr[0])
+        else:
+            continue
+        if ip.is_private or ip.is_loopback or ip.is_link_local or ip.is_multicast or ip.is_reserved or ip.is_unspecified:
+            return True
+    return False
+
+
+def validate_mode2_remote_image_url(image_url: str) -> str:
+    normalized_url = (image_url or '').strip()
+    if not normalized_url:
+        raise ValueError('参考图片链接不能为空')
+
+    if not MODE2_ALLOWED_IMAGE_HOSTS:
+        raise ValueError('MODE2_ALLOWED_IMAGE_HOSTS 未配置，暂不支持远程参考图片')
+
+    parsed_url = urlparse(normalized_url)
+    if parsed_url.scheme not in {'http', 'https'}:
+        raise ValueError('参考图片链接仅支持 http 或 https')
+    if not parsed_url.hostname:
+        raise ValueError('参考图片链接缺少主机名')
+
+    hostname = parsed_url.hostname.lower()
+    if hostname not in MODE2_ALLOWED_IMAGE_HOSTS:
+        raise ValueError('参考图片链接域名未被允许')
+    if is_private_ip_address(hostname):
+        raise ValueError('参考图片链接不能指向内网地址')
+
+    return normalized_url
+
+
+
+def build_remote_image_payload(image_url: str):
+    normalized_url = validate_mode2_remote_image_url(image_url)
+    response = requests.get(normalized_url, timeout=120, allow_redirects=False)
+    if 300 <= response.status_code < 400:
+        raise ValueError('参考图片链接不允许重定向')
+    response.raise_for_status()
+    content = response.content
+    filename = Path(normalized_url.split('?', 1)[0]).name or 'reference-image'
+    mime_type = sniff_image_mime_type(content)
+    if not mime_type:
+        header_mime_type = response.headers.get('Content-Type', '').split(';', 1)[0].strip().lower()
+        if header_mime_type in ALLOWED_IMAGE_MIME_TYPES:
+            mime_type = header_mime_type
+    if not mime_type:
+        raise ValueError('参考图片链接不是有效的图片文件')
+    if len(content) > UPLOAD_MAX_FILE_BYTES:
+        raise ValueError(f'参考图片超过单张大小限制（{UPLOAD_MAX_FILE_BYTES // (1024 * 1024)}MB）')
+
+    extension = Path(filename).suffix.lower()
+    if extension not in ALLOWED_IMAGE_EXTENSIONS:
+        extension = guess_extension(mime_type)
+        filename = f'{Path(filename).stem or "reference-image"}{extension}'
+
+    encoded = base64.b64encode(content).decode('utf-8')
+    return {
+        'filename': filename,
+        'mime_type': mime_type,
+        'bytes': content,
+        'base64': encoded,
+        'data_url': f'data:{mime_type};base64,{encoded}',
+    }
+
+
+
+
+def normalize_generated_image_item(item):
+    if hasattr(item, 'model_dump'):
+        item = item.model_dump()
+    elif hasattr(item, 'dict'):
+        item = item.dict()
+
+    if not isinstance(item, dict):
+        raise ValueError('图像生成接口返回格式异常')
+    return item
+
+
+def pick_generated_image_item(response):
+    data = getattr(response, 'data', None)
+    if data is None and isinstance(response, dict):
+        data = response.get('data')
+    if not isinstance(data, list) or not data:
+        raise ValueError('图像生成接口未返回图片数据')
+    return normalize_generated_image_item(data[0])
+
+
+def call_mode2_image_edit(client: OpenAI, prompt: str, image_payloads, ratio: str, resolution: str, sample_strength: str):
+    model = get_env('MODE2_IMAGE_EDIT_MODEL')
+    request_payload = {
+        'model': model,
+        'prompt': prompt,
+        'size': resolve_mode2_image_size(ratio, resolution),
+        'response_format': 'b64_json',
+        'extra_body': {
+            'images': [image_payload['data_url'] for image_payload in image_payloads],
+            'sample_strength': get_mode2_sample_strength(sample_strength),
+        },
+    }
+    request_extra_body = dict(request_payload['extra_body'])
+    request_extra_body['images'] = [image_payload['data_url'] for image_payload in image_payloads]
+    request_extra_body['image_count'] = len(image_payloads)
+    app.logger.warning('Mode2 image edit request extra_body image_count=%s', request_extra_body['image_count'])
+    response = client.images.generate(**request_payload)
+    return pick_generated_image_item(response), model
+
+
+def call_mode2_text2image(client: OpenAI, prompt: str, ratio: str, resolution: str):
+    model = get_env('MODE2_TEXT2IMAGE_MODEL')
+    response = client.images.generate(
+        model=model,
+        prompt=prompt,
+        size=resolve_mode2_image_size(ratio, resolution),
+        response_format='b64_json',
+    )
+    return pick_generated_image_item(response), model
+
+
+def build_mode2_success_response(task_id: str, mode: str, prompt: str, model: str, generated_item: dict):
+    image_bytes, mime_type = decode_generated_image(generated_item)
+    download_name, relative_path, image_url = save_generated_image(task_id, 1, mode, image_bytes, mime_type)
+    return {
+        'success': True,
+        'task_id': task_id,
+        'image_url': image_url,
+        'image_path': relative_path,
+        'download_name': download_name,
+        'prompt': prompt,
+        'model': model,
+        'mode': mode,
+    }
+
+
 def pick_image_data_entry(data):
     if not isinstance(data, list) or not data:
         raise ValueError('图像生成接口未返回图片数据')
@@ -2484,6 +2660,11 @@ def fashion_page():
     return send_from_directory(BASE_DIR, 'fashion.html')
 
 
+@app.get('/mode2')
+def mode2_page():
+    return send_from_directory(BASE_DIR, 'mode2.html')
+
+
 @app.get('/generated/<path:path>')
 def serve_generated_file(path: str):
     return send_from_directory(GENERATED_SUITES_DIR, path)
@@ -2671,6 +2852,99 @@ def generate_fashion_model():
                 'download_name': download_name,
             }
         )
+    except ValueError as exc:
+        return jsonify({'success': False, 'error': str(exc)}), 400
+    except RuntimeError as exc:
+        payload, status_code = parse_runtime_error(exc)
+        return jsonify(payload), status_code
+    except (APIError, APIStatusError) as exc:
+        payload, status_code = parse_ark_exception(exc)
+        return jsonify(payload), status_code
+    except requests.Timeout:
+        return jsonify({'success': False, 'error': '请求超时，请稍后重试'}), 504
+    except requests.RequestException as exc:
+        return jsonify({'success': False, 'error': f'请求失败：{exc}'}), 502
+    except Exception as exc:
+        return jsonify({'success': False, 'error': f'服务端异常：{exc}'}), 500
+
+
+@app.post('/api/generate-mode2-image-edit')
+def generate_mode2_image_edit():
+    try:
+        payload = request.get_json(silent=True) if request.is_json else {}
+        if not isinstance(payload, dict):
+            payload = {}
+
+        prompt = get_request_value(payload, request.form, 'prompt', '')
+        ratio = get_request_value(payload, request.form, 'image_size_ratio', '') or get_request_value(payload, request.form, 'ratio', '')
+        resolution = get_request_value(payload, request.form, 'resolution', '')
+        sample_strength = get_request_value(payload, request.form, 'sample_strength', '')
+        image_url = get_request_value(payload, request.form, 'image_url', '')
+        uploaded_payloads = get_image_payloads_from_request('images')
+
+        if not prompt:
+            return jsonify({'success': False, 'error': 'prompt 不能为空'}), 400
+        if uploaded_payloads and image_url:
+            return jsonify({'success': False, 'error': '上传图片与 image_url 二选一'}), 400
+        if uploaded_payloads:
+            image_payloads = uploaded_payloads
+        elif image_url:
+            image_payloads = [build_remote_image_payload(image_url)]
+        else:
+            return jsonify({'success': False, 'error': '请上传 1 张或多张参考图片，或提供 image_url'}), 400
+
+        task_id = uuid.uuid4().hex
+        generated_item, model = call_mode2_image_edit(
+            get_mode2_client(),
+            prompt,
+            image_payloads,
+            ratio,
+            resolution,
+            sample_strength,
+        )
+        return jsonify(build_mode2_success_response(task_id, 'mode2-image-edit', prompt, model, generated_item))
+    except RequestEntityTooLarge as exc:
+        return handle_request_entity_too_large(exc)
+    except ValueError as exc:
+        return jsonify({'success': False, 'error': str(exc)}), 400
+    except RuntimeError as exc:
+        payload, status_code = parse_runtime_error(exc)
+        return jsonify(payload), status_code
+    except (APIError, APIStatusError) as exc:
+        payload, status_code = parse_ark_exception(exc)
+        return jsonify(payload), status_code
+    except requests.Timeout:
+        return jsonify({'success': False, 'error': '请求超时，请稍后重试'}), 504
+    except requests.RequestException as exc:
+        return jsonify({'success': False, 'error': f'请求失败：{exc}'}), 502
+    except Exception as exc:
+        return jsonify({'success': False, 'error': f'服务端异常：{exc}'}), 500
+
+
+@app.post('/api/generate-mode2-text2image')
+def generate_mode2_text2image():
+    try:
+        payload = request.get_json(silent=True) if request.is_json else {}
+        if not isinstance(payload, dict):
+            payload = {}
+
+        prompt = get_request_value(payload, request.form, 'prompt', '')
+        ratio = get_request_value(payload, request.form, 'image_size_ratio', '') or get_request_value(payload, request.form, 'ratio', '')
+        resolution = get_request_value(payload, request.form, 'resolution', '')
+
+        if not prompt:
+            return jsonify({'success': False, 'error': 'prompt 不能为空'}), 400
+
+        task_id = uuid.uuid4().hex
+        generated_item, model = call_mode2_text2image(
+            get_mode2_client(),
+            prompt,
+            ratio,
+            resolution,
+        )
+        return jsonify(build_mode2_success_response(task_id, 'mode2-text2image', prompt, model, generated_item))
+    except RequestEntityTooLarge as exc:
+        return handle_request_entity_too_large(exc)
     except ValueError as exc:
         return jsonify({'success': False, 'error': str(exc)}), 400
     except RuntimeError as exc:
