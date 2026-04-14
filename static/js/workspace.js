@@ -61,6 +61,10 @@ document.addEventListener('DOMContentLoaded', () => {
     const outputSystemMeta = document.getElementById('outputSystemMeta');
     const gridLogicLabel = document.getElementById('gridLogicLabel');
     const gridLogicMeta = document.getElementById('gridLogicMeta');
+    const pointsBalanceValue = document.getElementById('pointsBalanceValue');
+    const pointsMeta = document.getElementById('pointsMeta');
+    const pointsStatus = document.getElementById('pointsStatus');
+    const pointsClaimBtn = document.getElementById('pointsClaimBtn');
 
     const buildEmptyThumbsMarkup = (label = '待上传素材') => `
       <div class="thumb">${label} 1</div>
@@ -343,6 +347,113 @@ document.addEventListener('DOMContentLoaded', () => {
     };
 
     const getCurrentModeConfig = () => modeConfig[currentMode] || modeConfig.suite;
+    const formatPointsCount = (value) => String(Number(value || 0));
+    const setPointsStatus = (message = '', type = '') => {
+      if (!pointsStatus) {
+        return;
+      }
+      pointsStatus.textContent = message;
+      pointsStatus.className = `points-status${type ? ` is-${type}` : ''}`;
+    };
+    const setPointsClaimButtonState = (state = {}) => {
+      if (!pointsClaimBtn) {
+        return;
+      }
+      pointsClaimBtn.disabled = Boolean(state.disabled);
+      pointsClaimBtn.classList.toggle('is-loading', Boolean(state.loading));
+      pointsClaimBtn.classList.toggle('is-claimed', Boolean(state.claimed));
+      pointsClaimBtn.textContent = state.label || '领取今日积分';
+    };
+    const renderPointsBalance = (points = {}) => {
+      if (pointsBalanceValue) {
+        pointsBalanceValue.textContent = formatPointsCount(points.balance);
+      }
+      if (pointsMeta) {
+        const earned = Number(points.total_earned || 0);
+        const spent = Number(points.total_spent || 0);
+        const dailyFree = Number(points.daily_free || 0);
+        pointsMeta.textContent = `累计 ${earned} · 已用 ${spent} · 今日 ${dailyFree}`;
+      }
+      const lastClaimAt = points.last_daily_claim_at ? new Date(points.last_daily_claim_at) : null;
+      const now = new Date();
+      const isClaimedToday = Boolean(lastClaimAt)
+        && lastClaimAt.getUTCFullYear() === now.getUTCFullYear()
+        && lastClaimAt.getUTCMonth() === now.getUTCMonth()
+        && lastClaimAt.getUTCDate() === now.getUTCDate();
+      if (pointsClaimBtn) {
+        setPointsClaimButtonState({
+          disabled: !points.user_id || isClaimedToday,
+          claimed: isClaimedToday,
+          loading: false,
+          label: isClaimedToday ? '今日已领取' : '领取今日积分',
+        });
+      }
+      setPointsStatus(isClaimedToday ? '今日积分已领取' : '可领取今日积分', isClaimedToday ? 'success' : 'accent');
+    };
+    const getPointsPayload = (data = {}) => data?.points || {};
+    const loadPointsBalance = async () => {
+      if (!pointsBalanceValue || !pointsMeta || !pointsStatus || !pointsClaimBtn) {
+        return;
+      }
+      setPointsClaimButtonState({ disabled: true, loading: true, claimed: false, label: '同步中…' });
+      setPointsStatus('正在同步积分…');
+      try {
+        const response = await fetch('/api/points/balance', {
+          method: 'GET',
+          headers: { 'Accept': 'application/json' },
+          credentials: 'same-origin',
+        });
+        const data = await response.json();
+        if (response.status === 401 || data?.error === '请先登录') {
+          pointsBalanceValue.textContent = '--';
+          pointsMeta.textContent = '登录后可查看积分余额与每日领取状态。';
+          setPointsClaimButtonState({ disabled: true, loading: false, claimed: false, label: '领取今日积分' });
+          setPointsStatus('登录后可查看积分余额与每日领取状态。');
+          return;
+        }
+        if (!response.ok || !data?.success) {
+          throw new Error(data?.error || '积分同步失败');
+        }
+        renderPointsBalance(getPointsPayload(data));
+      } catch (error) {
+        pointsBalanceValue.textContent = '--';
+        pointsMeta.textContent = '积分同步失败';
+        setPointsClaimButtonState({ disabled: true, loading: false, claimed: false, label: '领取今日积分' });
+        setPointsStatus(error.message || '积分同步失败', 'error');
+      }
+    };
+    const claimDailyPoints = async () => {
+      if (!pointsClaimBtn) {
+        return;
+      }
+      pointsClaimBtn.disabled = true;
+      setPointsClaimButtonState({ disabled: true, loading: true, claimed: false, label: '领取中…' });
+      setPointsStatus('正在领取今日积分…');
+      try {
+        const response = await fetch('/api/points/daily-claim', {
+          method: 'POST',
+          headers: { 'Accept': 'application/json', 'Content-Type': 'application/json' },
+          credentials: 'same-origin',
+          body: '{}',
+        });
+        const data = await response.json();
+        const points = getPointsPayload(data);
+        if (!response.ok || !data?.success) {
+          renderPointsBalance(points);
+          throw new Error(data?.error || '领取失败');
+        }
+        renderPointsBalance(points);
+        setPointsStatus(`今日已领取 ${Number(points.daily_free || 0)} 积分`, 'success');
+      } catch (error) {
+        setPointsClaimButtonState({
+          disabled: false,
+          loading: false,
+          claimed: false,
+          label: '领取今日积分',
+        });
+        setPointsStatus(error.message || '领取失败', 'error');
+      }
+    };
     const normalizeFashionSceneGroups = (groups) => {
       if (!Array.isArray(groups)) {
         return [];
@@ -373,6 +484,7 @@ document.addEventListener('DOMContentLoaded', () => {
         })
         .filter((group) => group.poses.length > 0);
     };
+
     const normalizeFashionCameraValue = (value, allowedValues) => {
       const normalized = String(value || '').trim();
       return allowedValues.includes(normalized) ? normalized : '';
@@ -2391,6 +2503,14 @@ document.addEventListener('DOMContentLoaded', () => {
     const restored = restoreStateFromLocalStorage();
     if (!restored) {
       setMode(currentMode, { preserveResultState: false });
+    }
+
+    loadPointsBalance();
+
+    if (pointsClaimBtn) {
+      pointsClaimBtn.addEventListener('click', () => {
+        claimDailyPoints();
+      });
     }
 
     if (isFashionPage) {

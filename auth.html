@@ -75,6 +75,69 @@
       gap: 16px;
       align-content: start;
     }
+    .auth-points {
+      border: 1px solid var(--line);
+      border-radius: 18px;
+      padding: 16px;
+      display: grid;
+      gap: 12px;
+      background: rgba(248,250,252,0.82);
+    }
+    .auth-points-head {
+      display: flex;
+      justify-content: space-between;
+      gap: 12px;
+      align-items: baseline;
+      flex-wrap: wrap;
+    }
+    .auth-points-kicker {
+      text-transform: uppercase;
+      letter-spacing: 0.16em;
+      font-size: 11px;
+      color: var(--muted);
+    }
+    .auth-points-balance {
+      font-family: var(--font-display);
+      font-size: 30px;
+      line-height: 1;
+      letter-spacing: -0.06em;
+      color: var(--accent);
+    }
+    .auth-points-meta,
+    .auth-points-status {
+      font-size: 13px;
+      line-height: 1.5;
+      color: var(--muted);
+    }
+    .auth-points-status {
+      min-height: 20px;
+    }
+    .auth-points-action {
+      min-height: 42px;
+      border: 1px solid var(--accent);
+      border-radius: 14px;
+      background: var(--accent);
+      color: #fff;
+      font-weight: 600;
+      cursor: pointer;
+    }
+    .auth-points-action:disabled {
+      opacity: 0.6;
+      cursor: not-allowed;
+    }
+    .auth-points-action.is-loading {
+      opacity: 0.8;
+    }
+    .auth-points-action.is-claimed {
+      background: linear-gradient(180deg, rgba(31,143,95,0.96), rgba(27,127,83,0.92));
+      border-color: rgba(31,143,95,0.3);
+    }
+    .auth-points-status.is-error {
+      color: var(--danger);
+    }
+    .auth-points-status.is-success {
+      color: var(--success);
+    }
     .auth-tabs {
       display: grid;
       grid-template-columns: repeat(2, minmax(0, 1fr));
@@ -213,6 +276,16 @@
         <button class="auth-tab" id="registerTab" type="button" data-mode="register">注册</button>
       </div>
 
+      <section class="auth-points" aria-label="积分概览">
+        <div class="auth-points-head">
+          <div class="auth-points-kicker">points dashboard</div>
+          <div class="auth-points-balance" id="authPointsBalance">--</div>
+        </div>
+        <div class="auth-points-meta" id="authPointsMeta">登录后可查看积分余额与每日领取状态。</div>
+        <button class="auth-points-action" id="authPointsClaimBtn" type="button" disabled>领取今日积分</button>
+        <div class="auth-points-status" id="authPointsStatus" aria-live="polite"></div>
+      </section>
+
       <form class="auth-form" id="authForm">
         <label class="field" for="emailInput">
           <span class="field-label">邮箱</span>
@@ -257,6 +330,10 @@
     const submitBtn = document.getElementById('submitBtn');
     const authStatus = document.getElementById('authStatus');
     const authNote = document.getElementById('authNote');
+    const authPointsBalance = document.getElementById('authPointsBalance');
+    const authPointsMeta = document.getElementById('authPointsMeta');
+    const authPointsStatus = document.getElementById('authPointsStatus');
+    const authPointsClaimBtn = document.getElementById('authPointsClaimBtn');
     const passwordInput = document.getElementById('passwordInput');
     const confirmField = document.getElementById('confirmField');
     const confirmInput = document.getElementById('confirmInput');
@@ -290,8 +367,120 @@
       setStatus('');
     }
 
+    const formatPointsCount = (value) => String(Number(value || 0));
+    const setPointsStatus = (message = '', type = '') => {
+      if (!authPointsStatus) {
+        return;
+      }
+      authPointsStatus.textContent = message;
+      authPointsStatus.className = `auth-points-status${type ? ` is-${type}` : ''}`;
+    };
+    const setPointsClaimButtonState = (state = {}) => {
+      if (!authPointsClaimBtn) {
+        return;
+      }
+      authPointsClaimBtn.disabled = Boolean(state.disabled);
+      authPointsClaimBtn.classList.toggle('is-loading', Boolean(state.loading));
+      authPointsClaimBtn.classList.toggle('is-claimed', Boolean(state.claimed));
+      authPointsClaimBtn.textContent = state.label || '领取今日积分';
+    };
+    const renderPointsBalance = (points = {}) => {
+      if (authPointsBalance) {
+        authPointsBalance.textContent = formatPointsCount(points.balance);
+      }
+      if (authPointsMeta) {
+        const earned = Number(points.total_earned || 0);
+        const spent = Number(points.total_spent || 0);
+        const dailyFree = Number(points.daily_free || 0);
+        authPointsMeta.textContent = `累计 ${earned} · 已用 ${spent} · 今日 ${dailyFree}`;
+      }
+      const lastClaimAt = points.last_daily_claim_at ? new Date(points.last_daily_claim_at) : null;
+      const now = new Date();
+      const isClaimedToday = Boolean(lastClaimAt)
+        && lastClaimAt.getUTCFullYear() === now.getUTCFullYear()
+        && lastClaimAt.getUTCMonth() === now.getUTCMonth()
+        && lastClaimAt.getUTCDate() === now.getUTCDate();
+      if (authPointsClaimBtn) {
+        setPointsClaimButtonState({
+          disabled: !points.user_id || isClaimedToday,
+          claimed: isClaimedToday,
+          loading: false,
+          label: isClaimedToday ? '今日已领取' : '领取今日积分',
+        });
+      }
+      setPointsStatus(isClaimedToday ? '今日积分已领取' : '可领取今日积分', isClaimedToday ? 'success' : 'accent');
+    };
+    const getPointsPayload = (data = {}) => data?.points || {};
+    const loadAuthPointsBalance = async () => {
+      if (!authPointsBalance || !authPointsMeta || !authPointsStatus || !authPointsClaimBtn) {
+        return;
+      }
+      setPointsClaimButtonState({ disabled: true, loading: true, claimed: false, label: '同步中…' });
+      setPointsStatus('正在同步积分…');
+      try {
+        const response = await fetch('/api/points/balance', {
+          method: 'GET',
+          headers: { 'Accept': 'application/json' },
+          credentials: 'same-origin',
+        });
+        const data = await response.json();
+        if (response.status === 401 || data?.error === '请先登录') {
+          authPointsBalance.textContent = '--';
+          authPointsMeta.textContent = '登录后可查看积分余额与每日领取状态。';
+          setPointsClaimButtonState({ disabled: true, loading: false, claimed: false, label: '领取今日积分' });
+          setPointsStatus('登录后可查看积分余额与每日领取状态。');
+          return;
+        }
+        if (!response.ok || !data?.success) {
+          throw new Error(data?.error || '积分同步失败');
+        }
+        renderPointsBalance(getPointsPayload(data));
+      } catch (error) {
+        authPointsBalance.textContent = '--';
+        authPointsMeta.textContent = '登录后可查看积分余额与每日领取状态。';
+        setPointsClaimButtonState({ disabled: true, loading: false, claimed: false, label: '领取今日积分' });
+        setPointsStatus(error.message || '积分同步失败', 'error');
+      }
+    };
+    const claimAuthDailyPoints = async () => {
+      if (!authPointsClaimBtn || authPointsClaimBtn.disabled) {
+        return;
+      }
+      setPointsClaimButtonState({ disabled: true, loading: true, claimed: false, label: '领取中…' });
+      setPointsStatus('正在领取今日积分…');
+      try {
+        const response = await fetch('/api/points/daily-claim', {
+          method: 'POST',
+          headers: { 'Accept': 'application/json', 'Content-Type': 'application/json' },
+          credentials: 'same-origin',
+          body: '{}',
+        });
+        const data = await response.json();
+        const points = getPointsPayload(data);
+        if (response.status === 401 || data?.error === '请先登录') {
+          setPointsClaimButtonState({ disabled: true, loading: false, claimed: false, label: '领取今日积分' });
+          setPointsStatus('登录后才可领取今日积分', 'error');
+          return;
+        }
+        if (!response.ok || !data?.success) {
+          renderPointsBalance(points);
+          throw new Error(data?.error || '领取失败');
+        }
+        renderPointsBalance(points);
+        setPointsStatus(`今日已领取 ${Number(points.daily_free || 0)} 积分`, 'success');
+      } catch (error) {
+        setPointsClaimButtonState({ disabled: false, loading: false, claimed: false, label: '领取今日积分' });
+        setPointsStatus(error.message || '领取失败', 'error');
+      }
+    };
+
     loginTab.addEventListener('click', () => setMode('login'));
     registerTab.addEventListener('click', () => setMode('register'));
+    if (authPointsClaimBtn) {
+      authPointsClaimBtn.addEventListener('click', () => {
+        claimAuthDailyPoints();
+      });
+    }
 
     async function checkSession() {
       try {
@@ -350,6 +539,7 @@
     });
 
     setMode('login');
+    loadAuthPointsBalance();
     checkSession();
   </script>
 </body>

@@ -64,10 +64,142 @@ SUPABASE_ANON_KEY = (os.getenv('SUPABASE_ANON_KEY') or os.getenv('SUPABASE_PUBLI
 SUPABASE_SERVICE_ROLE_KEY = (os.getenv('SUPABASE_SERVICE_ROLE_KEY') or os.getenv('SUPABASE_SERVICE_KEY') or '').strip()
 SUPABASE_SETTINGS_TABLE = 'api_settings'
 SUPABASE_SETTINGS_SCOPE = 'global'
+SUPABASE_POINTS_TABLE = 'user_points_balances'
 
 
 def build_supabase_request_url(path: str) -> str:
     return f'{SUPABASE_URL.rstrip("/")}{path}'
+
+
+def _get_supabase_user_id(session_data: dict | None = None) -> str:
+    session_payload = session_data or g.get('supabase_session') or {}
+    user = session_payload.get('user') or {}
+    return str(user.get('id') or '').strip()
+
+
+def _build_supabase_service_headers() -> dict:
+    return {
+        'apikey': SUPABASE_SERVICE_ROLE_KEY,
+        'Authorization': f'Bearer {SUPABASE_SERVICE_ROLE_KEY}',
+        'Content-Type': 'application/json',
+    }
+
+
+def _post_supabase_rpc(function_name: str, payload: dict) -> dict:
+    if not SUPABASE_URL or not SUPABASE_SERVICE_ROLE_KEY:
+        raise RuntimeError('Supabase 服务配置缺失')
+
+    response = requests.post(
+        build_supabase_request_url(f'/rest/v1/rpc/{function_name}'),
+        headers={
+            **_build_supabase_service_headers(),
+            'Prefer': 'return=representation',
+        },
+        json=payload,
+        timeout=20,
+    )
+    response.raise_for_status()
+
+    try:
+        return response.json()
+    except ValueError as exc:
+        raise RuntimeError('Supabase RPC 返回了无效响应') from exc
+
+
+def _fetch_user_points_row(user_id: str) -> dict | None:
+    if not SUPABASE_URL or not SUPABASE_SERVICE_ROLE_KEY:
+        return None
+    normalized_user_id = str(user_id or '').strip()
+    if not normalized_user_id:
+        return None
+
+    response = requests.get(
+        build_supabase_request_url(f'/rest/v1/{SUPABASE_POINTS_TABLE}'),
+        headers=_build_supabase_service_headers(),
+        params={
+            'select': '*',
+            'user_id': f'eq.{normalized_user_id}',
+            'limit': '1',
+        },
+        timeout=20,
+    )
+    response.raise_for_status()
+    payload = response.json()
+    if not isinstance(payload, list) or not payload:
+        return None
+    row = payload[0]
+    return row if isinstance(row, dict) else None
+
+
+def ensure_user_points_balance(user_id: str) -> dict | None:
+    normalized_user_id = str(user_id or '').strip()
+    if not normalized_user_id:
+        return None
+    try:
+        payload = _post_supabase_rpc('ensure_user_points_balance', {'p_user_id': normalized_user_id})
+    except requests.RequestException as exc:
+        app.logger.warning('Failed to ensure user points balance for %s: %s', normalized_user_id, exc)
+        return None
+    except RuntimeError as exc:
+        app.logger.warning('Failed to ensure user points balance for %s: %s', normalized_user_id, exc)
+        return None
+    return payload if isinstance(payload, dict) else None
+
+
+def award_signup_bonus_points(user_id: str, amount: int) -> dict | None:
+    normalized_user_id = str(user_id or '').strip()
+    if not normalized_user_id:
+        return None
+    try:
+        payload = _post_supabase_rpc('award_signup_bonus_points', {'p_user_id': normalized_user_id, 'p_amount': int(amount)})
+    except requests.RequestException as exc:
+        app.logger.warning('Failed to award signup bonus for %s: %s', normalized_user_id, exc)
+        return None
+    except RuntimeError as exc:
+        app.logger.warning('Failed to award signup bonus for %s: %s', normalized_user_id, exc)
+        return None
+    return payload if isinstance(payload, dict) else None
+
+
+def claim_daily_free_points(user_id: str, amount: int) -> dict | None:
+    normalized_user_id = str(user_id or '').strip()
+    if not normalized_user_id:
+        return None
+    try:
+        payload = _post_supabase_rpc('claim_daily_free_points', {'p_user_id': normalized_user_id, 'p_amount': int(amount)})
+    except requests.RequestException as exc:
+        app.logger.warning('Failed to claim daily points for %s: %s', normalized_user_id, exc)
+        return None
+    except RuntimeError as exc:
+        app.logger.warning('Failed to claim daily points for %s: %s', normalized_user_id, exc)
+        return None
+    return payload if isinstance(payload, dict) else None
+
+
+def spend_user_points(user_id: str, amount: int) -> dict | None:
+    normalized_user_id = str(user_id or '').strip()
+    if not normalized_user_id:
+        return None
+    try:
+        payload = _post_supabase_rpc('spend_user_points', {'p_user_id': normalized_user_id, 'p_amount': int(amount)})
+    except requests.RequestException as exc:
+        app.logger.warning('Failed to spend user points for %s: %s', normalized_user_id, exc)
+        return None
+    except RuntimeError as exc:
+        app.logger.warning('Failed to spend user points for %s: %s', normalized_user_id, exc)
+        return None
+    return payload if isinstance(payload, dict) else None
+
+
+def get_user_points_balance(user_id: str) -> dict | None:
+    normalized_user_id = str(user_id or '').strip()
+    if not normalized_user_id:
+        return None
+    try:
+        return _fetch_user_points_row(normalized_user_id)
+    except requests.RequestException as exc:
+        app.logger.warning('Failed to fetch user points balance for %s: %s', normalized_user_id, exc)
+        return None
 
 
 def get_mode2_allowed_image_hosts() -> set[str]:
@@ -3043,7 +3175,21 @@ def auth_login():
             return jsonify({'success': False, 'error': '请输入邮箱和密码'}), 400
         data, _status_code = supabase_auth_password(email, password, 'login')
         session_data = normalize_supabase_session(data)
-        response_payload = {'success': True, 'user': session_data.get('user')}
+        user_id = _get_supabase_user_id(session_data)
+        points_row = ensure_user_points_balance(user_id) if user_id else None
+        if not points_row and user_id:
+            points_row = get_user_points_balance(user_id)
+        response_payload = {
+            'success': True,
+            'user': session_data.get('user'),
+            'points': {
+                'balance': int((points_row or {}).get('balance') or 0),
+                'total_earned': int((points_row or {}).get('total_earned') or 0),
+                'total_spent': int((points_row or {}).get('total_spent') or 0),
+                'signup_bonus': POINTS_SIGNUP_BONUS,
+                'daily_free': POINTS_DAILY_FREE,
+            },
+        }
         response = jsonify(response_payload)
         set_auth_session_cookie(response, session_data)
         return response
@@ -3063,7 +3209,25 @@ def auth_register():
             return jsonify({'success': False, 'error': '请输入邮箱和密码'}), 400
         data, _status_code = supabase_auth_password(email, password, 'signup')
         session_data = normalize_supabase_session(data)
-        response = jsonify({'success': True, 'user': session_data.get('user'), 'points': {'signup_bonus': POINTS_SIGNUP_BONUS, 'daily_free': POINTS_DAILY_FREE}})
+        user_id = _get_supabase_user_id(session_data)
+        points_row = ensure_user_points_balance(user_id) if user_id else None
+        signup_result = award_signup_bonus_points(user_id, POINTS_SIGNUP_BONUS) if user_id else None
+        if isinstance(signup_result, dict):
+            points_row = (signup_result.get('balance_row') or points_row or {}) if isinstance(signup_result.get('balance_row'), dict) else points_row
+        if not points_row and user_id:
+            points_row = get_user_points_balance(user_id)
+        response = jsonify({
+            'success': True,
+            'user': session_data.get('user'),
+            'points': {
+                'balance': int((points_row or {}).get('balance') or 0),
+                'total_earned': int((points_row or {}).get('total_earned') or 0),
+                'total_spent': int((points_row or {}).get('total_spent') or 0),
+                'signup_bonus': POINTS_SIGNUP_BONUS,
+                'daily_free': POINTS_DAILY_FREE,
+                'signup_bonus_awarded': bool((signup_result or {}).get('awarded')) if isinstance(signup_result, dict) else False,
+            }
+        })
         set_auth_session_cookie(response, session_data)
         return response
     except ValueError as exc:
@@ -3177,6 +3341,80 @@ def settings_refresh_api():
         return jsonify({'success': False, 'error': f'刷新设置失败：{exc}'}), 502
     except Exception as exc:
         return jsonify({'success': False, 'error': f'刷新设置失败：{exc}'}), 500
+
+
+@app.get('/api/points/balance')
+def points_balance_api():
+    try:
+        session_data = g.get('supabase_session') or get_supabase_session()
+        user_id = _get_supabase_user_id(session_data)
+        if not user_id:
+            return jsonify({'success': False, 'error': '请先登录'}), 401
+        points_row = ensure_user_points_balance(user_id) or get_user_points_balance(user_id) or {}
+        return jsonify({
+            'success': True,
+            'points': {
+                'user_id': user_id,
+                'balance': int(points_row.get('balance') or 0),
+                'total_earned': int(points_row.get('total_earned') or 0),
+                'total_spent': int(points_row.get('total_spent') or 0),
+                'signup_bonus_awarded_at': points_row.get('signup_bonus_awarded_at'),
+                'last_daily_claim_at': points_row.get('last_daily_claim_at'),
+                'signup_bonus': POINTS_SIGNUP_BONUS,
+                'daily_free': POINTS_DAILY_FREE,
+            },
+        })
+    except requests.RequestException as exc:
+        return jsonify({'success': False, 'error': f'读取积分失败：{exc}'}), 502
+    except Exception as exc:
+        return jsonify({'success': False, 'error': f'读取积分失败：{exc}'}), 500
+
+
+@app.post('/api/points/daily-claim')
+def points_daily_claim_api():
+    try:
+        session_data = g.get('supabase_session') or get_supabase_session()
+        user_id = _get_supabase_user_id(session_data)
+        if not user_id:
+            return jsonify({'success': False, 'error': '请先登录'}), 401
+        claim_result = claim_daily_free_points(user_id, POINTS_DAILY_FREE)
+        if not isinstance(claim_result, dict):
+            return jsonify({'success': False, 'error': '领取失败'}), 502
+        balance_row = claim_result.get('balance_row') or {}
+        if claim_result.get('claimed'):
+            return jsonify({
+                'success': True,
+                'claimed': True,
+                'points': {
+                    'user_id': user_id,
+                    'balance': int(balance_row.get('balance') or 0),
+                    'total_earned': int(balance_row.get('total_earned') or 0),
+                    'total_spent': int(balance_row.get('total_spent') or 0),
+                    'signup_bonus_awarded_at': balance_row.get('signup_bonus_awarded_at'),
+                    'last_daily_claim_at': balance_row.get('last_daily_claim_at'),
+                    'signup_bonus': POINTS_SIGNUP_BONUS,
+                    'daily_free': POINTS_DAILY_FREE,
+                },
+            })
+        return jsonify({
+            'success': False,
+            'claimed': False,
+            'error': '今日已领取',
+            'points': {
+                'user_id': user_id,
+                'balance': int(balance_row.get('balance') or 0),
+                'total_earned': int(balance_row.get('total_earned') or 0),
+                'total_spent': int(balance_row.get('total_spent') or 0),
+                'signup_bonus_awarded_at': balance_row.get('signup_bonus_awarded_at'),
+                'last_daily_claim_at': balance_row.get('last_daily_claim_at'),
+                'signup_bonus': POINTS_SIGNUP_BONUS,
+                'daily_free': POINTS_DAILY_FREE,
+            },
+        }), 409
+    except requests.RequestException as exc:
+        return jsonify({'success': False, 'error': f'领取失败：{exc}'}), 502
+    except Exception as exc:
+        return jsonify({'success': False, 'error': f'领取失败：{exc}'}), 500
 
 
 @app.post('/api/download-zip')
