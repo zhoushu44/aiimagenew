@@ -1,0 +1,354 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>登录 / 注册 · AI 电商视觉控制台</title>
+  <link rel="stylesheet" href="/static/css/landing.css">
+  <style>
+    body.auth-page {
+      display: grid;
+      place-items: center;
+      min-height: 100dvh;
+      padding: 20px;
+    }
+    .auth-shell {
+      width: min(100%, 980px);
+      display: grid;
+      grid-template-columns: minmax(0, 1.05fr) minmax(340px, 0.95fr);
+      gap: 14px;
+      align-items: stretch;
+    }
+    .auth-panel,
+    .auth-card {
+      border: 1px solid var(--line);
+      background: var(--surface);
+      box-shadow: var(--shadow);
+      backdrop-filter: blur(18px);
+      border-radius: var(--radius-xl);
+    }
+    .auth-panel {
+      padding: 28px;
+      display: grid;
+      gap: 18px;
+      align-content: start;
+    }
+    .auth-kicker {
+      text-transform: uppercase;
+      letter-spacing: 0.18em;
+      font-size: 11px;
+      color: var(--muted);
+    }
+    .auth-title {
+      margin: 0;
+      font-family: var(--font-display);
+      font-size: clamp(34px, 4vw, 58px);
+      line-height: 0.96;
+      letter-spacing: -0.06em;
+    }
+    .auth-copy {
+      margin: 0;
+      max-width: 46ch;
+      color: var(--muted);
+      line-height: 1.6;
+      font-size: 15px;
+    }
+    .auth-badges {
+      display: flex;
+      flex-wrap: wrap;
+      gap: 10px;
+    }
+    .auth-badge {
+      min-height: 36px;
+      padding: 0 14px;
+      border-radius: 999px;
+      display: inline-flex;
+      align-items: center;
+      border: 1px solid var(--line);
+      background: rgba(255,255,255,0.65);
+      color: var(--muted-strong);
+      font-size: 12px;
+    }
+    .auth-card {
+      padding: 24px;
+      display: grid;
+      gap: 16px;
+      align-content: start;
+    }
+    .auth-tabs {
+      display: grid;
+      grid-template-columns: repeat(2, minmax(0, 1fr));
+      gap: 8px;
+      padding: 6px;
+      border: 1px solid var(--line);
+      border-radius: 18px;
+      background: rgba(248,250,252,0.9);
+    }
+    .auth-tab {
+      min-height: 44px;
+      border: 0;
+      border-radius: 14px;
+      background: transparent;
+      color: var(--muted-strong);
+      cursor: pointer;
+      transition: background 160ms ease, color 160ms ease, transform 160ms ease;
+    }
+    .auth-tab.is-active {
+      background: var(--accent);
+      color: #fff;
+    }
+    .auth-form {
+      display: grid;
+      gap: 12px;
+    }
+    .field {
+      display: grid;
+      gap: 8px;
+    }
+    .field-label {
+      font-size: 12px;
+      letter-spacing: 0.12em;
+      text-transform: uppercase;
+      color: var(--muted);
+    }
+    .field input {
+      min-height: 48px;
+      border-radius: 16px;
+      border: 1px solid var(--line-strong);
+      padding: 0 14px;
+      background: rgba(255,255,255,0.92);
+      color: var(--text);
+      outline: none;
+    }
+    .field input:focus {
+      border-color: rgba(17,24,39,0.3);
+      box-shadow: 0 0 0 4px rgba(17,24,39,0.06);
+    }
+    .auth-action {
+      min-height: 48px;
+      border: 1px solid var(--accent);
+      border-radius: 16px;
+      background: var(--accent);
+      color: #fff;
+      font-weight: 600;
+      cursor: pointer;
+    }
+    .auth-note,
+    .auth-status,
+    .auth-helper {
+      color: var(--muted);
+      line-height: 1.6;
+      font-size: 13px;
+    }
+    .auth-status {
+      min-height: 20px;
+      color: var(--accent);
+    }
+    .auth-footer {
+      display: flex;
+      justify-content: space-between;
+      gap: 12px;
+      align-items: center;
+      flex-wrap: wrap;
+      padding-top: 4px;
+      border-top: 1px solid var(--line);
+    }
+    .auth-link {
+      color: var(--accent);
+      text-decoration: none;
+    }
+    .auth-link:hover {
+      text-decoration: underline;
+    }
+    .auth-side {
+      padding: 24px;
+      display: grid;
+      gap: 12px;
+      align-content: start;
+    }
+    .auth-side h2 {
+      margin: 0;
+      font-family: var(--font-display);
+      font-size: 22px;
+      line-height: 1;
+      letter-spacing: -0.04em;
+    }
+    .auth-list {
+      margin: 0;
+      padding-left: 18px;
+      display: grid;
+      gap: 10px;
+      color: var(--muted);
+      line-height: 1.6;
+      font-size: 14px;
+    }
+    .auth-status.is-error {
+      color: var(--danger);
+    }
+    .auth-status.is-success {
+      color: var(--success);
+    }
+    @media (max-width: 900px) {
+      .auth-shell { grid-template-columns: 1fr; }
+    }
+  </style>
+</head>
+<body class="auth-page">
+  <div class="auth-shell">
+    <section class="auth-panel">
+      <div class="auth-kicker">Supabase Email Auth</div>
+      <h1 class="auth-title">AI 电商视觉控制台</h1>
+      <p class="auth-copy">使用邮箱注册或登录后进入商品套图、A+ 详情页和服饰穿戴工作台。会话由后端校验并以 HttpOnly Cookie 保存，浏览器不会接触服务端密钥。</p>
+      <div class="auth-badges">
+        <span class="auth-badge">Email / Password</span>
+        <span class="auth-badge">Protected Workspaces</span>
+        <span class="auth-badge">Session Redirect</span>
+      </div>
+      <div class="auth-helper">如果你的邮箱尚未注册，直接切换到“注册”即可创建新账号。</div>
+    </section>
+
+    <section class="auth-card">
+      <div class="auth-tabs" role="tablist" aria-label="登录注册切换">
+        <button class="auth-tab is-active" id="loginTab" type="button" data-mode="login">登录</button>
+        <button class="auth-tab" id="registerTab" type="button" data-mode="register">注册</button>
+      </div>
+
+      <form class="auth-form" id="authForm">
+        <label class="field" for="emailInput">
+          <span class="field-label">邮箱</span>
+          <input id="emailInput" name="email" type="email" autocomplete="email" placeholder="name@example.com" required>
+        </label>
+
+        <label class="field" for="passwordInput">
+          <span class="field-label">密码</span>
+          <input id="passwordInput" name="password" type="password" autocomplete="current-password" placeholder="至少 6 位" minlength="6" required>
+        </label>
+
+        <label class="field" id="confirmField" for="confirmInput" hidden>
+          <span class="field-label">确认密码</span>
+          <input id="confirmInput" name="confirmPassword" type="password" autocomplete="new-password" placeholder="再次输入密码" minlength="6">
+        </label>
+
+        <button class="auth-action" id="submitBtn" type="submit">登录</button>
+        <div class="auth-status" id="authStatus" aria-live="polite"></div>
+        <div class="auth-note" id="authNote">登录后将自动跳转到工作台。</div>
+      </form>
+
+      <div class="auth-footer">
+        <a class="auth-link" href="/">返回首页</a>
+        <a class="auth-link" href="/logout">退出登录</a>
+      </div>
+    </section>
+
+    <section class="auth-card auth-side">
+      <h2>登录后可用</h2>
+      <ul class="auth-list">
+        <li>上传图片并生成套图结果</li>
+        <li>AI 帮写、风格分析与标题生成</li>
+        <li>工作台页面自动受保护，未登录会被重定向到这里</li>
+      </ul>
+    </section>
+  </div>
+
+  <script>
+    const loginTab = document.getElementById('loginTab');
+    const registerTab = document.getElementById('registerTab');
+    const authForm = document.getElementById('authForm');
+    const submitBtn = document.getElementById('submitBtn');
+    const authStatus = document.getElementById('authStatus');
+    const authNote = document.getElementById('authNote');
+    const passwordInput = document.getElementById('passwordInput');
+    const confirmField = document.getElementById('confirmField');
+    const confirmInput = document.getElementById('confirmInput');
+    const emailInput = document.getElementById('emailInput');
+
+    const params = new URLSearchParams(window.location.search);
+    const nextPath = (() => {
+      const raw = (params.get('next') || '/suite').trim();
+      if (!raw.startsWith('/') || raw.startsWith('//')) {
+        return '/suite';
+      }
+      return raw;
+    })();
+
+    let mode = 'login';
+
+    function setStatus(message, type = '') {
+      authStatus.className = `auth-status${type ? ` is-${type}` : ''}`;
+      authStatus.textContent = message || '';
+    }
+
+    function setMode(nextMode) {
+      mode = nextMode;
+      const isRegister = mode === 'register';
+      loginTab.classList.toggle('is-active', !isRegister);
+      registerTab.classList.toggle('is-active', isRegister);
+      confirmField.hidden = !isRegister;
+      passwordInput.autocomplete = isRegister ? 'new-password' : 'current-password';
+      submitBtn.textContent = isRegister ? '注册' : '登录';
+      authNote.textContent = isRegister ? '注册后如已开启邮箱确认，请按邮箱提示完成验证。' : '登录后将自动跳转到工作台。';
+      setStatus('');
+    }
+
+    loginTab.addEventListener('click', () => setMode('login'));
+    registerTab.addEventListener('click', () => setMode('register'));
+
+    async function checkSession() {
+      try {
+        const response = await fetch('/api/auth/session', { method: 'POST', headers: { 'Content-Type': 'application/json' } });
+        const data = await response.json();
+        if (data?.authenticated) {
+          window.location.replace(nextPath);
+        }
+      } catch (error) {
+        // ignore session bootstrap errors on the login page
+      }
+    }
+
+    authForm.addEventListener('submit', async (event) => {
+      event.preventDefault();
+      const email = emailInput.value.trim().toLowerCase();
+      const password = passwordInput.value;
+      const confirmPassword = confirmInput.value;
+
+      if (mode === 'register' && password !== confirmPassword) {
+        setStatus('两次输入的密码不一致', 'error');
+        return;
+      }
+
+      submitBtn.disabled = true;
+      setStatus(mode === 'register' ? '正在注册…' : '正在登录…');
+
+      try {
+        const endpoint = mode === 'register' ? '/api/auth/register' : '/api/auth/login';
+        const response = await fetch(endpoint, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ email, password }),
+        });
+        const data = await response.json();
+        if (!response.ok || !data.success) {
+          throw new Error(data.error || '认证失败');
+        }
+
+        if (mode === 'register' && !data.user?.id) {
+          setStatus('注册成功，请查看邮箱完成验证后再登录。', 'success');
+          authNote.textContent = '如果 Supabase 开启了邮箱确认，验证完成后再登录。';
+          authForm.reset();
+          setMode('login');
+          return;
+        }
+
+        window.location.replace(nextPath);
+      } catch (error) {
+        setStatus(error.message || '认证失败', 'error');
+      } finally {
+        submitBtn.disabled = false;
+      }
+    });
+
+    setMode('login');
+    checkSession();
+  </script>
+</body>
+</html>

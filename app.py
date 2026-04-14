@@ -8,6 +8,7 @@ import os
 import re
 import shutil
 import socket
+import threading
 import uuid
 import zipfile
 from datetime import datetime, timedelta
@@ -16,7 +17,7 @@ from urllib.parse import urljoin, urlparse
 
 import requests
 from dotenv import load_dotenv
-from flask import Flask, jsonify, request, send_file, send_from_directory, url_for
+from flask import Flask, g, jsonify, make_response, redirect, request, send_file, send_from_directory, url_for
 from openai import APIError, APIStatusError, OpenAI
 from requests.adapters import HTTPAdapter
 from urllib3.util.retry import Retry
@@ -26,6 +27,14 @@ BASE_DIR = Path(__file__).resolve().parent
 load_dotenv(BASE_DIR / '.env')
 
 app = Flask(__name__, static_folder=str(BASE_DIR / 'static'), static_url_path='/static')
+
+
+def get_first_env(names: list[str]) -> str:
+    for name in names:
+        value = os.getenv(name, '').strip()
+        if value:
+            return value
+    raise ValueError(f'缺少环境变量：{" / ".join(names)}')
 
 MAX_IMAGE_UPLOADS = 3
 ALLOWED_IMAGE_MIME_TYPES = {
@@ -43,23 +52,256 @@ IMAGE_SIGNATURES = {
     'image/gif': [b'GIF87a', b'GIF89a'],
     'image/bmp': [b'BM'],
 }
-UPLOAD_MAX_BYTES = max(int((os.getenv('UPLOAD_MAX_BYTES') or str(15 * 1024 * 1024)).strip() or 0), 1)
-UPLOAD_MAX_FILE_BYTES = max(int((os.getenv('UPLOAD_MAX_FILE_BYTES') or str(8 * 1024 * 1024)).strip() or 0), 1)
-GENERATED_SUITE_RETENTION_DAYS = max(int((os.getenv('GENERATED_SUITE_RETENTION_DAYS') or '7').strip() or 0), 0)
-GENERATED_SUITE_RETENTION_COUNT = max(int((os.getenv('GENERATED_SUITE_RETENTION_COUNT') or '20').strip() or 0), 0)
 GENERATED_SUITES_DIR = BASE_DIR / 'generated-suites'
-MODE2_ALLOWED_IMAGE_HOSTS = {
-    host.strip().lower()
-    for host in (os.getenv('MODE2_ALLOWED_IMAGE_HOSTS') or '').split(',')
-    if host.strip()
-}
-app.config['MAX_CONTENT_LENGTH'] = UPLOAD_MAX_BYTES
+SUPABASE_SESSION_COOKIE = 'aiimagenew_supabase_session'
+SUPABASE_REDIRECT_PATH = '/auth'
+PROTECTED_PAGE_PATHS = {'/suite', '/aplus', '/fashion', '/mode2', '/settings'}
+PUBLIC_API_PREFIXES = ('/api/auth/',)
+PUBLIC_PATH_PREFIXES = ('/static/', '/generated/')
+PUBLIC_PATHS = {'/', '/auth', '/logout'}
+SUPABASE_URL = (os.getenv('SUPABASE_URL') or os.getenv('SUPABASE_PROJECT_URL') or '').strip()
+SUPABASE_ANON_KEY = (os.getenv('SUPABASE_ANON_KEY') or os.getenv('SUPABASE_PUBLISHABLE_KEY') or '').strip()
+SUPABASE_SERVICE_ROLE_KEY = (os.getenv('SUPABASE_SERVICE_ROLE_KEY') or os.getenv('SUPABASE_SERVICE_KEY') or '').strip()
+SUPABASE_SETTINGS_TABLE = 'api_settings'
+SUPABASE_SETTINGS_SCOPE = 'global'
 
+
+def build_supabase_request_url(path: str) -> str:
+    return f'{SUPABASE_URL.rstrip("/")}{path}'
+
+
+def get_mode2_allowed_image_hosts() -> set[str]:
+    raw_value = get_supabase_setting('MODE2_ALLOWED_IMAGE_HOSTS', '')
+    if not raw_value:
+        raw_value = os.getenv('MODE2_ALLOWED_IMAGE_HOSTS', '').strip()
+    return {
+        host.strip().lower()
+        for host in raw_value.split(',')
+        if host.strip()
+    }
+
+
+def _normalize_supabase_setting_key(key: str) -> str:
+    return str(key or '').strip().upper()
+
+
+def _normalize_supabase_setting_value(value) -> str:
+    if value is None:
+        return ''
+    return str(value).strip()
+
+
+_SUPABASE_SETTINGS_CACHE: dict[str, str] | None = None
+_SUPABASE_SETTINGS_LOCK = threading.Lock()
+
+
+def fetch_supabase_settings() -> dict[str, str]:
+    if not SUPABASE_URL or not SUPABASE_SERVICE_ROLE_KEY:
+        return {}
+
+    response = requests.get(
+        build_supabase_request_url(f'/rest/v1/{SUPABASE_SETTINGS_TABLE}'),
+        headers={
+            'apikey': SUPABASE_SERVICE_ROLE_KEY,
+            'Authorization': f'Bearer {SUPABASE_SERVICE_ROLE_KEY}',
+            'Content-Type': 'application/json',
+        },
+        params={
+            'select': 'setting_key,setting_value,scope',
+            'scope': f'eq.{SUPABASE_SETTINGS_SCOPE}',
+        },
+        timeout=20,
+    )
+    response.raise_for_status()
+    payload = response.json()
+    if not isinstance(payload, list):
+        raise RuntimeError('Supabase 设置表返回格式异常')
+
+    settings: dict[str, str] = {}
+    for row in payload:
+        if not isinstance(row, dict):
+            continue
+        setting_key = _normalize_supabase_setting_key(row.get('setting_key'))
+        if not setting_key:
+            continue
+        settings[setting_key] = _normalize_supabase_setting_value(row.get('setting_value'))
+    return settings
+
+
+def _supabase_setting_is_sensitive(setting_key: str) -> bool:
+    normalized_key = _normalize_supabase_setting_key(setting_key)
+    return any(token in normalized_key for token in {'KEY', 'SECRET', 'TOKEN', 'PASSWORD', 'PASS', 'PRIVATE'})
+
+
+def _mask_supabase_setting_value(setting_value: str) -> str:
+    return '••••••••' if setting_value else ''
+
+
+def fetch_supabase_setting_records(scope: str = SUPABASE_SETTINGS_SCOPE) -> list[dict[str, object]]:
+    if not SUPABASE_URL or not SUPABASE_SERVICE_ROLE_KEY:
+        return []
+
+    normalized_scope = str(scope or '').strip() or SUPABASE_SETTINGS_SCOPE
+    response = requests.get(
+        build_supabase_request_url(f'/rest/v1/{SUPABASE_SETTINGS_TABLE}'),
+        headers={
+            'apikey': SUPABASE_SERVICE_ROLE_KEY,
+            'Authorization': f'Bearer {SUPABASE_SERVICE_ROLE_KEY}',
+            'Content-Type': 'application/json',
+        },
+        params={
+            'select': 'scope,setting_key,setting_value,description,updated_at',
+            'scope': f'eq.{normalized_scope}',
+            'order': 'setting_key.asc',
+        },
+        timeout=20,
+    )
+    response.raise_for_status()
+    payload = response.json()
+    if not isinstance(payload, list):
+        raise RuntimeError('Supabase 设置表返回格式异常')
+
+    records: list[dict[str, object]] = []
+    for row in payload:
+        if not isinstance(row, dict):
+            continue
+        setting_key = _normalize_supabase_setting_key(row.get('setting_key'))
+        if not setting_key:
+            continue
+        raw_value = _normalize_supabase_setting_value(row.get('setting_value'))
+        is_sensitive = _supabase_setting_is_sensitive(setting_key)
+        records.append(
+            {
+                'scope': str(row.get('scope') or normalized_scope),
+                'setting_key': setting_key,
+                'description': str(row.get('description') or '').strip(),
+                'setting_value': '' if is_sensitive else raw_value,
+                'value_preview': _mask_supabase_setting_value(raw_value) if is_sensitive else raw_value,
+                'is_sensitive': is_sensitive,
+                'updated_at': str(row.get('updated_at') or ''),
+            }
+        )
+    return records
+
+
+def reload_supabase_settings_cache() -> dict[str, str]:
+    global _SUPABASE_SETTINGS_CACHE
+    with _SUPABASE_SETTINGS_LOCK:
+        try:
+            _SUPABASE_SETTINGS_CACHE = fetch_supabase_settings()
+        except requests.RequestException as exc:
+            app.logger.warning('Failed to reload Supabase settings: %s', exc)
+            _SUPABASE_SETTINGS_CACHE = {}
+        except Exception as exc:
+            app.logger.warning('Unexpected Supabase settings reload failure: %s', exc)
+            _SUPABASE_SETTINGS_CACHE = {}
+    return dict(_SUPABASE_SETTINGS_CACHE)
+
+
+def update_supabase_setting(scope: str, setting_key: str, setting_value: str) -> dict:
+    if not SUPABASE_URL or not SUPABASE_SERVICE_ROLE_KEY:
+        raise RuntimeError('Supabase 服务配置缺失')
+
+    normalized_scope = str(scope or '').strip() or SUPABASE_SETTINGS_SCOPE
+    normalized_key = _normalize_supabase_setting_key(setting_key)
+    if not normalized_key:
+        raise ValueError('setting_key 不能为空')
+
+    response = requests.patch(
+        build_supabase_request_url(f'/rest/v1/{SUPABASE_SETTINGS_TABLE}'),
+        headers={
+            'apikey': SUPABASE_SERVICE_ROLE_KEY,
+            'Authorization': f'Bearer {SUPABASE_SERVICE_ROLE_KEY}',
+            'Content-Type': 'application/json',
+            'Prefer': 'return=representation',
+        },
+        params={
+            'scope': f'eq.{normalized_scope}',
+            'setting_key': f'eq.{normalized_key}',
+        },
+        json={
+            'setting_value': setting_value,
+        },
+        timeout=20,
+    )
+    response.raise_for_status()
+    payload = response.json()
+    if not isinstance(payload, list) or not payload:
+        raise RuntimeError('未找到可更新的 Supabase 设置')
+
+    reload_supabase_settings_cache()
+    return payload[0]
+
+
+def get_supabase_settings() -> dict[str, str]:
+    global _SUPABASE_SETTINGS_CACHE
+    if _SUPABASE_SETTINGS_CACHE is None:
+        with _SUPABASE_SETTINGS_LOCK:
+            if _SUPABASE_SETTINGS_CACHE is None:
+                try:
+                    _SUPABASE_SETTINGS_CACHE = fetch_supabase_settings()
+                except requests.RequestException as exc:
+                    app.logger.warning('Failed to load Supabase settings: %s', exc)
+                    _SUPABASE_SETTINGS_CACHE = {}
+                except Exception as exc:
+                    app.logger.warning('Unexpected Supabase settings load failure: %s', exc)
+                    _SUPABASE_SETTINGS_CACHE = {}
+    return dict(_SUPABASE_SETTINGS_CACHE)
+
+
+def get_supabase_setting(name: str, default: str = '') -> str:
+    key = _normalize_supabase_setting_key(name)
+    if not key:
+        return default
+    settings = get_supabase_settings()
+    value = settings.get(key)
+    if value:
+        return value
+    return os.getenv(name, default).strip()
+
+
+def get_supabase_setting_int(name: str, default: int) -> int:
+    raw_value = get_supabase_setting(name, str(default))
+    try:
+        return int(raw_value)
+    except ValueError as exc:
+        raise ValueError(f'Supabase 设置 {name} 必须为整数') from exc
+
+
+def get_supabase_setting_float(name: str, default: float) -> float:
+    raw_value = get_supabase_setting(name, str(default))
+    try:
+        return float(raw_value)
+    except ValueError as exc:
+        raise ValueError(f'Supabase 设置 {name} 必须为数字') from exc
+
+
+def get_supabase_setting_bool(name: str, default: bool = False) -> bool:
+    raw_value = get_supabase_setting(name, 'true' if default else 'false').lower()
+    return raw_value in {'1', 'true', 'yes', 'on'}
+
+
+def get_supabase_setting_csv(name: str) -> set[str]:
+    raw_value = get_supabase_setting(name, '')
+    return {
+        value.strip().lower()
+        for value in raw_value.split(',')
+        if value.strip()
+    }
+
+UPLOAD_MAX_BYTES = max(get_supabase_setting_int('UPLOAD_MAX_BYTES', 15 * 1024 * 1024), 1)
+UPLOAD_MAX_FILE_BYTES = max(get_supabase_setting_int('UPLOAD_MAX_FILE_BYTES', 8 * 1024 * 1024), 1)
+GENERATED_SUITE_RETENTION_DAYS = max(get_supabase_setting_int('GENERATED_SUITE_RETENTION_DAYS', 7), 0)
+GENERATED_SUITE_RETENTION_COUNT = max(get_supabase_setting_int('GENERATED_SUITE_RETENTION_COUNT', 20), 0)
+MODE2_ALLOWED_IMAGE_HOSTS = get_mode2_allowed_image_hosts()
+app.config['MAX_CONTENT_LENGTH'] = UPLOAD_MAX_BYTES
 SYSTEM_PROMPT = (
     '你是电商商品图识别与商品卖点文案专家。'
     '你必须同时参考用户提供的图片内容与已有文案，输出适合商品详情/作图使用的中文商品文案。'
     '如果图片中某些参数无法确认，可以使用“约”“预估”“图中可见”等保守表达，禁止编造明显精确但无依据的数据。'
 )
+
+
 
 PRODUCT_JSON_SYSTEM_PROMPT = (
     '你是商品主体不可变特征结构化提取专家。'
@@ -585,13 +827,119 @@ def get_optional_int_env(name: str, default: int) -> int:
 
 
 def get_optional_bool_env(name: str, default: bool = False) -> bool:
-    value = get_optional_env(name, '1' if default else '0').lower()
-    return value in {'1', 'true', 'yes', 'on'}
+    raw_value = get_optional_env(name, 'true' if default else 'false').lower()
+    return raw_value in {'1', 'true', 'yes', 'on'}
 
 
-def sanitize_filename_part(value: str, fallback: str) -> str:
-    cleaned = SAFE_NAME_PATTERN.sub('-', (value or '').strip()).strip('-_')
-    return cleaned[:40] or fallback
+def build_supabase_auth_headers() -> dict:
+    return {
+        'apikey': SUPABASE_ANON_KEY,
+        'Content-Type': 'application/json',
+    }
+
+
+def build_supabase_request_url(path: str) -> str:
+    return f'{SUPABASE_URL.rstrip("/")}{path}'
+
+
+def parse_supabase_session_cookie() -> dict | None:
+    raw_cookie = request.cookies.get(SUPABASE_SESSION_COOKIE)
+    if not raw_cookie:
+        return None
+    try:
+        session_data = json.loads(raw_cookie)
+    except json.JSONDecodeError:
+        return None
+    if not isinstance(session_data, dict):
+        return None
+    return session_data
+
+
+
+def get_supabase_session() -> dict | None:
+    session_data = parse_supabase_session_cookie()
+    if not session_data:
+        return None
+    access_token = str(session_data.get('access_token') or '').strip()
+    if not access_token:
+        return None
+
+    try:
+        response = requests.get(
+            build_supabase_request_url('/auth/v1/user'),
+            headers={
+                **build_supabase_auth_headers(),
+                'Authorization': f'Bearer {access_token}',
+            },
+            timeout=15,
+        )
+    except requests.RequestException:
+        return None
+
+    if response.status_code != 200:
+        return None
+
+    payload = response.json()
+    session_data['user'] = payload
+    return session_data
+
+
+def clear_auth_session_cookie(response):
+    response.delete_cookie(SUPABASE_SESSION_COOKIE, path='/')
+    return response
+
+
+def auth_response_from_session(session_data: dict, redirect_path: str = '/suite'):
+    response = redirect(redirect_path)
+    set_auth_session_cookie(response, session_data)
+    return response
+
+
+def supabase_auth_password(email: str, password: str, action: str) -> tuple[dict, int]:
+    endpoint = '/auth/v1/signup' if action == 'signup' else '/auth/v1/token?grant_type=password'
+    payload = {'email': email, 'password': password}
+    try:
+        response = requests.post(
+            build_supabase_request_url(endpoint),
+            headers=build_supabase_auth_headers(),
+            json=payload,
+            timeout=20,
+        )
+    except requests.RequestException as exc:
+        raise RuntimeError(f'Supabase 请求失败：{exc}') from exc
+
+    try:
+        data = response.json()
+    except ValueError as exc:
+        raise RuntimeError('Supabase 返回了无效响应') from exc
+
+    if response.status_code >= 400:
+        message = data.get('msg') or data.get('message') or data.get('error_description') or data.get('error') or '认证失败'
+        raise ValueError(message)
+
+    if not isinstance(data, dict):
+        raise RuntimeError('Supabase 响应格式错误')
+
+    return data, response.status_code
+
+
+def normalize_supabase_session(payload: dict) -> dict:
+    user = payload.get('user') or {}
+    return {
+        'access_token': payload.get('access_token'),
+        'refresh_token': payload.get('refresh_token'),
+        'token_type': payload.get('token_type', 'bearer'),
+        'expires_in': payload.get('expires_in'),
+        'expires_at': payload.get('expires_at'),
+        'user': user,
+    }
+
+
+def require_auth_session() -> dict | None:
+    session_data = get_supabase_session()
+    g.supabase_session = session_data
+    g.supabase_user = (session_data or {}).get('user') if session_data else None
+    return session_data
 
 
 def build_task_name(platform: str, mode: str, count: int) -> str:
@@ -686,7 +1034,7 @@ def resolve_image_size(image_size_ratio: str) -> str:
     ratio = (image_size_ratio or '').strip()
     if ratio in IMAGE_SIZE_RATIO_MAP:
         return IMAGE_SIZE_RATIO_MAP[ratio]
-    return get_optional_env('ARK_IMAGE_SIZE', '2048x2048')
+    return get_supabase_setting('ARK_IMAGE_SIZE', '2048x2048')
 
 
 def file_to_data_url(file_storage) -> str:
@@ -783,10 +1131,10 @@ def create_chat_completion_session():
 
 def call_chat_completion(system_prompt: str, user_content, temperature: float = 0.7, timeout_seconds: int = 60):
     client = OpenAI(
-        api_key=get_env('OPENAI_API_KEY'),
-        base_url=get_env('OPENAI_BASE_URL').rstrip('/'),
+        api_key=get_supabase_setting('OPENAI_API_KEY', get_env('OPENAI_API_KEY')),
+        base_url=get_supabase_setting('OPENAI_BASE_URL', get_env('OPENAI_BASE_URL')).rstrip('/'),
     )
-    model = get_env('OPENAI_MODEL')
+    model = get_supabase_setting('OPENAI_MODEL', get_env('OPENAI_MODEL'))
 
     response = client.chat.completions.create(
         model=model,
@@ -2125,30 +2473,30 @@ def build_aplus_plan(platform: str, selling_text: str, selected_module_keys, ima
 
 def get_ark_client() -> OpenAI:
     return OpenAI(
-        api_key=get_env('ARK_API_KEY'),
-        base_url=get_optional_env('ARK_BASE_URL', 'https://ark.cn-beijing.volces.com/api/v3').rstrip('/'),
+        api_key=get_supabase_setting('ARK_API_KEY', get_env('ARK_API_KEY')),
+        base_url=get_supabase_setting('ARK_BASE_URL', get_optional_env('ARK_BASE_URL', 'https://ark.cn-beijing.volces.com/api/v3')).rstrip('/'),
     )
 
 
 def get_mode2_client() -> OpenAI:
     return OpenAI(
-        api_key=get_env('MODE2_OPENAI_API_KEY'),
-        base_url=get_env('MODE2_OPENAI_BASE_URL').rstrip('/'),
+        api_key=get_supabase_setting('MODE2_OPENAI_API_KEY', get_env('MODE2_OPENAI_API_KEY')),
+        base_url=get_supabase_setting('MODE2_OPENAI_BASE_URL', get_env('MODE2_OPENAI_BASE_URL')).rstrip('/'),
     )
 
 
 def resolve_mode2_image_size(ratio: str, resolution: str) -> str:
-    normalized_ratio = (ratio or '').strip() or get_optional_env('MODE2_DEFAULT_RATIO', '1:1')
+    normalized_ratio = (ratio or '').strip() or get_supabase_setting('MODE2_DEFAULT_RATIO', get_optional_env('MODE2_DEFAULT_RATIO', '1:1'))
     normalized_resolution = (resolution or '').strip()
     if normalized_resolution:
         return normalized_resolution
     if normalized_ratio in IMAGE_SIZE_RATIO_MAP:
         return IMAGE_SIZE_RATIO_MAP[normalized_ratio]
-    return get_optional_env('MODE2_DEFAULT_RESOLUTION', '2048x2048')
+    return get_supabase_setting('MODE2_DEFAULT_RESOLUTION', get_optional_env('MODE2_DEFAULT_RESOLUTION', '2048x2048'))
 
 
 def get_mode2_sample_strength(sample_strength: str) -> float:
-    raw_value = (sample_strength or '').strip() or get_optional_env('MODE2_DEFAULT_SAMPLE_STRENGTH', '0.65')
+    raw_value = (sample_strength or '').strip() or get_supabase_setting('MODE2_DEFAULT_SAMPLE_STRENGTH', get_optional_env('MODE2_DEFAULT_SAMPLE_STRENGTH', '0.65'))
     try:
         return float(raw_value)
     except ValueError as exc:
@@ -2178,7 +2526,8 @@ def validate_mode2_remote_image_url(image_url: str) -> str:
     if not normalized_url:
         raise ValueError('参考图片链接不能为空')
 
-    if not MODE2_ALLOWED_IMAGE_HOSTS:
+    allowed_hosts = get_mode2_allowed_image_hosts()
+    if not allowed_hosts:
         raise ValueError('MODE2_ALLOWED_IMAGE_HOSTS 未配置，暂不支持远程参考图片')
 
     parsed_url = urlparse(normalized_url)
@@ -2188,7 +2537,7 @@ def validate_mode2_remote_image_url(image_url: str) -> str:
         raise ValueError('参考图片链接缺少主机名')
 
     hostname = parsed_url.hostname.lower()
-    if hostname not in MODE2_ALLOWED_IMAGE_HOSTS:
+    if hostname not in allowed_hosts:
         raise ValueError('参考图片链接域名未被允许')
     if is_private_ip_address(hostname):
         raise ValueError('参考图片链接不能指向内网地址')
@@ -2253,7 +2602,7 @@ def pick_generated_image_item(response):
 
 
 def call_mode2_image_edit(client: OpenAI, prompt: str, image_payloads, ratio: str, resolution: str, sample_strength: str):
-    model = get_env('MODE2_IMAGE_EDIT_MODEL')
+    model = get_supabase_setting('MODE2_IMAGE_EDIT_MODEL', get_optional_env('MODE2_IMAGE_EDIT_MODEL', 'doubao-seedream-5-0-260128'))
     request_payload = {
         'model': model,
         'prompt': prompt,
@@ -2273,7 +2622,7 @@ def call_mode2_image_edit(client: OpenAI, prompt: str, image_payloads, ratio: st
 
 
 def call_mode2_text2image(client: OpenAI, prompt: str, ratio: str, resolution: str):
-    model = get_env('MODE2_TEXT2IMAGE_MODEL')
+    model = get_supabase_setting('MODE2_TEXT2IMAGE_MODEL', get_optional_env('MODE2_TEXT2IMAGE_MODEL', 'doubao-seedream-5-0-260128'))
     response = client.images.generate(
         model=model,
         prompt=prompt,
@@ -2453,12 +2802,12 @@ def build_plan_control_prompt(item: dict, all_types) -> str:
 
 
 def call_image_generation(client: OpenAI, prompt: str, image_payloads, image_size_ratio: str, text_type: str, country: str, product_json=None, image_type: str = '', plan_item=None, all_plan_types=None, max_images: int = 1):
-    model = get_optional_env('ARK_IMAGE_MODEL', 'doubao-seedream-5-0-260128')
+    model = get_supabase_setting('ARK_IMAGE_MODEL', get_optional_env('ARK_IMAGE_MODEL', 'doubao-seedream-5-0-260128'))
     size = resolve_image_size(image_size_ratio)
-    quality = get_optional_env('ARK_IMAGE_QUALITY', '')
-    watermark = get_optional_bool_env('ARK_IMAGE_WATERMARK', False)
-    sequential_mode = get_optional_env('ARK_SEQUENTIAL_IMAGE_GENERATION', 'auto')
-    sequential_max_images = get_optional_int_env('ARK_SEQUENTIAL_MAX_IMAGES', 1)
+    quality = get_supabase_setting('ARK_IMAGE_QUALITY', get_optional_env('ARK_IMAGE_QUALITY', ''))
+    watermark = get_supabase_setting_bool('ARK_IMAGE_WATERMARK', get_optional_bool_env('ARK_IMAGE_WATERMARK', False))
+    sequential_mode = get_supabase_setting('ARK_SEQUENTIAL_IMAGE_GENERATION', get_optional_env('ARK_SEQUENTIAL_IMAGE_GENERATION', 'auto'))
+    sequential_max_images = get_supabase_setting_int('ARK_SEQUENTIAL_MAX_IMAGES', get_optional_int_env('ARK_SEQUENTIAL_MAX_IMAGES', 1))
     normalized_product_json = normalize_product_json(product_json) if product_json else None
     product_json_text = build_product_json_prompt_text(normalized_product_json)
     must_keep = '；'.join((normalized_product_json or {}).get('must_keep') or []) or '未单独提取'
@@ -2549,7 +2898,7 @@ def generate_suite_images(plan: dict, image_payloads, task_id: str, image_size_r
     images = []
     all_plan_types = [str(item.get('type', '')).strip() for item in plan.get('items', []) if str(item.get('type', '')).strip()]
     plan_items = list(plan.get('items') or [])
-    sequential_max_images = max(get_optional_int_env('ARK_SEQUENTIAL_MAX_IMAGES', 1), 1)
+    sequential_max_images = max(get_supabase_setting_int('ARK_SEQUENTIAL_MAX_IMAGES', get_optional_int_env('ARK_SEQUENTIAL_MAX_IMAGES', 1)), 1)
     index = 0
 
     while index < len(plan_items):
@@ -2635,9 +2984,104 @@ def generate_aplus_images(plan: dict, image_payloads, task_id: str, image_size_r
     return images
 
 
-@app.errorhandler(RequestEntityTooLarge)
-def handle_request_entity_too_large(_exc):
-    return jsonify({'success': False, 'error': f'上传内容过大，请控制在 {UPLOAD_MAX_BYTES // (1024 * 1024)}MB 以内'}), 413
+@app.before_request
+def guard_authentication():
+    path = request.path.rstrip('/') or '/'
+    if path in PUBLIC_PATHS or any(path.startswith(prefix) for prefix in PUBLIC_PATH_PREFIXES):
+        g.supabase_session = get_supabase_session()
+        g.supabase_user = (g.supabase_session or {}).get('user') if g.supabase_session else None
+        return None
+
+    if any(path.startswith(prefix) for prefix in PUBLIC_API_PREFIXES):
+        g.supabase_session = get_supabase_session()
+        g.supabase_user = (g.supabase_session or {}).get('user') if g.supabase_session else None
+        return None
+
+    if path in PROTECTED_PAGE_PATHS or path.startswith('/generated') or path.startswith('/api/'):
+        session_data = get_supabase_session()
+        g.supabase_session = session_data
+        g.supabase_user = (session_data or {}).get('user') if session_data else None
+        if not session_data:
+            if path.startswith('/api/'):
+                return jsonify({'success': False, 'error': '请先登录'}), 401
+            next_path = request.full_path.rstrip('?') if request.query_string else request.path
+            return redirect(f"{SUPABASE_REDIRECT_PATH}?next={next_path}")
+        return None
+
+    g.supabase_session = get_supabase_session()
+    g.supabase_user = (g.supabase_session or {}).get('user') if g.supabase_session else None
+    return None
+
+
+@app.get('/auth')
+def auth_page():
+    if g.get('supabase_session'):
+        next_path = request.args.get('next', '/suite').strip() or '/suite'
+        if not next_path.startswith('/') or next_path.startswith('//'):
+            next_path = '/suite'
+        return redirect(next_path)
+    return send_from_directory(BASE_DIR, 'auth.html')
+
+
+@app.post('/api/auth/session')
+def auth_session_api():
+    session_data = g.get('supabase_session') or get_supabase_session()
+    if not session_data:
+        return jsonify({'success': True, 'authenticated': False, 'user': None})
+    return jsonify({'success': True, 'authenticated': True, 'user': session_data.get('user'), 'session': session_data})
+
+
+@app.post('/api/auth/login')
+def auth_login():
+    try:
+        payload = request.get_json(silent=True) or {}
+        email = str(payload.get('email') or '').strip().lower()
+        password = str(payload.get('password') or '')
+        if not email or not password:
+            return jsonify({'success': False, 'error': '请输入邮箱和密码'}), 400
+        data, _status_code = supabase_auth_password(email, password, 'login')
+        session_data = normalize_supabase_session(data)
+        response_payload = {'success': True, 'user': session_data.get('user')}
+        response = jsonify(response_payload)
+        set_auth_session_cookie(response, session_data)
+        return response
+    except ValueError as exc:
+        return jsonify({'success': False, 'error': str(exc)}), 400
+    except RuntimeError as exc:
+        return jsonify({'success': False, 'error': str(exc)}), 502
+
+
+@app.post('/api/auth/register')
+def auth_register():
+    try:
+        payload = request.get_json(silent=True) or {}
+        email = str(payload.get('email') or '').strip().lower()
+        password = str(payload.get('password') or '')
+        if not email or not password:
+            return jsonify({'success': False, 'error': '请输入邮箱和密码'}), 400
+        data, _status_code = supabase_auth_password(email, password, 'signup')
+        session_data = normalize_supabase_session(data)
+        response = jsonify({'success': True, 'user': session_data.get('user')})
+        set_auth_session_cookie(response, session_data)
+        return response
+    except ValueError as exc:
+        return jsonify({'success': False, 'error': str(exc)}), 400
+    except RuntimeError as exc:
+        return jsonify({'success': False, 'error': str(exc)}), 502
+
+
+@app.get('/logout')
+def auth_logout_page():
+    response = redirect('/auth')
+    clear_auth_session_cookie(response)
+    return response
+
+
+@app.post('/api/auth/logout')
+def auth_logout_api():
+    response = jsonify({'success': True})
+    clear_auth_session_cookie(response)
+    return response
 
 
 @app.get('/')
@@ -2665,9 +3109,72 @@ def mode2_page():
     return send_from_directory(BASE_DIR, 'mode2.html')
 
 
+@app.get('/settings')
+def settings_page():
+    return send_from_directory(BASE_DIR, 'settings.html')
+
+
 @app.get('/generated/<path:path>')
 def serve_generated_file(path: str):
     return send_from_directory(GENERATED_SUITES_DIR, path)
+
+
+@app.get('/api/settings')
+def settings_list_api():
+    scope = request.args.get('scope', SUPABASE_SETTINGS_SCOPE)
+    try:
+        records = fetch_supabase_setting_records(scope)
+        return jsonify({'success': True, 'scope': str(scope or SUPABASE_SETTINGS_SCOPE).strip() or SUPABASE_SETTINGS_SCOPE, 'records': records})
+    except requests.RequestException as exc:
+        return jsonify({'success': False, 'error': f'读取设置失败：{exc}'}), 502
+    except Exception as exc:
+        return jsonify({'success': False, 'error': f'读取设置失败：{exc}'}), 500
+
+
+@app.patch('/api/settings')
+def settings_update_api():
+    try:
+        payload = request.get_json(silent=True) or {}
+        scope = str(payload.get('scope') or SUPABASE_SETTINGS_SCOPE).strip() or SUPABASE_SETTINGS_SCOPE
+        setting_key = str(payload.get('setting_key') or '').strip()
+        if not setting_key:
+            return jsonify({'success': False, 'error': 'setting_key 不能为空'}), 400
+        if 'setting_value' not in payload:
+            return jsonify({'success': False, 'error': 'setting_value 不能为空'}), 400
+        setting_value = str(payload.get('setting_value') or '')
+        updated_row = update_supabase_setting(scope, setting_key, setting_value)
+        return jsonify({
+            'success': True,
+            'record': {
+                'scope': str(updated_row.get('scope') or scope),
+                'setting_key': str(updated_row.get('setting_key') or setting_key),
+                'setting_value': _normalize_supabase_setting_value(updated_row.get('setting_value')),
+                'description': str(updated_row.get('description') or '').strip(),
+                'updated_at': str(updated_row.get('updated_at') or ''),
+            },
+        })
+    except ValueError as exc:
+        return jsonify({'success': False, 'error': str(exc)}), 400
+    except requests.RequestException as exc:
+        return jsonify({'success': False, 'error': f'更新设置失败：{exc}'}), 502
+    except RuntimeError as exc:
+        return jsonify({'success': False, 'error': str(exc)}), 500
+    except Exception as exc:
+        return jsonify({'success': False, 'error': f'更新设置失败：{exc}'}), 500
+
+
+@app.post('/api/settings/refresh')
+def settings_refresh_api():
+    try:
+        reload_supabase_settings_cache()
+        scope = request.get_json(silent=True) or {}
+        requested_scope = str(scope.get('scope') or SUPABASE_SETTINGS_SCOPE).strip() or SUPABASE_SETTINGS_SCOPE
+        records = fetch_supabase_setting_records(requested_scope)
+        return jsonify({'success': True, 'scope': requested_scope, 'records': records})
+    except requests.RequestException as exc:
+        return jsonify({'success': False, 'error': f'刷新设置失败：{exc}'}), 502
+    except Exception as exc:
+        return jsonify({'success': False, 'error': f'刷新设置失败：{exc}'}), 500
 
 
 @app.post('/api/download-zip')
@@ -3321,7 +3828,7 @@ def generate_aplus():
 
 
 if __name__ == '__main__':
-    host = get_optional_env('HOST', '0.0.0.0') or '0.0.0.0'
-    port = get_optional_int_env('PORT', 5078)
-    debug = get_optional_bool_env('FLASK_DEBUG', False)
+    host = get_supabase_setting('HOST', get_optional_env('HOST', '0.0.0.0')) or '0.0.0.0'
+    port = get_supabase_setting_int('PORT', get_optional_int_env('PORT', 5078))
+    debug = get_supabase_setting_bool('FLASK_DEBUG', get_optional_bool_env('FLASK_DEBUG', False))
     app.run(host=host, port=port, debug=debug)

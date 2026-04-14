@@ -1,0 +1,473 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>API Settings · AI 电商视觉控制台</title>
+  <link rel="stylesheet" href="/static/css/landing.css">
+  <style>
+    body.settings-page {
+      min-height: 100dvh;
+      padding: 20px;
+    }
+    .settings-shell {
+      width: min(100%, 1240px);
+      margin: 0 auto;
+      display: grid;
+      gap: 16px;
+    }
+    .settings-header,
+    .settings-toolbar,
+    .settings-card,
+    .settings-empty {
+      border: 1px solid var(--line);
+      background: var(--surface);
+      box-shadow: var(--shadow);
+      backdrop-filter: blur(18px);
+      border-radius: var(--radius-xl);
+    }
+    .settings-header {
+      padding: 24px;
+      display: flex;
+      justify-content: space-between;
+      gap: 16px;
+      align-items: flex-start;
+      flex-wrap: wrap;
+    }
+    .settings-kicker {
+      text-transform: uppercase;
+      letter-spacing: 0.18em;
+      font-size: 11px;
+      color: var(--muted);
+      margin-bottom: 10px;
+    }
+    .settings-title {
+      margin: 0;
+      font-family: var(--font-display);
+      font-size: clamp(30px, 4vw, 54px);
+      line-height: 0.98;
+      letter-spacing: -0.06em;
+    }
+    .settings-copy {
+      margin: 12px 0 0;
+      max-width: 66ch;
+      color: var(--muted);
+      line-height: 1.7;
+    }
+    .settings-header-actions {
+      display: flex;
+      flex-wrap: wrap;
+      gap: 10px;
+      align-items: center;
+      justify-content: flex-end;
+    }
+    .pill {
+      min-height: 38px;
+      padding: 0 14px;
+      border-radius: 999px;
+      display: inline-flex;
+      align-items: center;
+      border: 1px solid var(--line);
+      background: rgba(255,255,255,0.72);
+      color: var(--muted-strong);
+      font-size: 12px;
+      white-space: nowrap;
+    }
+    .pill.accent {
+      border-color: rgba(17,24,39,0.16);
+      background: rgba(17,24,39,0.03);
+      color: var(--text);
+    }
+    .settings-toolbar {
+      padding: 14px 16px;
+      display: flex;
+      justify-content: space-between;
+      gap: 12px;
+      align-items: center;
+      flex-wrap: wrap;
+    }
+    .toolbar-group {
+      display: flex;
+      flex-wrap: wrap;
+      gap: 10px;
+      align-items: center;
+    }
+    .toolbar-note {
+      color: var(--muted);
+      font-size: 13px;
+      line-height: 1.5;
+    }
+    .btn {
+      min-height: 40px;
+      padding: 0 14px;
+      border-radius: 14px;
+      border: 1px solid var(--line-strong);
+      background: rgba(255,255,255,0.9);
+      color: var(--text);
+      cursor: pointer;
+      text-decoration: none;
+      display: inline-flex;
+      align-items: center;
+      justify-content: center;
+      transition: transform 160ms ease, background 160ms ease, border-color 160ms ease;
+    }
+    .btn:hover {
+      transform: translateY(-1px);
+    }
+    .btn.primary {
+      border-color: var(--accent);
+      background: var(--accent);
+      color: #fff;
+    }
+    .btn.ghost {
+      background: transparent;
+    }
+    .btn:disabled {
+      opacity: 0.55;
+      cursor: not-allowed;
+      transform: none;
+    }
+    .settings-status {
+      min-height: 20px;
+      color: var(--muted);
+      font-size: 13px;
+      line-height: 1.5;
+    }
+    .settings-status.is-error {
+      color: var(--danger);
+    }
+    .settings-status.is-success {
+      color: var(--success);
+    }
+    .settings-list {
+      display: grid;
+      gap: 14px;
+    }
+    .settings-empty {
+      padding: 28px;
+      color: var(--muted);
+      line-height: 1.7;
+    }
+    .setting-row {
+      padding: 18px;
+      display: grid;
+      gap: 14px;
+    }
+    .setting-meta {
+      display: grid;
+      gap: 8px;
+    }
+    .setting-head {
+      display: flex;
+      flex-wrap: wrap;
+      gap: 10px;
+      align-items: center;
+    }
+    .setting-scope,
+    .setting-key,
+    .setting-updated,
+    .setting-sensitive {
+      border: 1px solid var(--line);
+      border-radius: 999px;
+      padding: 5px 10px;
+      font-size: 12px;
+      color: var(--muted-strong);
+      background: rgba(255,255,255,0.65);
+    }
+    .setting-key {
+      font-weight: 600;
+      color: var(--text);
+    }
+    .setting-description {
+      color: var(--muted);
+      font-size: 14px;
+      line-height: 1.6;
+      min-height: 22px;
+    }
+    .setting-editor {
+      display: grid;
+      gap: 10px;
+    }
+    .setting-field {
+      display: grid;
+      gap: 8px;
+    }
+    .field-label {
+      font-size: 12px;
+      letter-spacing: 0.12em;
+      text-transform: uppercase;
+      color: var(--muted);
+    }
+    .setting-input {
+      min-height: 48px;
+      border-radius: 16px;
+      border: 1px solid var(--line-strong);
+      padding: 0 14px;
+      background: rgba(255,255,255,0.92);
+      color: var(--text);
+      outline: none;
+    }
+    .setting-input:focus {
+      border-color: rgba(17,24,39,0.3);
+      box-shadow: 0 0 0 4px rgba(17,24,39,0.06);
+    }
+    .setting-actions {
+      display: flex;
+      flex-wrap: wrap;
+      gap: 10px;
+      justify-content: flex-end;
+    }
+    .setting-note {
+      color: var(--muted);
+      font-size: 12px;
+      line-height: 1.5;
+    }
+    .masked-preview {
+      font-family: var(--font-mono, ui-monospace, SFMono-Regular, Menlo, Consolas, monospace);
+      letter-spacing: 0.08em;
+    }
+    .inline-grid {
+      display: grid;
+      grid-template-columns: repeat(2, minmax(0, 1fr));
+      gap: 12px;
+    }
+    @media (max-width: 860px) {
+      .inline-grid {
+        grid-template-columns: 1fr;
+      }
+      .settings-header,
+      .settings-toolbar {
+        align-items: stretch;
+      }
+      .settings-header-actions,
+      .setting-actions {
+        justify-content: flex-start;
+      }
+    }
+  </style>
+</head>
+<body class="settings-page">
+  <div class="settings-shell">
+    <header class="settings-header">
+      <div>
+        <div class="settings-kicker">Protected Admin Screen</div>
+        <h1 class="settings-title">API Settings</h1>
+        <p class="settings-copy">通过后端受保护接口查看和编辑 <code>public.api_settings</code>。浏览器只接收经过脱敏处理后的内容，保存与刷新都由 Flask 服务端完成。</p>
+      </div>
+      <div class="settings-header-actions">
+        <span class="pill accent" id="scopePill">scope: global</span>
+        <span class="pill" id="countPill">0 items</span>
+        <a class="btn ghost" href="/">返回首页</a>
+      </div>
+    </header>
+
+    <section class="settings-toolbar">
+      <div class="toolbar-group">
+        <button class="btn primary" id="refreshBtn" type="button">刷新</button>
+        <span class="toolbar-note">刷新会重新读取数据库并同步后端 settings cache。</span>
+      </div>
+      <div class="settings-status" id="status" aria-live="polite"></div>
+    </section>
+
+    <main class="settings-list" id="settingsList" aria-live="polite"></main>
+
+    <section class="settings-empty" id="emptyState" hidden>
+      当前 scope 下没有可显示的配置项。
+    </section>
+  </div>
+
+  <script>
+    const DEFAULT_SCOPE = 'global';
+    const state = {
+      scope: DEFAULT_SCOPE,
+      records: [],
+    };
+
+    const scopePill = document.getElementById('scopePill');
+    const countPill = document.getElementById('countPill');
+    const refreshBtn = document.getElementById('refreshBtn');
+    const statusEl = document.getElementById('status');
+    const settingsList = document.getElementById('settingsList');
+    const emptyState = document.getElementById('emptyState');
+
+    function setStatus(message, type = '') {
+      statusEl.className = `settings-status${type ? ` is-${type}` : ''}`;
+      statusEl.textContent = message || '';
+    }
+
+    function isSensitive(key) {
+      return /KEY|SECRET|TOKEN|PASSWORD|PASS|PRIVATE/i.test(key || '');
+    }
+
+    function escapeHtml(value) {
+      return String(value ?? '')
+        .replaceAll('&', '&amp;')
+        .replaceAll('<', '&lt;')
+        .replaceAll('>', '&gt;')
+        .replaceAll('"', '&quot;')
+        .replaceAll("'", '&#39;');
+    }
+
+    function renderRecords(records) {
+      settingsList.innerHTML = '';
+      emptyState.hidden = records.length > 0;
+      countPill.textContent = `${records.length} items`;
+
+      for (const record of records) {
+        const sensitive = Boolean(record.is_sensitive);
+        const currentValue = record.setting_value ?? '';
+        const previewValue = record.value_preview || (sensitive && currentValue ? '••••••••' : '');
+        const valueFieldType = sensitive ? 'password' : 'text';
+        const valuePlaceholder = sensitive ? '当前值已隐藏，输入新值后保存' : '请输入设置值';
+        const row = document.createElement('section');
+        row.className = 'settings-card setting-row';
+        row.dataset.scope = record.scope;
+        row.dataset.key = record.setting_key;
+        row.dataset.sensitive = sensitive ? 'true' : 'false';
+        row.dataset.dirty = 'false';
+
+        row.innerHTML = `
+          <div class="setting-meta">
+            <div class="setting-head">
+              <span class="setting-scope">${escapeHtml(record.scope)}</span>
+              <span class="setting-key">${escapeHtml(record.setting_key)}</span>
+              ${sensitive ? '<span class="setting-sensitive">masked</span>' : ''}
+              ${record.updated_at ? `<span class="setting-updated">updated ${escapeHtml(record.updated_at)}</span>` : ''}
+            </div>
+            <div class="setting-description">${escapeHtml(record.description || '—')}</div>
+          </div>
+          <div class="setting-editor">
+            <div class="inline-grid">
+              <label class="setting-field">
+                <span class="field-label">setting_value</span>
+                <input class="setting-input setting-value-input" type="${valueFieldType}" value="${sensitive ? '' : escapeHtml(currentValue)}" placeholder="${escapeHtml(valuePlaceholder)}" autocomplete="off" spellcheck="false">
+              </label>
+              <label class="setting-field">
+                <span class="field-label">current preview</span>
+                <input class="setting-input" type="text" value="${escapeHtml(previewValue)}" readonly tabindex="-1">
+              </label>
+            </div>
+            <div class="setting-note">scope、setting_key 与 description 只读；保存时仅会提交 value 的变化。</div>
+            <div class="setting-actions">
+              <button class="btn primary setting-save-btn" type="button" disabled>保存</button>
+            </div>
+          </div>
+        `;
+
+        const input = row.querySelector('.setting-value-input');
+        const saveBtn = row.querySelector('.setting-save-btn');
+        let originalValue = currentValue;
+
+        function syncDirty() {
+          const nextValue = input.value;
+          const dirty = sensitive ? nextValue.length > 0 : nextValue !== originalValue;
+          row.dataset.dirty = dirty ? 'true' : 'false';
+          saveBtn.disabled = !dirty;
+        }
+
+        input.addEventListener('input', syncDirty);
+        saveBtn.addEventListener('click', async () => {
+          const nextValue = input.value;
+          if (sensitive && row.dataset.dirty !== 'true') {
+            return;
+          }
+          if (!sensitive && nextValue === originalValue) {
+            return;
+          }
+
+          saveBtn.disabled = true;
+          setStatus(`正在保存 ${record.setting_key}…`);
+
+          try {
+            const response = await fetch('/api/settings', {
+              method: 'PATCH',
+              headers: { 'Content-Type': 'application/json' },
+              body: JSON.stringify({
+                scope: record.scope,
+                setting_key: record.setting_key,
+                setting_value: nextValue,
+              }),
+            });
+            const data = await response.json();
+            if (!response.ok || !data.success) {
+              throw new Error(data.error || '保存失败');
+            }
+
+            if (sensitive) {
+              input.value = '';
+              row.dataset.dirty = 'false';
+              saveBtn.disabled = true;
+            } else {
+              originalValue = nextValue;
+              row.dataset.dirty = 'false';
+              saveBtn.disabled = true;
+            }
+
+            await loadSettings(true);
+            setStatus(`${record.setting_key} 已保存`, 'success');
+          } catch (error) {
+            setStatus(error.message || '保存失败', 'error');
+            saveBtn.disabled = false;
+          }
+        });
+
+
+        settingsList.appendChild(row);
+        syncDirty();
+      }
+    }
+
+    async function loadSettings(silent = false) {
+      if (!silent) {
+        setStatus('正在加载设置…');
+      }
+      refreshBtn.disabled = true;
+      try {
+        const response = await fetch(`/api/settings?scope=${encodeURIComponent(state.scope)}`);
+        const data = await response.json();
+        if (!response.ok || !data.success) {
+          throw new Error(data.error || '加载失败');
+        }
+
+        state.records = Array.isArray(data.records) ? data.records : [];
+        scopePill.textContent = `scope: ${data.scope || state.scope}`;
+        renderRecords(state.records);
+        if (!silent) {
+          setStatus(`已加载 ${state.records.length} 条配置`, 'success');
+        }
+      } catch (error) {
+        setStatus(error.message || '加载失败', 'error');
+        settingsList.innerHTML = '';
+        emptyState.hidden = false;
+      } finally {
+        refreshBtn.disabled = false;
+      }
+    }
+
+    refreshBtn.addEventListener('click', async () => {
+      refreshBtn.disabled = true;
+      setStatus('正在刷新缓存…');
+      try {
+        const response = await fetch('/api/settings/refresh', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ scope: state.scope }),
+        });
+        const data = await response.json();
+        if (!response.ok || !data.success) {
+          throw new Error(data.error || '刷新失败');
+        }
+        state.records = Array.isArray(data.records) ? data.records : [];
+        renderRecords(state.records);
+        setStatus(`缓存已刷新，当前共 ${state.records.length} 条配置`, 'success');
+      } catch (error) {
+        setStatus(error.message || '刷新失败', 'error');
+      } finally {
+        refreshBtn.disabled = false;
+      }
+    });
+
+    loadSettings();
+  </script>
+</body>
+</html>
