@@ -332,7 +332,9 @@
         }
 
         if (mode === 'register' && !data.user?.id) {
-          setStatus('注册成功，请查看邮箱完成验证后再登录。', 'success');
+          const signupBonus = Number(data?.points?.signup_bonus || 0);
+          const bonusText = signupBonus > 0 ? `，预计赠送 ${signupBonus} 积分` : '';
+          setStatus(`注册成功${bonusText}，请查看邮箱完成验证后再登录。`, 'success');
           authNote.textContent = '如果 Supabase 开启了邮箱确认，验证完成后再登录。';
           authForm.reset();
           setMode('login');

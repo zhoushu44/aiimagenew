@@ -293,6 +293,8 @@ UPLOAD_MAX_BYTES = max(get_supabase_setting_int('UPLOAD_MAX_BYTES', 15 * 1024 * 
 UPLOAD_MAX_FILE_BYTES = max(get_supabase_setting_int('UPLOAD_MAX_FILE_BYTES', 8 * 1024 * 1024), 1)
 GENERATED_SUITE_RETENTION_DAYS = max(get_supabase_setting_int('GENERATED_SUITE_RETENTION_DAYS', 7), 0)
 GENERATED_SUITE_RETENTION_COUNT = max(get_supabase_setting_int('GENERATED_SUITE_RETENTION_COUNT', 20), 0)
+POINTS_SIGNUP_BONUS = max(get_supabase_setting_int('POINTS_SIGNUP_BONUS', 100), 0)
+POINTS_DAILY_FREE = max(get_supabase_setting_int('POINTS_DAILY_FREE', 10), 0)
 MODE2_ALLOWED_IMAGE_HOSTS = get_mode2_allowed_image_hosts()
 app.config['MAX_CONTENT_LENGTH'] = UPLOAD_MAX_BYTES
 SYSTEM_PROMPT = (
@@ -3061,7 +3063,7 @@ def auth_register():
             return jsonify({'success': False, 'error': '请输入邮箱和密码'}), 400
         data, _status_code = supabase_auth_password(email, password, 'signup')
         session_data = normalize_supabase_session(data)
-        response = jsonify({'success': True, 'user': session_data.get('user')})
+        response = jsonify({'success': True, 'user': session_data.get('user'), 'points': {'signup_bonus': POINTS_SIGNUP_BONUS, 'daily_free': POINTS_DAILY_FREE}})
         set_auth_session_cookie(response, session_data)
         return response
     except ValueError as exc:

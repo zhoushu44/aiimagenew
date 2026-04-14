@@ -8,6 +8,8 @@ set description = case setting_key
   when 'UPLOAD_MAX_FILE_BYTES' then '单文件上传最大字节数'
   when 'GENERATED_SUITE_RETENTION_DAYS' then '生成结果保留天数'
   when 'GENERATED_SUITE_RETENTION_COUNT' then '生成结果保留数量上限'
+  when 'POINTS_SIGNUP_BONUS' then '新用户注册赠送积分'
+  when 'POINTS_DAILY_FREE' then '每日免费领取积分'
   when 'MODE2_ALLOWED_IMAGE_HOSTS' then '允许远程参考图片的域名白名单'
   when 'OPENAI_API_KEY' then 'OpenAI 接口密钥'
   when 'OPENAI_BASE_URL' then 'OpenAI 接口地址'

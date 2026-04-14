@@ -8,6 +8,8 @@ values
   ('global', 'UPLOAD_MAX_FILE_BYTES', '8388608', '单文件上传最大字节数'),
   ('global', 'GENERATED_SUITE_RETENTION_DAYS', '7', '生成结果保留天数'),
   ('global', 'GENERATED_SUITE_RETENTION_COUNT', '20', '生成结果保留数量上限'),
+  ('global', 'POINTS_SIGNUP_BONUS', '100', '新用户注册赠送积分'),
+  ('global', 'POINTS_DAILY_FREE', '10', '每日免费领取积分'),
   ('global', 'MODE2_ALLOWED_IMAGE_HOSTS', '', '允许远程参考图片的域名白名单'),
   ('global', 'OPENAI_API_KEY', '', 'OpenAI 接口密钥'),
   ('global', 'OPENAI_BASE_URL', 'https://api.nofx.online/v1', 'OpenAI 接口地址'),
