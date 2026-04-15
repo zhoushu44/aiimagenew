@@ -315,9 +315,10 @@
 
       for (const record of records) {
         const sensitive = Boolean(record.is_sensitive);
+        const isAppMode = record.setting_key === 'APP_MODE';
         const currentValue = record.setting_value ?? '';
+        const originalValue = isAppMode ? normalizeAppMode(currentValue) : currentValue;
         const previewValue = record.value_preview || (sensitive && currentValue ? '••••••••' : '');
-        const valueFieldType = sensitive ? 'password' : 'text';
         const valuePlaceholder = sensitive ? '当前值已隐藏，输入新值后保存' : '请输入设置值';
         const row = document.createElement('section');
         row.className = 'settings-card setting-row';
@@ -331,6 +332,7 @@
             <div class="setting-head">
               <span class="setting-scope">${escapeHtml(record.scope)}</span>
               <span class="setting-key">${escapeHtml(record.setting_key)}</span>
+              ${isAppMode ? '<span class="setting-sensitive">mode switch</span>' : ''}
               ${sensitive ? '<span class="setting-sensitive">masked</span>' : ''}
               ${record.updated_at ? `<span class="setting-updated">updated ${escapeHtml(record.updated_at)}</span>` : ''}
             </div>
@@ -340,11 +342,18 @@
             <div class="inline-grid">
               <label class="setting-field">
                 <span class="field-label">setting_value</span>
-                <input class="setting-input setting-value-input" type="${valueFieldType}" value="${sensitive ? '' : escapeHtml(currentValue)}" placeholder="${escapeHtml(valuePlaceholder)}" autocomplete="off" spellcheck="false">
+                ${isAppMode ? `
+                  <select class="setting-input setting-value-select" autocomplete="off">
+                    <option value="mode1"${originalValue === 'mode1' ? ' selected' : ''}>mode1</option>
+                    <option value="mode2"${originalValue === 'mode2' ? ' selected' : ''}>mode2</option>
+                  </select>
+                ` : `
+                  <input class="setting-input setting-value-input" type="${sensitive ? 'password' : 'text'}" value="${sensitive ? '' : escapeHtml(currentValue)}" placeholder="${escapeHtml(valuePlaceholder)}" autocomplete="off" spellcheck="false">
+                `}
               </label>
               <label class="setting-field">
                 <span class="field-label">current preview</span>
-                <input class="setting-input" type="text" value="${escapeHtml(previewValue)}" readonly tabindex="-1">
+                <input class="setting-input" type="text" value="${escapeHtml(isAppMode ? originalValue : previewValue)}" readonly tabindex="-1">
               </label>
             </div>
             <div class="setting-note">scope、setting_key 与 description 只读；保存时仅会提交 value 的变化。</div>
@@ -354,24 +363,28 @@
           </div>
         `;
 
-        const input = row.querySelector('.setting-value-input');
+        const editor = row.querySelector('.setting-value-select') || row.querySelector('.setting-value-input');
         const saveBtn = row.querySelector('.setting-save-btn');
-        let originalValue = currentValue;
+        let originalEditorValue = originalValue;
 
         function syncDirty() {
-          const nextValue = input.value;
-          const dirty = sensitive ? nextValue.length > 0 : nextValue !== originalValue;
+          const nextValue = editor.value;
+          const dirty = isAppMode ? nextValue !== originalEditorValue : (sensitive ? nextValue.length > 0 : nextValue !== originalEditorValue);
           row.dataset.dirty = dirty ? 'true' : 'false';
           saveBtn.disabled = !dirty;
         }
 
-        input.addEventListener('input', syncDirty);
+        editor.addEventListener('input', syncDirty);
+        editor.addEventListener('change', syncDirty);
         saveBtn.addEventListener('click', async () => {
-          const nextValue = input.value;
-          if (sensitive && row.dataset.dirty !== 'true') {
+          const nextValue = editor.value;
+          if (isAppMode && nextValue === originalEditorValue) {
             return;
           }
-          if (!sensitive && nextValue === originalValue) {
+          if (!isAppMode && !sensitive && nextValue === originalEditorValue) {
+            return;
+          }
+          if (!isAppMode && sensitive && row.dataset.dirty !== 'true') {
             return;
           }
 
@@ -394,14 +407,12 @@
             }
 
             if (sensitive) {
-              input.value = '';
-              row.dataset.dirty = 'false';
-              saveBtn.disabled = true;
+              editor.value = '';
             } else {
-              originalValue = nextValue;
-              row.dataset.dirty = 'false';
-              saveBtn.disabled = true;
+              originalEditorValue = nextValue;
             }
+            row.dataset.dirty = 'false';
+            saveBtn.disabled = true;
 
             await loadSettings(true);
             setStatus(`${record.setting_key} 已保存`, 'success');
@@ -411,10 +422,13 @@
           }
         });
 
-
         settingsList.appendChild(row);
         syncDirty();
       }
+    }
+
+    function normalizeAppMode(value) {
+      return ['mode1', 'mode2'].includes(String(value || '').trim().toLowerCase()) ? String(value).trim().toLowerCase() : 'mode1';
     }
 
     async function loadSettings(silent = false) {

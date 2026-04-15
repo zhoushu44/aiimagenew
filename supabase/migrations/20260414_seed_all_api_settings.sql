@@ -10,6 +10,7 @@ values
   ('global', 'GENERATED_SUITE_RETENTION_COUNT', '20', '生成结果保留数量上限'),
   ('global', 'POINTS_SIGNUP_BONUS', '100', '新用户注册赠送积分'),
   ('global', 'POINTS_DAILY_FREE', '10', '每日免费领取积分'),
+  ('global', 'APP_MODE', 'mode1', '全局应用模式（mode1 / mode2）'),
   ('global', 'MODE2_ALLOWED_IMAGE_HOSTS', '', '允许远程参考图片的域名白名单'),
   ('global', 'OPENAI_API_KEY', '', 'OpenAI 接口密钥'),
   ('global', 'OPENAI_BASE_URL', 'https://api.nofx.online/v1', 'OpenAI 接口地址'),

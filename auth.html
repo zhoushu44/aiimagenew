@@ -340,10 +340,11 @@
     const emailInput = document.getElementById('emailInput');
 
     const params = new URLSearchParams(window.location.search);
+    const defaultNextPath = window.__APP_DEFAULT_NEXT_PATH__ || '/suite';
     const nextPath = (() => {
-      const raw = (params.get('next') || '/suite').trim();
+      const raw = (params.get('next') || defaultNextPath).trim();
       if (!raw.startsWith('/') || raw.startsWith('//')) {
-        return '/suite';
+        return defaultNextPath;
       }
       return raw;
     })();

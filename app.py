@@ -55,8 +55,8 @@ IMAGE_SIGNATURES = {
 GENERATED_SUITES_DIR = BASE_DIR / 'generated-suites'
 SUPABASE_SESSION_COOKIE = 'aiimagenew_supabase_session'
 SUPABASE_REDIRECT_PATH = '/auth'
-PROTECTED_PAGE_PATHS = {'/suite', '/aplus', '/fashion', '/mode2', '/settings'}
-PUBLIC_API_PREFIXES = ('/api/auth/',)
+PROTECTED_PAGE_PATHS = {'/suite', '/aplus', '/fashion', '/settings'}
+PUBLIC_API_PREFIXES = ('/api/auth/', '/api/app-mode')
 PUBLIC_PATH_PREFIXES = ('/static/', '/generated/')
 PUBLIC_PATHS = {'/', '/auth', '/logout'}
 SUPABASE_URL = (os.getenv('SUPABASE_URL') or os.getenv('SUPABASE_PROJECT_URL') or '').strip()
@@ -64,6 +64,7 @@ SUPABASE_ANON_KEY = (os.getenv('SUPABASE_ANON_KEY') or os.getenv('SUPABASE_PUBLI
 SUPABASE_SERVICE_ROLE_KEY = (os.getenv('SUPABASE_SERVICE_ROLE_KEY') or os.getenv('SUPABASE_SERVICE_KEY') or '').strip()
 SUPABASE_SETTINGS_TABLE = 'api_settings'
 SUPABASE_SETTINGS_SCOPE = 'global'
+SUPABASE_USER_PROFILES_TABLE = 'user_profiles'
 SUPABASE_POINTS_TABLE = 'user_points_balances'
 
 
@@ -202,6 +203,15 @@ def get_user_points_balance(user_id: str) -> dict | None:
         return None
 
 
+def get_env_csv(name: str) -> set[str]:
+    raw_value = os.getenv(name, '').strip()
+    return {
+        value.strip().lower()
+        for value in raw_value.split(',')
+        if value.strip()
+    }
+
+
 def get_mode2_allowed_image_hosts() -> set[str]:
     raw_value = get_supabase_setting('MODE2_ALLOWED_IMAGE_HOSTS', '')
     if not raw_value:
@@ -211,6 +221,104 @@ def get_mode2_allowed_image_hosts() -> set[str]:
         for host in raw_value.split(',')
         if host.strip()
     }
+
+
+def get_settings_allowed_emails() -> set[str]:
+    allowed_emails = get_env_csv('SUPABASE_SETTINGS_ALLOWED_EMAILS')
+    single_email = os.getenv('SUPABASE_SETTINGS_ALLOWED_EMAIL', '').strip().lower()
+    if single_email:
+        allowed_emails.add(single_email)
+    return allowed_emails
+
+
+def _get_supabase_user_email(session_data: dict | None = None) -> str:
+    session_payload = session_data or g.get('supabase_session') or {}
+    user = session_payload.get('user') or {}
+    return str(user.get('email') or '').strip().lower()
+
+
+def _is_truthy_flag(value) -> bool:
+    if isinstance(value, bool):
+        return value
+    if value is None:
+        return False
+    return str(value).strip().lower() in {'1', 'true', 'yes', 'on'}
+
+
+def _fetch_supabase_user_admin_flag(user_id: str) -> bool:
+    normalized_user_id = str(user_id or '').strip()
+    if not normalized_user_id or not SUPABASE_URL or not SUPABASE_SERVICE_ROLE_KEY:
+        return False
+
+    try:
+        response = requests.get(
+            build_supabase_request_url(f'/rest/v1/{SUPABASE_USER_PROFILES_TABLE}'),
+            headers=_build_supabase_service_headers(),
+            params={
+                'select': 'is_admin,user_id',
+                'user_id': f'eq.{normalized_user_id}',
+                'limit': '1',
+            },
+            timeout=20,
+        )
+        response.raise_for_status()
+        payload = response.json()
+    except (requests.RequestException, ValueError) as exc:
+        app.logger.warning('Failed to fetch admin flag for %s: %s', normalized_user_id, exc)
+        return False
+
+    if not isinstance(payload, list) or not payload:
+        return False
+
+    row = payload[0]
+    if not isinstance(row, dict):
+        return False
+
+    return _is_truthy_flag(row.get('is_admin'))
+
+
+def _is_supabase_admin_user(session_data: dict | None = None) -> bool:
+    session_payload = session_data or g.get('supabase_session') or {}
+    user = session_payload.get('user') or {}
+    if not isinstance(user, dict):
+        return False
+
+    if _is_truthy_flag(user.get('is_admin')):
+        return True
+
+    if str(user.get('role') or '').strip().lower() == 'admin':
+        return True
+
+    for metadata_key in ('app_metadata', 'user_metadata'):
+        metadata = user.get(metadata_key) or {}
+        if not isinstance(metadata, dict):
+            continue
+        if _is_truthy_flag(metadata.get('is_admin')) or _is_truthy_flag(metadata.get('admin')):
+            return True
+        if str(metadata.get('role') or '').strip().lower() == 'admin':
+            return True
+
+    user_id = str(user.get('id') or '').strip()
+    if user_id and _fetch_supabase_user_admin_flag(user_id):
+        return True
+
+    return False
+
+
+def _is_settings_user_allowed(session_data: dict | None = None) -> bool:
+    allowed_emails = get_settings_allowed_emails()
+    user_email = _get_supabase_user_email(session_data)
+    return bool((user_email and user_email in allowed_emails) or _is_supabase_admin_user(session_data))
+
+
+
+def normalize_app_mode(value: str | None) -> str:
+    normalized_mode = str(value or '').strip().lower()
+    return normalized_mode if normalized_mode in {'mode1', 'mode2'} else 'mode1'
+
+
+def get_app_mode() -> str:
+    return normalize_app_mode(get_supabase_setting('APP_MODE', 'mode1'))
 
 
 def _normalize_supabase_setting_key(key: str) -> str:
@@ -1023,8 +1131,9 @@ def clear_auth_session_cookie(response):
     return response
 
 
-def auth_response_from_session(session_data: dict, redirect_path: str = '/suite'):
-    response = redirect(redirect_path)
+def auth_response_from_session(session_data: dict, redirect_path: str | None = None):
+    target_path = redirect_path or '/suite'
+    response = redirect(target_path)
     set_auth_session_cookie(response, session_data)
     return response
 
@@ -2755,15 +2864,40 @@ def call_mode2_image_edit(client: OpenAI, prompt: str, image_payloads, ratio: st
     return pick_generated_image_item(response), model
 
 
-def call_mode2_text2image(client: OpenAI, prompt: str, ratio: str, resolution: str):
-    model = get_supabase_setting('MODE2_TEXT2IMAGE_MODEL', get_optional_env('MODE2_TEXT2IMAGE_MODEL', 'doubao-seedream-5-0-260128'))
-    response = client.images.generate(
-        model=model,
-        prompt=prompt,
-        size=resolve_mode2_image_size(ratio, resolution),
-        response_format='b64_json',
+def call_app_mode_image_generation(client: OpenAI, prompt: str, image_payloads, image_size_ratio: str, text_type: str, country: str, product_json=None, image_type: str = '', plan_item=None, all_plan_types=None, max_images: int = 1):
+    if get_app_mode() == 'mode2':
+        mode2_client = get_mode2_client()
+        if image_payloads:
+            generated_item, _model = call_mode2_image_edit(
+                mode2_client,
+                prompt,
+                image_payloads,
+                image_size_ratio,
+                '',
+                '',
+            )
+        else:
+            generated_item, _model = call_mode2_text2image(
+                mode2_client,
+                prompt,
+                image_size_ratio,
+                '',
+            )
+        return [generated_item]
+
+    return call_image_generation(
+        client,
+        prompt,
+        image_payloads,
+        image_size_ratio,
+        text_type,
+        country,
+        product_json,
+        image_type,
+        plan_item,
+        all_plan_types,
+        max_images=max_images,
     )
-    return pick_generated_image_item(response), model
 
 
 def build_mode2_success_response(task_id: str, mode: str, prompt: str, model: str, generated_item: dict):
@@ -3038,7 +3172,7 @@ def generate_suite_images(plan: dict, image_payloads, task_id: str, image_size_r
     while index < len(plan_items):
         item = plan_items[index]
         remaining_items = plan_items[index:]
-        generated_items = call_image_generation(
+        generated_items = call_app_mode_image_generation(
             client,
             item['prompt'],
             image_payloads,
@@ -3086,7 +3220,7 @@ def generate_aplus_images(plan: dict, image_payloads, task_id: str, image_size_r
     images = []
 
     for item in plan['items']:
-        generated_items = call_image_generation(
+        generated_items = call_app_mode_image_generation(
             client,
             item['prompt'],
             image_payloads,
@@ -3140,6 +3274,11 @@ def guard_authentication():
                 return jsonify({'success': False, 'error': '请先登录'}), 401
             next_path = request.full_path.rstrip('?') if request.query_string else request.path
             return redirect(f"{SUPABASE_REDIRECT_PATH}?next={next_path}")
+        if path == '/settings' or path.startswith('/api/settings'):
+            if not _is_settings_user_allowed(session_data):
+                if path.startswith('/api/'):
+                    return jsonify({'success': False, 'error': '无权访问设置页面'}), 403
+                return make_response('无权访问设置页面', 403)
         return None
 
     g.supabase_session = get_supabase_session()
@@ -3149,12 +3288,26 @@ def guard_authentication():
 
 @app.get('/auth')
 def auth_page():
+    default_next_path = '/suite'
     if g.get('supabase_session'):
-        next_path = request.args.get('next', '/suite').strip() or '/suite'
+        next_path = request.args.get('next', default_next_path).strip() or default_next_path
         if not next_path.startswith('/') or next_path.startswith('//'):
-            next_path = '/suite'
+            next_path = default_next_path
         return redirect(next_path)
-    return send_from_directory(BASE_DIR, 'auth.html')
+
+    auth_html = (BASE_DIR / 'auth.html').read_text(encoding='utf-8')
+    auth_html = auth_html.replace(
+        '<head>',
+        f'<head>\n  <script>window.__APP_DEFAULT_NEXT_PATH__ = {default_next_path!r};</script>',
+        1,
+    )
+    return make_response(auth_html)
+
+
+@app.get('/api/app-mode')
+def app_mode_api():
+    app_mode = get_app_mode()
+    return jsonify({'success': True, 'app_mode': app_mode, 'default_next_path': '/suite'})
 
 
 @app.post('/api/auth/session')
@@ -3268,11 +3421,6 @@ def aplus_page():
 @app.get('/fashion')
 def fashion_page():
     return send_from_directory(BASE_DIR, 'fashion.html')
-
-
-@app.get('/mode2')
-def mode2_page():
-    return send_from_directory(BASE_DIR, 'mode2.html')
 
 
 @app.get('/settings')
@@ -3561,7 +3709,7 @@ def generate_fashion_model():
 
         task_id = uuid.uuid4().hex
         prompt = build_fashion_model_prompt(gender, age, ethnicity, body_type, appearance_details)
-        generated_item = call_image_generation(
+        generated_item = call_app_mode_image_generation(
             get_ark_client(),
             prompt,
             [],
@@ -3618,6 +3766,9 @@ def generate_fashion_model():
 @app.post('/api/generate-mode2-image-edit')
 def generate_mode2_image_edit():
     try:
+        if get_app_mode() != 'mode2':
+            return jsonify({'success': False, 'error': '当前模式未开启 mode2'}), 404
+
         payload = request.get_json(silent=True) if request.is_json else {}
         if not isinstance(payload, dict):
             payload = {}
@@ -3671,6 +3822,9 @@ def generate_mode2_image_edit():
 @app.post('/api/generate-mode2-text2image')
 def generate_mode2_text2image():
     try:
+        if get_app_mode() != 'mode2':
+            return jsonify({'success': False, 'error': '当前模式未开启 mode2'}), 404
+
         payload = request.get_json(silent=True) if request.is_json else {}
         if not isinstance(payload, dict):
             payload = {}
@@ -3838,7 +3992,7 @@ def generate_suite():
                 image_bytes = None
                 mime_type = 'image/png'
                 for attempt in range(1, max_verify_attempts + 1):
-                    generated_items = call_image_generation(
+                    generated_items = call_app_mode_image_generation(
                         get_ark_client(),
                         prompt_entry['prompt'],
                         fashion_generation_payloads,
