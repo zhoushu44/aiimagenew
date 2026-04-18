@@ -28,6 +28,12 @@ load_dotenv(BASE_DIR / '.env')
 
 app = Flask(__name__, static_folder=str(BASE_DIR / 'static'), static_url_path='/static')
 
+# 执行SQL脚本的路由
+@app.route('/api/execute-sql', methods=['GET'])
+def execute_sql():
+    # 直接返回成功消息，因为我们将在Supabase控制台手动执行SQL
+    return jsonify({'success': True, 'message': '请在Supabase控制台手动执行SQL脚本创建表'})
+
 
 def get_first_env(names: list[str]) -> str:
     for name in names:
@@ -1124,6 +1130,22 @@ def get_supabase_session() -> dict | None:
     payload = response.json()
     session_data['user'] = payload
     return session_data
+
+
+def set_auth_session_cookie(response, session_data: dict):
+    cookie_data = {
+        'access_token': session_data.get('access_token'),
+        'refresh_token': session_data.get('refresh_token'),
+    }
+    response.set_cookie(
+        SUPABASE_SESSION_COOKIE,
+        json.dumps(cookie_data),
+        max_age=60 * 60 * 24 * 7,
+        httponly=True,
+        samesite='Lax',
+        path='/',
+    )
+    return response
 
 
 def clear_auth_session_cookie(response):

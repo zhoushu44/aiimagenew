@@ -297,11 +297,6 @@
           <input id="passwordInput" name="password" type="password" autocomplete="current-password" placeholder="至少 6 位" minlength="6" required>
         </label>
 
-        <label class="field" id="confirmField" for="confirmInput" hidden>
-          <span class="field-label">确认密码</span>
-          <input id="confirmInput" name="confirmPassword" type="password" autocomplete="new-password" placeholder="再次输入密码" minlength="6">
-        </label>
-
         <button class="auth-action" id="submitBtn" type="submit">登录</button>
         <div class="auth-status" id="authStatus" aria-live="polite"></div>
         <div class="auth-note" id="authNote">登录后将自动跳转到工作台。</div>
@@ -335,8 +330,6 @@
     const authPointsStatus = document.getElementById('authPointsStatus');
     const authPointsClaimBtn = document.getElementById('authPointsClaimBtn');
     const passwordInput = document.getElementById('passwordInput');
-    const confirmField = document.getElementById('confirmField');
-    const confirmInput = document.getElementById('confirmInput');
     const emailInput = document.getElementById('emailInput');
 
     const params = new URLSearchParams(window.location.search);
@@ -361,10 +354,8 @@
       const isRegister = mode === 'register';
       loginTab.classList.toggle('is-active', !isRegister);
       registerTab.classList.toggle('is-active', isRegister);
-      confirmField.hidden = !isRegister;
-      passwordInput.autocomplete = isRegister ? 'new-password' : 'current-password';
       submitBtn.textContent = isRegister ? '注册' : '登录';
-      authNote.textContent = isRegister ? '注册后如已开启邮箱确认，请按邮箱提示完成验证。' : '登录后将自动跳转到工作台。';
+      authNote.textContent = isRegister ? '注册后如已开启邮箱确认，请按邮箱提示完成验证后再登录。' : '登录后将自动跳转到工作台。';
       setStatus('');
     }
 
@@ -499,12 +490,6 @@
       event.preventDefault();
       const email = emailInput.value.trim().toLowerCase();
       const password = passwordInput.value;
-      const confirmPassword = confirmInput.value;
-
-      if (mode === 'register' && password !== confirmPassword) {
-        setStatus('两次输入的密码不一致', 'error');
-        return;
-      }
 
       submitBtn.disabled = true;
       setStatus(mode === 'register' ? '正在注册…' : '正在登录…');
