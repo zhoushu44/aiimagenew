@@ -5,30 +5,19 @@
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
   <title>AI服饰穿戴</title>
   <link rel="stylesheet" href="/static/css/workspace.css">
+  <script src="/static/js/shared-topbar.js" defer></script>
 </head>
 <body data-page-mode="fashion" class="fashion-page">
   <div class="app-shell">
-    <header class="console-topbar">
+    <header class="console-topbar" data-shared-topbar>
       <div class="console-brand">
-        <a class="console-home" href="/">AI Commerce Console</a>
+        <a class="console-home" href="/" data-topbar-home>AI Commerce Console</a>
         <div>
-          <div class="console-kicker">Fashion Workspace / Minimal Tech Control</div>
-          <div class="console-title">服饰穿戴工作台</div>
+          <div class="console-kicker" data-topbar-kicker>Fashion Workspace / Minimal Tech Control</div>
+          <div class="console-title" data-topbar-title>服饰穿戴工作台</div>
         </div>
       </div>
-      <div class="console-topbar-meta">
-        <div class="points-rail">
-          <div class="points-rail-inner">
-            <div class="points-balance-line">
-              <span class="points-balance-label">points</span>
-              <span class="points-balance-value" id="pointsBalanceValue">--</span>
-            </div>
-            <div class="points-meta" id="pointsMeta">积分同步中…</div>
-            <div class="points-status" id="pointsStatus" aria-live="polite"></div>
-          </div>
-          <button class="points-claim-btn" id="pointsClaimBtn" type="button">领取今日积分</button>
-        </div>
-      </div>
+      <div class="console-topbar-meta" data-topbar-meta></div>
     </header>
 
     <main class="workspace-layout">

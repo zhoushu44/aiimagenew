@@ -245,19 +245,26 @@
       }
     }
   </style>
+  <script src="/static/js/shared-topbar.js" defer></script>
 </head>
-<body class="settings-page">
+<body class="settings-page" data-page-mode="settings">
   <div class="settings-shell">
+    <header class="console-topbar" data-shared-topbar>
+      <div class="console-brand">
+        <a class="console-home" href="/" data-topbar-home>AIC</a>
+        <div>
+          <div class="console-kicker" data-topbar-kicker></div>
+          <div class="console-title" data-topbar-title></div>
+        </div>
+      </div>
+      <div class="console-topbar-meta" data-topbar-meta></div>
+    </header>
+
     <header class="settings-header">
       <div>
         <div class="settings-kicker">Protected Admin Screen</div>
         <h1 class="settings-title">API Settings</h1>
         <p class="settings-copy">通过后端受保护接口查看和编辑 <code>public.api_settings</code>。浏览器只接收经过脱敏处理后的内容，保存与刷新都由 Flask 服务端完成。</p>
-      </div>
-      <div class="settings-header-actions">
-        <span class="pill accent" id="scopePill">scope: global</span>
-        <span class="pill" id="countPill">0 items</span>
-        <a class="btn ghost" href="/">返回首页</a>
       </div>
     </header>
 

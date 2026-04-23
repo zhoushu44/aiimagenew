@@ -5,25 +5,20 @@
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
   <title>AI电商视觉控制台</title>
   <link rel="stylesheet" href="/static/css/landing.css">
+  <script src="/static/js/shared-topbar.js" defer></script>
 </head>
 <body>
   <div class="noise"></div>
   <div class="shell">
-    <header class="topbar">
-      <div class="brand-cluster">
-        <div class="eyebrow">Minimal Commerce Console</div>
-        <div class="brandline">
-          <div class="brand-mark">AIC</div>
-          <div>
-            <h1 class="brand-title">AI 电商视觉控制台</h1>
-            <p class="brand-subtitle">统一进入商品套图、A+ 详情页与服饰穿戴三类工作台。</p>
-          </div>
+    <header class="console-topbar" data-shared-topbar>
+      <div class="console-brand">
+        <a class="console-home" href="/" data-topbar-home>AIC</a>
+        <div>
+          <div class="console-kicker" data-topbar-kicker></div>
+          <div class="console-title" data-topbar-title></div>
         </div>
       </div>
-      <div class="topbar-actions">
-        <a class="btn ghost" href="/auth">登录 / 注册</a>
-        <div class="status-chip online">system online</div>
-      </div>
+      <div class="console-topbar-meta" data-topbar-meta></div>
     </header>
 
     <section class="hero-panel">

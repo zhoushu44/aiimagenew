@@ -68,6 +68,35 @@ img { max-width: 100%; display: block; }
   position: relative;
 }
 
+.btn {
+  min-height: 42px;
+  padding: 0 16px;
+  border-radius: 14px;
+  border: 1px solid var(--line-strong);
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  text-decoration: none;
+  color: var(--text);
+  background: #fff;
+  transition: transform 160ms ease, border-color 160ms ease, background 160ms ease;
+}
+
+.btn:hover {
+  transform: translateY(-1px);
+  border-color: #9ca3af;
+}
+
+.btn.primary {
+  background: var(--accent);
+  color: #fff;
+  border-color: var(--accent);
+}
+
+.btn.ghost {
+  background: rgba(255, 255, 255, 0.6);
+}
+
 .console-topbar,
 .panel,
 .metric-card,
@@ -173,90 +202,6 @@ img { max-width: 100%; display: block; }
   border-color: rgba(17, 24, 39, 0.18);
   color: var(--accent);
   background: rgba(17, 24, 39, 0.05);
-}
-.points-rail {
-  display: flex;
-  align-items: center;
-  gap: 10px;
-  padding-left: 10px;
-  border-left: 1px solid var(--line);
-}
-.points-rail-inner {
-  display: grid;
-  gap: 4px;
-  min-width: 0;
-}
-.points-balance-line {
-  display: flex;
-  align-items: baseline;
-  gap: 8px;
-  min-width: 0;
-}
-.points-balance-label {
-  font-size: 10px;
-  letter-spacing: 0.14em;
-  text-transform: uppercase;
-  color: var(--muted);
-  white-space: nowrap;
-}
-.points-balance-value {
-  font-family: var(--font-display);
-  font-size: 18px;
-  line-height: 1;
-  letter-spacing: -0.05em;
-  color: var(--accent);
-}
-.points-meta {
-  font-size: 11px;
-  line-height: 1.35;
-  color: var(--muted);
-  white-space: nowrap;
-}
-.points-claim-btn {
-  min-height: 42px;
-  padding: 0 14px;
-  border-radius: 14px;
-  border: 1px solid rgba(17, 24, 39, 0.14);
-  background: linear-gradient(180deg, rgba(17,24,39,0.96), rgba(17,24,39,0.88));
-  color: #fff;
-  font-size: 12px;
-  font-weight: 600;
-  letter-spacing: 0.08em;
-  text-transform: uppercase;
-  cursor: pointer;
-  box-shadow: 0 12px 28px rgba(15, 23, 42, 0.16);
-  transition: transform 160ms ease, box-shadow 160ms ease, opacity 160ms ease;
-}
-.points-claim-btn:hover:not(:disabled) {
-  transform: translateY(-1px);
-  box-shadow: 0 16px 34px rgba(15, 23, 42, 0.2);
-}
-.points-claim-btn:disabled {
-  opacity: 0.55;
-  cursor: not-allowed;
-  box-shadow: none;
-}
-.points-claim-btn.is-claimed {
-  background: linear-gradient(180deg, rgba(31, 143, 95, 0.95), rgba(27, 127, 83, 0.92));
-  border-color: rgba(31, 143, 95, 0.28);
-}
-.points-claim-btn.is-loading {
-  opacity: 0.8;
-}
-.points-status {
-  min-height: 16px;
-  font-size: 11px;
-  line-height: 1.35;
-  color: var(--muted);
-}
-.points-status.is-success {
-  color: var(--success);
-}
-.points-status.is-error {
-  color: var(--danger);
-}
-.points-status.is-accent {
-  color: var(--accent);
 }
 
 .workspace-layout {
