@@ -60,6 +60,7 @@ IMAGE_SIGNATURES = {
 }
 GENERATED_SUITES_DIR = BASE_DIR / 'generated-suites'
 SUPABASE_SESSION_COOKIE = 'aiimagenew_supabase_session'
+SUPABASE_SESSION_SYNC_COOKIE = 'aiimagenew_supabase_session_sync'
 SUPABASE_REDIRECT_PATH = '/auth'
 PROTECTED_PAGE_PATHS = {'/suite', '/aplus', '/fashion', '/settings'}
 PUBLIC_API_PREFIXES = ('/api/auth/', '/api/app-mode')
@@ -1104,6 +1105,35 @@ def parse_supabase_session_cookie() -> dict | None:
 
 
 
+def refresh_supabase_session(session_data: dict) -> dict | None:
+    refresh_token = str(session_data.get('refresh_token') or '').strip()
+    if not refresh_token:
+        return None
+
+    try:
+        response = requests.post(
+            build_supabase_request_url('/auth/v1/token?grant_type=refresh_token'),
+            headers=build_supabase_auth_headers(),
+            json={'refresh_token': refresh_token},
+            timeout=15,
+        )
+    except requests.RequestException:
+        return None
+
+    if response.status_code != 200:
+        return None
+
+    try:
+        payload = response.json()
+    except ValueError:
+        return None
+
+    if not isinstance(payload, dict):
+        return None
+
+    return normalize_supabase_session(payload)
+
+
 def get_supabase_session() -> dict | None:
     session_data = parse_supabase_session_cookie()
     if not session_data:
@@ -1111,6 +1141,24 @@ def get_supabase_session() -> dict | None:
     access_token = str(session_data.get('access_token') or '').strip()
     if not access_token:
         return None
+
+    sync_cookie = str(request.cookies.get(SUPABASE_SESSION_SYNC_COOKIE) or '').strip()
+    if sync_cookie == '1':
+        try:
+            response = requests.get(
+                build_supabase_request_url('/auth/v1/user'),
+                headers={
+                    **build_supabase_auth_headers(),
+                    'Authorization': f'Bearer {access_token}',
+                },
+                timeout=15,
+            )
+        except requests.RequestException:
+            return session_data
+        if response.status_code == 200:
+            session_data['user'] = response.json()
+            return session_data
+        return session_data
 
     try:
         response = requests.get(
@@ -1122,14 +1170,34 @@ def get_supabase_session() -> dict | None:
             timeout=15,
         )
     except requests.RequestException:
+        response = None
+
+    if response is not None and response.status_code == 200:
+        payload = response.json()
+        session_data['user'] = payload
+        return session_data
+
+    refreshed_session = refresh_supabase_session(session_data)
+    if not refreshed_session:
         return None
 
-    if response.status_code != 200:
-        return None
+    try:
+        refreshed_response = requests.get(
+            build_supabase_request_url('/auth/v1/user'),
+            headers={
+                **build_supabase_auth_headers(),
+                'Authorization': f'Bearer {refreshed_session.get("access_token") or ""}',
+            },
+            timeout=15,
+        )
+    except requests.RequestException:
+        return refreshed_session
 
-    payload = response.json()
-    session_data['user'] = payload
-    return session_data
+    if refreshed_response.status_code != 200:
+        return refreshed_session
+
+    refreshed_session['user'] = refreshed_response.json()
+    return refreshed_session
 
 
 def set_auth_session_cookie(response, session_data: dict):
@@ -1145,11 +1213,20 @@ def set_auth_session_cookie(response, session_data: dict):
         samesite='Lax',
         path='/',
     )
+    response.set_cookie(
+        SUPABASE_SESSION_SYNC_COOKIE,
+        '1',
+        max_age=60,
+        httponly=True,
+        samesite='Lax',
+        path='/',
+    )
     return response
 
 
 def clear_auth_session_cookie(response):
     response.delete_cookie(SUPABASE_SESSION_COOKIE, path='/')
+    response.delete_cookie(SUPABASE_SESSION_SYNC_COOKIE, path='/')
     return response
 
 
@@ -3311,10 +3388,22 @@ def guard_authentication():
 @app.get('/auth')
 def auth_page():
     default_next_path = '/suite'
+
+    def _sanitize_next_path(raw_next_path: str | None) -> str:
+        next_path = str(raw_next_path or '').strip() or default_next_path
+        if (
+            not next_path.startswith('/')
+            or next_path.startswith('//')
+            or next_path in {'/auth', '/logout'}
+            or next_path.startswith('/api/')
+            or next_path.startswith('/static/')
+            or next_path.startswith('/generated/')
+        ):
+            return default_next_path
+        return next_path
+
     if g.get('supabase_session'):
-        next_path = request.args.get('next', default_next_path).strip() or default_next_path
-        if not next_path.startswith('/') or next_path.startswith('//'):
-            next_path = default_next_path
+        next_path = _sanitize_next_path(request.args.get('next', default_next_path))
         return redirect(next_path)
 
     auth_html = (BASE_DIR / 'auth.html').read_text(encoding='utf-8')
@@ -3323,13 +3412,35 @@ def auth_page():
         f'<head>\n  <script>window.__APP_DEFAULT_NEXT_PATH__ = {default_next_path!r};</script>',
         1,
     )
-    return make_response(auth_html)
+    response = make_response(auth_html)
+    response.headers['Cache-Control'] = 'no-store, no-cache, must-revalidate, max-age=0'
+    response.headers['Pragma'] = 'no-cache'
+    response.headers['Expires'] = '0'
+    return response
 
 
 @app.get('/api/app-mode')
 def app_mode_api():
     app_mode = get_app_mode()
     return jsonify({'success': True, 'app_mode': app_mode, 'default_next_path': '/suite'})
+
+
+@app.post('/api/auth/session-sync')
+def auth_session_sync_api():
+    payload = request.get_json(silent=True) or {}
+    session = payload.get('session')
+    response = jsonify({'success': True})
+    if not session:
+        clear_auth_session_cookie(response)
+        return response
+    if not isinstance(session, dict):
+        return jsonify({'success': False, 'error': 'session 格式错误'}), 400
+    normalized_session = normalize_supabase_session(session)
+    if not normalized_session.get('access_token') or not normalized_session.get('refresh_token'):
+        clear_auth_session_cookie(response)
+        return response
+    set_auth_session_cookie(response, normalized_session)
+    return response
 
 
 @app.post('/api/auth/session')

@@ -3,530 +3,1280 @@
 <head>
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
-  <title>登录 / 注册 · AI 电商视觉控制台</title>
+  <title>手机号登录 · Supabase Auth</title>
   <link rel="stylesheet" href="/static/css/landing.css">
   <style>
-    body.auth-page {
-      display: grid;
-      place-items: center;
-      min-height: 100dvh;
-      padding: 20px;
+    :root {
+      --auth-ink: #0f172a;
+      --auth-ink-soft: rgba(15, 23, 42, 0.66);
+      --auth-accent: #0f766e;
+      --auth-accent-strong: #115e59;
+      --auth-accent-soft: rgba(15, 118, 110, 0.09);
+      --auth-warn: #b45309;
+      --auth-danger: #c2410c;
+      --auth-success: #15803d;
     }
-    .auth-shell {
-      width: min(100%, 980px);
+
+    body.auth-page {
+      min-height: 100vh;
       display: grid;
-      grid-template-columns: minmax(0, 1.05fr) minmax(340px, 0.95fr);
-      gap: 14px;
+      place-items: start center;
+      padding: 18px;
+      color: var(--text);
+      background:
+        radial-gradient(circle at top left, rgba(15, 118, 110, 0.12), transparent 32%),
+        radial-gradient(circle at 85% 18%, rgba(15, 23, 42, 0.08), transparent 24%),
+        linear-gradient(180deg, #f8fafc 0%, #eef2f7 100%);
+      overflow-y: auto;
+    }
+
+    @supports (min-height: 100svh) {
+      body.auth-page {
+        min-height: 100svh;
+      }
+    }
+
+    .auth-shell {
+      width: min(100%, 1160px);
+      display: grid;
+      grid-template-columns: minmax(0, 1.05fr) minmax(360px, 0.95fr);
+      gap: 16px;
       align-items: stretch;
     }
-    .auth-panel,
+
+    .auth-hero,
     .auth-card {
       border: 1px solid var(--line);
       background: var(--surface);
       box-shadow: var(--shadow);
       backdrop-filter: blur(18px);
-      border-radius: var(--radius-xl);
+      border-radius: 30px;
     }
-    .auth-panel {
-      padding: 28px;
+
+    .auth-hero {
+      position: relative;
+      overflow: hidden;
+      padding: 32px;
       display: grid;
-      gap: 18px;
-      align-content: start;
+      align-content: space-between;
+      gap: 26px;
     }
+
+    .auth-hero::before,
+    .auth-hero::after {
+      content: "";
+      position: absolute;
+      inset: auto;
+      border-radius: 999px;
+      pointer-events: none;
+    }
+
+    .auth-hero::before {
+      width: 240px;
+      height: 240px;
+      right: -90px;
+      top: -70px;
+      background: radial-gradient(circle, rgba(15, 118, 110, 0.16), transparent 68%);
+    }
+
+    .auth-hero::after {
+      width: 300px;
+      height: 300px;
+      left: -120px;
+      bottom: -140px;
+      background: radial-gradient(circle, rgba(15, 23, 42, 0.1), transparent 68%);
+    }
+
     .auth-kicker {
+      display: inline-flex;
+      align-items: center;
+      gap: 10px;
       text-transform: uppercase;
-      letter-spacing: 0.18em;
+      letter-spacing: 0.2em;
       font-size: 11px;
       color: var(--muted);
     }
+
+    .auth-kicker::before {
+      content: "";
+      width: 10px;
+      height: 10px;
+      border-radius: 999px;
+      background: var(--auth-accent);
+      box-shadow: 0 0 0 7px rgba(15, 118, 110, 0.12);
+    }
+
     .auth-title {
       margin: 0;
+      max-width: 10ch;
       font-family: var(--font-display);
-      font-size: clamp(34px, 4vw, 58px);
-      line-height: 0.96;
-      letter-spacing: -0.06em;
+      font-size: clamp(40px, 5vw, 74px);
+      line-height: 0.92;
+      letter-spacing: -0.07em;
+      color: var(--auth-ink);
     }
+
     .auth-copy {
       margin: 0;
-      max-width: 46ch;
-      color: var(--muted);
-      line-height: 1.6;
+      max-width: 52ch;
       font-size: 15px;
+      line-height: 1.75;
+      color: var(--muted);
     }
-    .auth-badges {
-      display: flex;
-      flex-wrap: wrap;
+
+    .auth-points {
+      display: grid;
+      grid-template-columns: repeat(3, minmax(0, 1fr));
       gap: 10px;
     }
-    .auth-badge {
-      min-height: 36px;
-      padding: 0 14px;
+
+    .point {
+      padding: 16px 14px;
+      border-radius: 22px;
+      background: rgba(255, 255, 255, 0.72);
+      border: 1px solid var(--line);
+      display: grid;
+      gap: 6px;
+      min-height: 112px;
+    }
+
+    .point strong {
+      font-family: var(--font-display);
+      font-size: 22px;
+      line-height: 1;
+      letter-spacing: -0.05em;
+      color: var(--auth-ink);
+    }
+
+    .point span {
+      color: var(--muted);
+      font-size: 13px;
+      line-height: 1.55;
+    }
+
+    .hero-footer {
+      display: flex;
+      gap: 10px;
+      flex-wrap: wrap;
+      align-items: center;
+      justify-content: space-between;
+      border-top: 1px solid var(--line);
+      padding-top: 18px;
+      color: var(--muted);
+      font-size: 13px;
+      line-height: 1.6;
+      position: relative;
+      z-index: 1;
+    }
+
+    .hero-tags {
+      display: flex;
+      gap: 10px;
+      flex-wrap: wrap;
+    }
+
+    .hero-tag {
+      min-height: 34px;
+      padding: 0 12px;
       border-radius: 999px;
       display: inline-flex;
       align-items: center;
       border: 1px solid var(--line);
-      background: rgba(255,255,255,0.65);
+      background: rgba(255, 255, 255, 0.72);
       color: var(--muted-strong);
       font-size: 12px;
     }
+
     .auth-card {
-      padding: 24px;
+      padding: 22px;
       display: grid;
       gap: 16px;
       align-content: start;
+      min-height: 760px;
     }
-    .auth-points {
-      border: 1px solid var(--line);
-      border-radius: 18px;
-      padding: 16px;
+
+    .card-top {
       display: grid;
       gap: 12px;
-      background: rgba(248,250,252,0.82);
     }
-    .auth-points-head {
+
+    .card-header {
       display: flex;
+      align-items: center;
       justify-content: space-between;
       gap: 12px;
-      align-items: baseline;
       flex-wrap: wrap;
     }
-    .auth-points-kicker {
-      text-transform: uppercase;
-      letter-spacing: 0.16em;
-      font-size: 11px;
-      color: var(--muted);
-    }
-    .auth-points-balance {
+
+    .card-title {
+      margin: 0;
       font-family: var(--font-display);
-      font-size: 30px;
+      font-size: 24px;
+      letter-spacing: -0.05em;
       line-height: 1;
-      letter-spacing: -0.06em;
-      color: var(--accent);
     }
-    .auth-points-meta,
-    .auth-points-status {
-      font-size: 13px;
-      line-height: 1.5;
-      color: var(--muted);
+
+    .session-pill {
+      min-height: 40px;
+      padding: 0 14px;
+      border-radius: 999px;
+      display: inline-flex;
+      align-items: center;
+      gap: 8px;
+      border: 1px solid var(--line);
+      background: rgba(255, 255, 255, 0.76);
+      color: var(--muted-strong);
+      font-size: 12px;
     }
-    .auth-points-status {
-      min-height: 20px;
+
+    .session-pill.is-live {
+      border-color: rgba(21, 128, 61, 0.18);
+      background: rgba(21, 128, 61, 0.08);
+      color: var(--auth-success);
     }
-    .auth-points-action {
-      min-height: 42px;
-      border: 1px solid var(--accent);
-      border-radius: 14px;
-      background: var(--accent);
-      color: #fff;
-      font-weight: 600;
-      cursor: pointer;
+
+    .session-dot {
+      width: 8px;
+      height: 8px;
+      border-radius: 999px;
+      background: currentColor;
+      flex: 0 0 auto;
     }
-    .auth-points-action:disabled {
-      opacity: 0.6;
-      cursor: not-allowed;
-    }
-    .auth-points-action.is-loading {
-      opacity: 0.8;
-    }
-    .auth-points-action.is-claimed {
-      background: linear-gradient(180deg, rgba(31,143,95,0.96), rgba(27,127,83,0.92));
-      border-color: rgba(31,143,95,0.3);
-    }
-    .auth-points-status.is-error {
-      color: var(--danger);
-    }
-    .auth-points-status.is-success {
-      color: var(--success);
-    }
-    .auth-tabs {
+
+    .segmented {
       display: grid;
       grid-template-columns: repeat(2, minmax(0, 1fr));
       gap: 8px;
       padding: 6px;
-      border: 1px solid var(--line);
       border-radius: 18px;
-      background: rgba(248,250,252,0.9);
+      border: 1px solid var(--line);
+      background: rgba(248, 250, 252, 0.92);
     }
-    .auth-tab {
+
+    .segment {
       min-height: 44px;
       border: 0;
       border-radius: 14px;
       background: transparent;
       color: var(--muted-strong);
+      font-weight: 600;
       cursor: pointer;
       transition: background 160ms ease, color 160ms ease, transform 160ms ease;
     }
-    .auth-tab.is-active {
-      background: var(--accent);
+
+    .segment.is-active {
+      background: var(--auth-accent);
       color: #fff;
     }
-    .auth-form {
-      display: grid;
-      gap: 12px;
+
+    .segment:hover {
+      transform: translateY(-1px);
     }
-    .field {
+
+    .mode-row {
       display: grid;
-      gap: 8px;
+      grid-template-columns: repeat(2, minmax(0, 1fr));
+      gap: 10px;
     }
-    .field-label {
+
+    .mode-chip {
+      min-height: 50px;
+      border-radius: 18px;
+      border: 1px solid var(--line);
+      background: rgba(255, 255, 255, 0.82);
+      cursor: pointer;
+      display: grid;
+      gap: 4px;
+      place-items: center;
+      text-align: center;
+      padding: 10px 12px;
+      transition: border-color 160ms ease, background 160ms ease, transform 160ms ease;
+    }
+
+    .mode-chip strong {
+      font-size: 14px;
+      color: var(--auth-ink);
+    }
+
+    .mode-chip span {
       font-size: 12px;
-      letter-spacing: 0.12em;
-      text-transform: uppercase;
       color: var(--muted);
     }
-    .field input {
-      min-height: 48px;
-      border-radius: 16px;
-      border: 1px solid var(--line-strong);
-      padding: 0 14px;
-      background: rgba(255,255,255,0.92);
-      color: var(--text);
-      outline: none;
+
+    .mode-chip.is-active {
+      border-color: rgba(15, 118, 110, 0.35);
+      background: rgba(15, 118, 110, 0.08);
     }
-    .field input:focus {
-      border-color: rgba(17,24,39,0.3);
-      box-shadow: 0 0 0 4px rgba(17,24,39,0.06);
+
+    .mode-chip:hover {
+      transform: translateY(-1px);
     }
-    .auth-action {
-      min-height: 48px;
-      border: 1px solid var(--accent);
-      border-radius: 16px;
-      background: var(--accent);
-      color: #fff;
-      font-weight: 600;
-      cursor: pointer;
-    }
-    .auth-note,
-    .auth-status,
-    .auth-helper {
+
+    .auth-banner {
+      display: grid;
+      gap: 6px;
+      border: 1px solid var(--line);
+      border-radius: 20px;
+      padding: 14px 16px;
+      background: rgba(248, 250, 252, 0.88);
       color: var(--muted);
       line-height: 1.6;
       font-size: 13px;
     }
-    .auth-status {
-      min-height: 20px;
-      color: var(--accent);
+
+    .auth-banner strong {
+      color: var(--auth-ink);
+      font-size: 14px;
     }
-    .auth-footer {
+
+    .session-card {
+      border: 1px solid rgba(21, 128, 61, 0.18);
+      background: rgba(21, 128, 61, 0.06);
+      border-radius: 20px;
+      padding: 16px;
+      display: grid;
+      gap: 12px;
+    }
+
+    .session-card-head {
       display: flex;
       justify-content: space-between;
       gap: 12px;
       align-items: center;
       flex-wrap: wrap;
-      padding-top: 4px;
-      border-top: 1px solid var(--line);
     }
-    .auth-link {
-      color: var(--accent);
-      text-decoration: none;
+
+    .session-card-title {
+      margin: 0;
+      font-size: 14px;
+      font-weight: 700;
+      color: var(--auth-success);
     }
-    .auth-link:hover {
-      text-decoration: underline;
+
+    .session-card-body {
+      display: grid;
+      gap: 6px;
+      color: var(--muted);
+      font-size: 13px;
+      line-height: 1.55;
     }
-    .auth-side {
-      padding: 24px;
+
+    .auth-form {
       display: grid;
       gap: 12px;
-      align-content: start;
     }
-    .auth-side h2 {
+
+    .field.hidden {
+      max-height: 0;
+      opacity: 0;
+      overflow: hidden;
       margin: 0;
-      font-family: var(--font-display);
-      font-size: 22px;
-      line-height: 1;
-      letter-spacing: -0.04em;
+      padding: 0;
+      pointer-events: none;
     }
-    .auth-list {
-      margin: 0;
-      padding-left: 18px;
+
+    .field {
       display: grid;
+      gap: 8px;
+      transition: opacity 160ms ease, max-height 160ms ease, margin 160ms ease, padding 160ms ease;
+      max-height: 220px;
+    }
+
+    .field-label-row {
+      display: flex;
+      justify-content: space-between;
       gap: 10px;
+      align-items: baseline;
+      flex-wrap: wrap;
+    }
+
+    .field-label {
+      font-size: 12px;
+      text-transform: uppercase;
+      letter-spacing: 0.14em;
       color: var(--muted);
+    }
+
+    .field-hint {
+      font-size: 12px;
+      color: var(--muted);
+    }
+
+    .field-input,
+    .field-textarea {
+      width: 100%;
+      min-height: 50px;
+      border-radius: 16px;
+      border: 1px solid var(--line-strong);
+      padding: 0 14px;
+      background: rgba(255, 255, 255, 0.94);
+      color: var(--text);
+      outline: none;
+      transition: border-color 160ms ease, box-shadow 160ms ease, transform 160ms ease;
+    }
+
+    .field-textarea {
+      min-height: 96px;
+      padding-top: 12px;
+      padding-bottom: 12px;
+      resize: vertical;
+    }
+
+    .field-input:focus,
+    .field-textarea:focus {
+      border-color: rgba(15, 118, 110, 0.35);
+      box-shadow: 0 0 0 4px rgba(15, 118, 110, 0.08);
+    }
+
+    .field-input:disabled,
+    .field-textarea:disabled {
+      opacity: 0.7;
+      background: rgba(248, 250, 252, 0.9);
+    }
+
+    .inline-row {
+      display: grid;
+      grid-template-columns: minmax(0, 1fr) auto;
+      gap: 10px;
+      align-items: end;
+    }
+
+    .action-button,
+    .ghost-button {
+      min-height: 50px;
+      border-radius: 16px;
+      border: 1px solid transparent;
+      padding: 0 18px;
+      font-weight: 700;
+      cursor: pointer;
+      transition: transform 160ms ease, opacity 160ms ease, border-color 160ms ease, background 160ms ease;
+      display: inline-flex;
+      align-items: center;
+      justify-content: center;
+      gap: 8px;
+    }
+
+    .action-button {
+      background: var(--auth-accent);
+      border-color: var(--auth-accent);
+      color: #fff;
+    }
+
+    .action-button:hover,
+    .ghost-button:hover {
+      transform: translateY(-1px);
+    }
+
+    .action-button:disabled,
+    .ghost-button:disabled,
+    .segment:disabled,
+    .mode-chip:disabled {
+      opacity: 0.58;
+      cursor: not-allowed;
+      transform: none;
+    }
+
+    .ghost-button {
+      background: rgba(255, 255, 255, 0.82);
+      border-color: var(--line-strong);
+      color: var(--auth-ink);
+    }
+
+    .helper-row {
+      display: flex;
+      justify-content: space-between;
+      gap: 12px;
+      flex-wrap: wrap;
+      align-items: center;
+      color: var(--muted);
+      font-size: 13px;
+      line-height: 1.5;
+    }
+
+    .status-box {
+      min-height: 22px;
+      color: var(--muted);
+      font-size: 13px;
       line-height: 1.6;
-      font-size: 14px;
     }
-    .auth-status.is-error {
-      color: var(--danger);
+
+    .status-box.is-error {
+      color: var(--auth-danger);
     }
-    .auth-status.is-success {
-      color: var(--success);
+
+    .status-box.is-success {
+      color: var(--auth-success);
     }
-    @media (max-width: 900px) {
-      .auth-shell { grid-template-columns: 1fr; }
+
+    .status-box.is-warn {
+      color: var(--auth-warn);
+    }
+
+    .footer-row {
+      display: flex;
+      justify-content: space-between;
+      gap: 12px;
+      flex-wrap: wrap;
+      border-top: 1px solid var(--line);
+      padding-top: 4px;
+      color: var(--muted);
+      font-size: 13px;
+    }
+
+    .link {
+      color: var(--auth-accent);
+      text-decoration: none;
+    }
+
+    .link:hover {
+      text-decoration: underline;
+    }
+
+    .hidden {
+      display: none !important;
+    }
+
+    @media (max-width: 980px) {
+      .auth-shell {
+        grid-template-columns: 1fr;
+      }
+
+      .auth-hero {
+        padding: 26px;
+      }
+
+      .auth-points {
+        grid-template-columns: 1fr;
+      }
+    }
+
+    @media (max-width: 640px) {
+      body.auth-page {
+        padding: 12px;
+      }
+
+      .auth-hero,
+      .auth-card {
+        border-radius: 24px;
+      }
+
+      .auth-hero,
+      .auth-card {
+        padding: 18px;
+      }
+
+      .mode-row,
+      .segmented,
+      .inline-row {
+        grid-template-columns: 1fr;
+      }
+
+      .auth-points {
+        grid-template-columns: 1fr;
+      }
+
+      .point {
+        min-height: 92px;
+      }
     }
   </style>
 </head>
 <body class="auth-page">
   <div class="auth-shell">
-    <section class="auth-panel">
-      <div class="auth-kicker">Supabase Email Auth</div>
-      <h1 class="auth-title">AI 电商视觉控制台</h1>
-      <p class="auth-copy">使用邮箱注册或登录后进入商品套图、A+ 详情页和服饰穿戴工作台。会话由后端校验并以 HttpOnly Cookie 保存，浏览器不会接触服务端密钥。</p>
-      <div class="auth-badges">
-        <span class="auth-badge">Email / Password</span>
-        <span class="auth-badge">Protected Workspaces</span>
-        <span class="auth-badge">Session Redirect</span>
+    <section class="auth-hero">
+      <div>
+        <div class="auth-kicker">Supabase Auth · native session persistence</div>
+        <h1 class="auth-title">短信 + 密码双模式登录</h1>
+        <p class="auth-copy">支持手机号短信注册、短信登录、手机号密码登录，并通过 Supabase 原生会话持久化保存登录状态。页面刷新、关闭浏览器后重新打开，只要会话未过期，仍会自动恢复登录。</p>
       </div>
-      <div class="auth-helper">如果你的邮箱尚未注册，直接切换到“注册”即可创建新账号。</div>
+
+      <div class="auth-points">
+        <div class="point">
+          <strong>60s</strong>
+          <span>验证码发送后自动倒计时，期间禁用重复发送。</span>
+        </div>
+        <div class="point">
+          <strong>2 modes</strong>
+          <span>短信与密码两种登录方式随时切换。</span>
+        </div>
+        <div class="point">
+          <strong>Persistent</strong>
+          <span>Supabase autoRefreshToken 与 persistSession 已开启。</span>
+        </div>
+      </div>
+
+      <div class="hero-footer">
+        <div class="hero-tags">
+          <span class="hero-tag">SMS OTP</span>
+          <span class="hero-tag">Phone Password</span>
+          <span class="hero-tag">Session Sync</span>
+        </div>
+        <div id="heroStatus">准备登录</div>
+      </div>
     </section>
 
     <section class="auth-card">
-      <div class="auth-tabs" role="tablist" aria-label="登录注册切换">
-        <button class="auth-tab is-active" id="loginTab" type="button" data-mode="login">登录</button>
-        <button class="auth-tab" id="registerTab" type="button" data-mode="register">注册</button>
+      <div class="card-top">
+        <div class="card-header">
+          <h2 class="card-title">登录 / 注册</h2>
+          <div class="session-pill" id="sessionPill"><span class="session-dot"></span><span id="sessionPillText">未登录</span></div>
+        </div>
+
+        <div class="segmented" role="tablist" aria-label="登录注册切换">
+          <button class="segment is-active" id="loginTab" type="button">登录</button>
+          <button class="segment" id="registerTab" type="button">注册</button>
+        </div>
+
+        <div class="mode-row" role="tablist" aria-label="登录方式切换">
+          <button class="mode-chip is-active" id="smsModeBtn" type="button">
+            <strong>短信</strong>
+            <span>验证码登录 / 注册</span>
+          </button>
+          <button class="mode-chip" id="passwordModeBtn" type="button">
+            <strong>密码</strong>
+            <span>手机号 + 密码</span>
+          </button>
+        </div>
+
+        <div class="auth-banner" id="authBanner">
+          <strong>短信模式</strong>
+          <span id="authBannerText">注册时先验证短信验证码，再设置密码完成注册。</span>
+        </div>
       </div>
 
-      <section class="auth-points" aria-label="积分概览">
-        <div class="auth-points-head">
-          <div class="auth-points-kicker">points dashboard</div>
-          <div class="auth-points-balance" id="authPointsBalance">--</div>
+      <div class="session-card hidden" id="sessionCard">
+        <div class="session-card-head">
+          <p class="session-card-title">当前会话已恢复</p>
+          <button class="ghost-button" id="logoutBtn" type="button">退出登录</button>
         </div>
-        <div class="auth-points-meta" id="authPointsMeta">登录后可查看积分余额与每日领取状态。</div>
-        <button class="auth-points-action" id="authPointsClaimBtn" type="button" disabled>领取今日积分</button>
-        <div class="auth-points-status" id="authPointsStatus" aria-live="polite"></div>
-      </section>
+        <div class="session-card-body" id="sessionCardBody"></div>
+      </div>
 
-      <form class="auth-form" id="authForm">
-        <label class="field" for="emailInput">
-          <span class="field-label">邮箱</span>
-          <input id="emailInput" name="email" type="email" autocomplete="email" placeholder="name@example.com" required>
+      <form class="auth-form" id="authForm" novalidate>
+        <label class="field" for="phoneInput">
+          <div class="field-label-row">
+            <span class="field-label">手机号</span>
+            <span class="field-hint">支持 11 位国内手机号或 +86 开头</span>
+          </div>
+          <input class="field-input" id="phoneInput" name="phone" type="tel" autocomplete="tel" placeholder="例如 19918595744 或 +8619918595744" required>
         </label>
 
-        <label class="field" for="passwordInput">
-          <span class="field-label">密码</span>
-          <input id="passwordInput" name="password" type="password" autocomplete="current-password" placeholder="至少 6 位" minlength="6" required>
-        </label>
+        <div class="field hidden" id="smsSection">
+          <div class="field-label-row">
+            <span class="field-label">验证码</span>
+            <span class="field-hint" id="smsHint">未发送验证码</span>
+          </div>
+          <div class="inline-row">
+            <input class="field-input" id="otpInput" name="otp" inputmode="numeric" autocomplete="one-time-code" placeholder="6 位验证码" maxlength="6">
+            <button class="ghost-button" id="sendOtpBtn" type="button">获取验证码</button>
+          </div>
+        </div>
 
-        <button class="auth-action" id="submitBtn" type="submit">登录</button>
-        <div class="auth-status" id="authStatus" aria-live="polite"></div>
-        <div class="auth-note" id="authNote">登录后将自动跳转到工作台。</div>
+        <div class="field hidden" id="passwordSection">
+          <div class="field-label-row">
+            <span class="field-label">密码</span>
+            <span class="field-hint" id="passwordHint">至少 6 位</span>
+          </div>
+          <input class="field-input" id="passwordInput" name="password" type="password" autocomplete="current-password" placeholder="请输入密码" minlength="6">
+        </div>
+
+        <div class="field hidden" id="confirmPasswordSection">
+          <div class="field-label-row">
+            <span class="field-label">确认密码</span>
+            <span class="field-hint">仅注册时需要</span>
+          </div>
+          <input class="field-input" id="confirmPasswordInput" name="confirmPassword" type="password" autocomplete="new-password" placeholder="再次输入密码">
+        </div>
+
+        <div class="helper-row">
+          <span id="stepNote">短信登录时，先发送验证码再完成验证。</span>
+          <span id="countdownText"></span>
+        </div>
+
+        <button class="action-button" id="submitBtn" type="submit">验证码登录</button>
+        <div class="status-box" id="statusBox" aria-live="polite"></div>
       </form>
 
-      <div class="auth-footer">
-        <a class="auth-link" href="/">返回首页</a>
-        <a class="auth-link" href="/logout">退出登录</a>
+      <div class="footer-row">
+        <a class="link" href="/">返回首页</a>
+        <a class="link" href="/suite">进入工作台</a>
       </div>
-    </section>
-
-    <section class="auth-card auth-side">
-      <h2>登录后可用</h2>
-      <ul class="auth-list">
-        <li>上传图片并生成套图结果</li>
-        <li>AI 帮写、风格分析与标题生成</li>
-        <li>工作台页面自动受保护，未登录会被重定向到这里</li>
-      </ul>
     </section>
   </div>
 
-  <script>
+  <script type="module">
+    import { createClient } from 'https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2/+esm';
+
+    const SUPABASE_URL = 'https://spb-kemqk3h0a423q1q5.supabase.opentrust.net';
+    const SUPABASE_ANON_KEY = 'eyJ0eXAiOiJKV1QiLCJhbGciOiJIUzI1NiJ9.eyJyb2xlIjoiYW5vbiIsInJlZiI6InNwYi1rZW1xazNoMGE0MjNxMXE1IiwiaXNzIjoic3VwYWJhc2UiLCJpYXQiOjE3NzYyNjcxMjUsImV4cCI6MjA5MTg0MzEyNX0.hKFA4d_dQwbecO8t0na0DptshXQNHTSEQ5E2VAd3o18';
+    const DEFAULT_NEXT = '/suite';
+    const COUNTDOWN_SECONDS = 60;
+
+    const supabase = createClient(SUPABASE_URL, SUPABASE_ANON_KEY, {
+      auth: {
+        autoRefreshToken: true,
+        persistSession: true,
+        detectSessionInUrl: true,
+      },
+    });
+
     const loginTab = document.getElementById('loginTab');
     const registerTab = document.getElementById('registerTab');
+    const smsModeBtn = document.getElementById('smsModeBtn');
+    const passwordModeBtn = document.getElementById('passwordModeBtn');
+    const authBanner = document.getElementById('authBanner');
+    const authBannerText = document.getElementById('authBannerText');
     const authForm = document.getElementById('authForm');
-    const submitBtn = document.getElementById('submitBtn');
-    const authStatus = document.getElementById('authStatus');
-    const authNote = document.getElementById('authNote');
-    const authPointsBalance = document.getElementById('authPointsBalance');
-    const authPointsMeta = document.getElementById('authPointsMeta');
-    const authPointsStatus = document.getElementById('authPointsStatus');
-    const authPointsClaimBtn = document.getElementById('authPointsClaimBtn');
+    const phoneInput = document.getElementById('phoneInput');
+    const otpInput = document.getElementById('otpInput');
     const passwordInput = document.getElementById('passwordInput');
-    const emailInput = document.getElementById('emailInput');
+    const confirmPasswordInput = document.getElementById('confirmPasswordInput');
+    const smsSection = document.getElementById('smsSection');
+    const passwordSection = document.getElementById('passwordSection');
+    const confirmPasswordSection = document.getElementById('confirmPasswordSection');
+    const sendOtpBtn = document.getElementById('sendOtpBtn');
+    const submitBtn = document.getElementById('submitBtn');
+    const statusBox = document.getElementById('statusBox');
+    const countdownText = document.getElementById('countdownText');
+    const stepNote = document.getElementById('stepNote');
+    const smsHint = document.getElementById('smsHint');
+    const passwordHint = document.getElementById('passwordHint');
+    const sessionPill = document.getElementById('sessionPill');
+    const sessionPillText = document.getElementById('sessionPillText');
+    const sessionCard = document.getElementById('sessionCard');
+    const sessionCardBody = document.getElementById('sessionCardBody');
+    const logoutBtn = document.getElementById('logoutBtn');
+    const heroStatus = document.getElementById('heroStatus');
 
     const params = new URLSearchParams(window.location.search);
-    const defaultNextPath = window.__APP_DEFAULT_NEXT_PATH__ || '/suite';
     const nextPath = (() => {
-      const raw = (params.get('next') || defaultNextPath).trim();
+      const raw = (params.get('next') || DEFAULT_NEXT).trim();
       if (!raw.startsWith('/') || raw.startsWith('//')) {
-        return defaultNextPath;
+        return DEFAULT_NEXT;
       }
       return raw;
     })();
 
-    let mode = 'login';
+    const state = {
+      tab: 'login',
+      method: 'sms',
+      smsVerified: false,
+      countdown: 0,
+      countdownTimer: null,
+      lastPhone: '',
+      busy: false,
+      session: null,
+      authReady: false,
+      sessionStatus: 'unknown',
+    };
 
     function setStatus(message, type = '') {
-      authStatus.className = `auth-status${type ? ` is-${type}` : ''}`;
-      authStatus.textContent = message || '';
+      statusBox.className = `status-box${type ? ` is-${type}` : ''}`;
+      statusBox.textContent = message || '';
     }
 
-    function setMode(nextMode) {
-      mode = nextMode;
-      const isRegister = mode === 'register';
-      loginTab.classList.toggle('is-active', !isRegister);
-      registerTab.classList.toggle('is-active', isRegister);
-      submitBtn.textContent = isRegister ? '注册' : '登录';
-      authNote.textContent = isRegister ? '注册后如已开启邮箱确认，请按邮箱提示完成验证后再登录。' : '登录后将自动跳转到工作台。';
+    function setHeroStatus(message) {
+      heroStatus.textContent = message;
+    }
+
+    function setSessionPill(authenticated, message) {
+      sessionPill.className = authenticated ? 'session-pill is-live' : 'session-pill';
+      sessionPillText.textContent = message;
+    }
+
+    function normalizePhone(rawPhone) {
+      const text = String(rawPhone || '').trim().replace(/[\s-]/g, '');
+      if (!text) {
+        return '';
+      }
+      if (text.startsWith('+')) {
+        return text;
+      }
+      if (/^86\d{11}$/.test(text)) {
+        return `+${text}`;
+      }
+      if (/^1\d{10}$/.test(text)) {
+        return `+86${text}`;
+      }
+      return text;
+    }
+
+    function isValidPhone(rawPhone) {
+      const phone = normalizePhone(rawPhone);
+      return /^\+?\d{10,15}$/.test(phone) && phone.length >= 10;
+    }
+
+    function getSessionUserLabel(session) {
+      const user = session?.user || {};
+      return user.phone || user.email || user.id || '已登录用户';
+    }
+
+    function setCountdown(seconds) {
+      clearInterval(state.countdownTimer);
+      state.countdown = Math.max(0, Number(seconds || 0));
+      renderCountdown();
+      if (state.countdown <= 0) {
+        return;
+      }
+      state.countdownTimer = window.setInterval(() => {
+        state.countdown -= 1;
+        renderCountdown();
+        if (state.countdown <= 0) {
+          clearInterval(state.countdownTimer);
+          state.countdownTimer = null;
+          renderCountdown();
+        }
+      }, 1000);
+    }
+
+    function renderCountdown() {
+      if (state.countdown > 0) {
+        countdownText.textContent = `${state.countdown} 秒后可重发`;
+        sendOtpBtn.disabled = true;
+        sendOtpBtn.textContent = `重发 ${state.countdown}s`;
+        return;
+      }
+      countdownText.textContent = '';
+      sendOtpBtn.disabled = state.busy;
+      sendOtpBtn.textContent = '获取验证码';
+    }
+
+    function renderSessionCard() {
+      if (!state.authReady) {
+        sessionCard.classList.add('hidden');
+        return;
+      }
+      if (!state.session) {
+        sessionCard.classList.add('hidden');
+        if (state.sessionStatus !== 'signed_out') {
+          setSessionPill(false, '未登录');
+        }
+        return;
+      }
+      const user = state.session.user || {};
+      const lines = [
+        `账号：${getSessionUserLabel(state.session)}`,
+        `会话状态：已激活`,
+        user.phone ? `手机号：${user.phone}` : '',
+        user.email ? `邮箱：${user.email}` : '',
+      ].filter(Boolean);
+      sessionCardBody.innerHTML = lines.map((line) => `<div>${line}</div>`).join('');
+      sessionCard.classList.remove('hidden');
+      setSessionPill(true, '已登录');
+      state.sessionStatus = 'signed_in';
+    }
+
+    function setBusy(nextBusy) {
+      state.busy = nextBusy;
+      phoneInput.disabled = nextBusy;
+      otpInput.disabled = nextBusy || state.method !== 'sms';
+      passwordInput.disabled = nextBusy || (state.method === 'sms' && !state.smsVerified);
+      confirmPasswordInput.disabled = nextBusy || state.tab !== 'register' || state.method !== 'password';
+      submitBtn.disabled = nextBusy;
+      renderCountdown();
+      renderUI();
+    }
+
+    function setTab(nextTab) {
+      state.tab = nextTab;
+      state.method = nextTab === 'register' ? 'password' : 'sms';
+      state.smsVerified = false;
       setStatus('');
+      otpInput.value = '';
+      confirmPasswordInput.value = '';
+      renderUI();
     }
 
-    const formatPointsCount = (value) => String(Number(value || 0));
-    const setPointsStatus = (message = '', type = '') => {
-      if (!authPointsStatus) {
-        return;
+    function setMethod(nextMethod) {
+      state.method = nextMethod;
+      state.smsVerified = false;
+      setStatus('');
+      otpInput.value = '';
+      confirmPasswordInput.value = '';
+      renderUI();
+    }
+
+    function renderUI() {
+      loginTab.classList.toggle('is-active', state.tab === 'login');
+      registerTab.classList.toggle('is-active', state.tab === 'register');
+      smsModeBtn.classList.toggle('is-active', state.method === 'sms');
+      passwordModeBtn.classList.toggle('is-active', state.method === 'password');
+
+      const isSms = state.method === 'sms';
+      const isRegister = state.tab === 'register';
+      smsSection.classList.toggle('hidden', !isSms);
+      passwordSection.classList.remove('hidden');
+      confirmPasswordSection.classList.toggle('hidden', !(isRegister && !isSms));
+
+      otpInput.disabled = state.busy || !isSms;
+      sendOtpBtn.disabled = state.busy || !isSms || state.countdown > 0;
+      passwordInput.disabled = state.busy || (isSms && !state.smsVerified);
+      confirmPasswordInput.disabled = state.busy || !isRegister || isSms;
+
+      if (isSms) {
+        passwordSection.classList.toggle('hidden', state.tab === 'login' || !state.smsVerified);
+      } else {
+        passwordSection.classList.remove('hidden');
       }
-      authPointsStatus.textContent = message;
-      authPointsStatus.className = `auth-points-status${type ? ` is-${type}` : ''}`;
-    };
-    const setPointsClaimButtonState = (state = {}) => {
-      if (!authPointsClaimBtn) {
-        return;
-      }
-      authPointsClaimBtn.disabled = Boolean(state.disabled);
-      authPointsClaimBtn.classList.toggle('is-loading', Boolean(state.loading));
-      authPointsClaimBtn.classList.toggle('is-claimed', Boolean(state.claimed));
-      authPointsClaimBtn.textContent = state.label || '领取今日积分';
-    };
-    const renderPointsBalance = (points = {}) => {
-      if (authPointsBalance) {
-        authPointsBalance.textContent = formatPointsCount(points.balance);
-      }
-      if (authPointsMeta) {
-        const earned = Number(points.total_earned || 0);
-        const spent = Number(points.total_spent || 0);
-        const dailyFree = Number(points.daily_free || 0);
-        authPointsMeta.textContent = `累计 ${earned} · 已用 ${spent} · 今日 ${dailyFree}`;
-      }
-      const lastClaimAt = points.last_daily_claim_at ? new Date(points.last_daily_claim_at) : null;
-      const now = new Date();
-      const isClaimedToday = Boolean(lastClaimAt)
-        && lastClaimAt.getUTCFullYear() === now.getUTCFullYear()
-        && lastClaimAt.getUTCMonth() === now.getUTCMonth()
-        && lastClaimAt.getUTCDate() === now.getUTCDate();
-      if (authPointsClaimBtn) {
-        setPointsClaimButtonState({
-          disabled: !points.user_id || isClaimedToday,
-          claimed: isClaimedToday,
-          loading: false,
-          label: isClaimedToday ? '今日已领取' : '领取今日积分',
-        });
-      }
-      setPointsStatus(isClaimedToday ? '今日积分已领取' : '可领取今日积分', isClaimedToday ? 'success' : 'accent');
-    };
-    const getPointsPayload = (data = {}) => data?.points || {};
-    const loadAuthPointsBalance = async () => {
-      if (!authPointsBalance || !authPointsMeta || !authPointsStatus || !authPointsClaimBtn) {
-        return;
-      }
-      setPointsClaimButtonState({ disabled: true, loading: true, claimed: false, label: '同步中…' });
-      setPointsStatus('正在同步积分…');
-      try {
-        const response = await fetch('/api/points/balance', {
-          method: 'GET',
-          headers: { 'Accept': 'application/json' },
-          credentials: 'same-origin',
-        });
-        const data = await response.json();
-        if (response.status === 401 || data?.error === '请先登录') {
-          authPointsBalance.textContent = '--';
-          authPointsMeta.textContent = '登录后可查看积分余额与每日领取状态。';
-          setPointsClaimButtonState({ disabled: true, loading: false, claimed: false, label: '领取今日积分' });
-          setPointsStatus('登录后可查看积分余额与每日领取状态。');
-          return;
+
+      if (state.method === 'sms') {
+        if (state.tab === 'login') {
+          authBannerText.textContent = '短信登录先发送验证码，再输入验证码完成登录。';
+          stepNote.textContent = state.smsVerified ? '验证码已验证，正在保持登录状态。' : '短信登录时，先发送验证码再完成验证。';
+          submitBtn.textContent = '验证码登录';
+        } else {
+          authBannerText.textContent = state.smsVerified
+            ? '验证码已验证，现在设置密码即可完成注册。'
+            : '注册时先验证短信验证码，再设置密码完成注册。';
+          stepNote.textContent = state.smsVerified
+            ? '验证码通过后，请为该手机号设置一个密码。'
+            : '注册时先获取验证码并完成验证。';
+          submitBtn.textContent = state.smsVerified ? '设置密码并完成' : '验证验证码';
         }
-        if (!response.ok || !data?.success) {
-          throw new Error(data?.error || '积分同步失败');
-        }
-        renderPointsBalance(getPointsPayload(data));
-      } catch (error) {
-        authPointsBalance.textContent = '--';
-        authPointsMeta.textContent = '登录后可查看积分余额与每日领取状态。';
-        setPointsClaimButtonState({ disabled: true, loading: false, claimed: false, label: '领取今日积分' });
-        setPointsStatus(error.message || '积分同步失败', 'error');
+        smsHint.textContent = state.countdown > 0 ? `验证码已发送到 ${state.lastPhone}` : '未发送验证码';
+        passwordHint.textContent = state.tab === 'register' && state.smsVerified ? '设置至少 6 位密码' : '验证码未验证前不可编辑';
+      } else {
+        authBannerText.textContent = state.tab === 'login'
+          ? '密码登录支持手机号 + 密码直接登录。'
+          : '密码注册会为手机号创建密码账号，并自动登录。';
+        stepNote.textContent = state.tab === 'login'
+          ? '输入手机号和密码即可直接登录。'
+          : '输入手机号和密码即可创建账号。';
+        submitBtn.textContent = state.tab === 'login' ? '密码登录' : '注册并登录';
+        smsHint.textContent = '短信验证码在密码模式下不可用';
+        passwordHint.textContent = '至少 6 位';
       }
-    };
-    const claimAuthDailyPoints = async () => {
-      if (!authPointsClaimBtn || authPointsClaimBtn.disabled) {
+
+      const phoneValue = phoneInput.value.trim();
+      if (!isValidPhone(phoneValue)) {
+        sendOtpBtn.disabled = state.busy || state.method !== 'sms' || state.countdown > 0;
+      } else if (state.method === 'sms') {
+        sendOtpBtn.disabled = state.busy || state.countdown > 0;
+      }
+
+      renderCountdown();
+    }
+
+    function applySessionState(session, source) {
+      state.session = session || null;
+      state.authReady = true;
+      state.sessionStatus = session ? 'signed_in' : 'signed_out';
+      if (session) {
+        renderSessionCard();
+        if (source === 'bootstrap' || source === 'auth-event') {
+          setHeroStatus('已恢复登录状态');
+        }
         return;
       }
-      setPointsClaimButtonState({ disabled: true, loading: true, claimed: false, label: '领取中…' });
-      setPointsStatus('正在领取今日积分…');
+      sessionCard.classList.add('hidden');
+      setSessionPill(false, '未登录');
+      if (source === 'bootstrap' || source === 'auth-event') {
+        setStatus('请输入手机号继续', '');
+      }
+    }
+
+    async function syncSession(session) {
       try {
-        const response = await fetch('/api/points/daily-claim', {
+        await fetch('/api/auth/session-sync', {
           method: 'POST',
-          headers: { 'Accept': 'application/json', 'Content-Type': 'application/json' },
+          headers: { 'Content-Type': 'application/json', 'Accept': 'application/json' },
           credentials: 'same-origin',
-          body: '{}',
+          body: JSON.stringify({ session }),
         });
-        const data = await response.json();
-        const points = getPointsPayload(data);
-        if (response.status === 401 || data?.error === '请先登录') {
-          setPointsClaimButtonState({ disabled: true, loading: false, claimed: false, label: '领取今日积分' });
-          setPointsStatus('登录后才可领取今日积分', 'error');
+      } catch (error) {
+        return;
+      }
+    }
+
+    async function confirmBackendSession(maxAttempts = 6) {
+      for (let attempt = 0; attempt < maxAttempts; attempt += 1) {
+        try {
+          const response = await fetch('/api/auth/session', {
+            method: 'POST',
+            headers: { 'Accept': 'application/json' },
+            credentials: 'same-origin',
+          });
+          if (!response.ok) {
+            throw new Error('session check failed');
+          }
+          const payload = await response.json();
+          if (payload?.authenticated) {
+            return true;
+          }
+        } catch (error) {
+        }
+        await new Promise((resolve) => window.setTimeout(resolve, 150 * (attempt + 1)));
+      }
+      return false;
+    }
+
+    async function navigateAfterSession(session, message) {
+      await syncSession(session);
+      applySessionState(session, 'auth-event');
+      setStatus(message, 'success');
+      setHeroStatus('会话已同步，正在跳转');
+      const ready = await confirmBackendSession();
+      if (ready && new URL(window.location.href).pathname === '/auth') {
+        window.location.replace(nextPath);
+      }
+    }
+
+    async function afterAuth(session, message) {
+      await navigateAfterSession(session, message);
+    }
+
+    async function sendOtp() {
+      const phone = normalizePhone(phoneInput.value);
+      if (!isValidPhone(phone)) {
+        setStatus('请输入有效手机号', 'error');
+        return;
+      }
+
+      setBusy(true);
+      try {
+        const { error } = await supabase.auth.signInWithOtp({ phone });
+        if (error) {
+          throw error;
+        }
+        state.lastPhone = phone;
+        setCountdown(COUNTDOWN_SECONDS);
+        setStatus(`验证码已发送到 ${phone}` , 'success');
+        setHeroStatus('验证码已发送');
+        otpInput.focus();
+      } catch (error) {
+        setStatus(error.message || '验证码发送失败', 'error');
+      } finally {
+        setBusy(false);
+      }
+    }
+
+    async function verifyOtpAndLogin() {
+      const phone = normalizePhone(phoneInput.value);
+      const otp = otpInput.value.trim();
+      if (!isValidPhone(phone)) {
+        setStatus('请输入有效手机号', 'error');
+        return;
+      }
+      if (!otp) {
+        setStatus('请输入验证码', 'error');
+        return;
+      }
+
+      setBusy(true);
+      try {
+        const { data, error } = await supabase.auth.verifyOtp({ phone, token: otp, type: 'sms' });
+        if (error) {
+          throw error;
+        }
+        const session = data?.session || null;
+        if (!session) {
+          throw new Error('验证码验证成功，但未获取到会话');
+        }
+        await afterAuth(session, '短信登录成功');
+      } catch (error) {
+        setStatus(error.message || '验证码验证失败', 'error');
+      } finally {
+        setBusy(false);
+      }
+    }
+
+    async function finishSmsRegistration() {
+      const phone = normalizePhone(phoneInput.value);
+      const password = passwordInput.value;
+      if (!isValidPhone(phone)) {
+        setStatus('请输入有效手机号', 'error');
+        return;
+      }
+      if (!state.smsVerified) {
+        setStatus('请先完成验证码验证', 'error');
+        return;
+      }
+      if (!password || password.length < 6) {
+        setStatus('密码至少 6 位', 'error');
+        return;
+      }
+
+      setBusy(true);
+      try {
+        const { data, error } = await supabase.auth.updateUser({ password });
+        if (error) {
+          throw error;
+        }
+        const session = data?.session || (await supabase.auth.getSession()).data.session;
+        if (!session) {
+          throw new Error('密码已更新，但未获取到会话');
+        }
+        await afterAuth(session, '注册完成，密码已设置');
+      } catch (error) {
+        setStatus(error.message || '设置密码失败', 'error');
+      } finally {
+        setBusy(false);
+      }
+    }
+
+    async function loginWithPassword() {
+      const phone = normalizePhone(phoneInput.value);
+      const password = passwordInput.value;
+      const confirmPassword = confirmPasswordInput.value;
+      if (!isValidPhone(phone)) {
+        setStatus('请输入有效手机号', 'error');
+        return;
+      }
+      if (!password || password.length < 6) {
+        setStatus('密码至少 6 位', 'error');
+        return;
+      }
+      if (state.tab === 'register' && password !== confirmPassword) {
+        setStatus('两次输入的密码不一致', 'error');
+        return;
+      }
+
+      setBusy(true);
+      try {
+        const isRegister = state.tab === 'register';
+        if (isRegister) {
+          const { data, error } = await supabase.auth.signUp({ phone, password });
+          if (error) {
+            throw error;
+          }
+          let session = data?.session || null;
+          if (!session) {
+            const fetched = await supabase.auth.getSession();
+            session = fetched.data.session;
+          }
+          if (!session) {
+            throw new Error('注册成功，请完成验证码验证后再继续');
+          }
+          await afterAuth(session, '手机号密码注册成功');
           return;
         }
-        if (!response.ok || !data?.success) {
-          renderPointsBalance(points);
-          throw new Error(data?.error || '领取失败');
+        const { data, error } = await supabase.auth.signInWithPassword({ phone, password });
+        if (error) {
+          throw error;
         }
-        renderPointsBalance(points);
-        setPointsStatus(`今日已领取 ${Number(points.daily_free || 0)} 积分`, 'success');
+        const session = data?.session || null;
+        if (!session) {
+          throw new Error('登录成功，但未获取到会话');
+        }
+        await afterAuth(session, '密码登录成功');
       } catch (error) {
-        setPointsClaimButtonState({ disabled: false, loading: false, claimed: false, label: '领取今日积分' });
-        setPointsStatus(error.message || '领取失败', 'error');
+        setStatus(error.message || '密码登录失败', 'error');
+      } finally {
+        setBusy(false);
       }
-    };
-
-    loginTab.addEventListener('click', () => setMode('login'));
-    registerTab.addEventListener('click', () => setMode('register'));
-    if (authPointsClaimBtn) {
-      authPointsClaimBtn.addEventListener('click', () => {
-        claimAuthDailyPoints();
-      });
     }
 
-    async function checkSession() {
+    async function logout() {
+      setBusy(true);
       try {
-        const response = await fetch('/api/auth/session', { method: 'POST', headers: { 'Content-Type': 'application/json' } });
-        const data = await response.json();
-        if (data?.authenticated) {
-          window.location.replace(nextPath);
+        const { error } = await supabase.auth.signOut();
+        if (error) {
+          throw error;
         }
+        await syncSession(null);
+        state.session = null;
+        setSessionPill(false, '未登录');
+        sessionCard.classList.add('hidden');
+        setStatus('已退出登录', 'success');
+        setHeroStatus('已退出登录');
+        window.location.replace('/auth');
       } catch (error) {
-        // ignore session bootstrap errors on the login page
+        setStatus(error.message || '退出失败', 'error');
+      } finally {
+        setBusy(false);
       }
     }
+
+    loginTab.addEventListener('click', () => setTab('login'));
+    registerTab.addEventListener('click', () => setTab('register'));
+    smsModeBtn.addEventListener('click', () => setMethod('sms'));
+    passwordModeBtn.addEventListener('click', () => setMethod('password'));
+    sendOtpBtn.addEventListener('click', async () => {
+      if (state.method === 'sms') {
+        if (!state.smsVerified || state.tab === 'login') {
+          await sendOtp();
+        }
+      }
+    });
+    logoutBtn.addEventListener('click', logout);
 
     authForm.addEventListener('submit', async (event) => {
       event.preventDefault();
-      const email = emailInput.value.trim().toLowerCase();
-      const password = passwordInput.value;
-
-      submitBtn.disabled = true;
-      setStatus(mode === 'register' ? '正在注册…' : '正在登录…');
-
-      try {
-        const endpoint = mode === 'register' ? '/api/auth/register' : '/api/auth/login';
-        const response = await fetch(endpoint, {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ email, password }),
-        });
-        const data = await response.json();
-        if (!response.ok || !data.success) {
-          throw new Error(data.error || '认证失败');
-        }
-
-        if (mode === 'register' && !data.user?.id) {
-          const signupBonus = Number(data?.points?.signup_bonus || 0);
-          const bonusText = signupBonus > 0 ? `，预计赠送 ${signupBonus} 积分` : '';
-          setStatus(`注册成功${bonusText}，请查看邮箱完成验证后再登录。`, 'success');
-          authNote.textContent = '如果 Supabase 开启了邮箱确认，验证完成后再登录。';
-          authForm.reset();
-          setMode('login');
+      if (state.method === 'sms') {
+        if (state.tab === 'login') {
+          await verifyOtpAndLogin();
           return;
         }
+        if (!state.smsVerified) {
+          await verifyOtpAndLogin();
+          state.smsVerified = true;
+          renderUI();
+          setStatus('验证码已通过，请设置密码完成注册', 'success');
+          return;
+        }
+        await finishSmsRegistration();
+        return;
+      }
+      await loginWithPassword();
+    });
 
-        window.location.replace(nextPath);
-      } catch (error) {
-        setStatus(error.message || '认证失败', 'error');
-      } finally {
-        submitBtn.disabled = false;
+    otpInput.addEventListener('input', () => {
+      otpInput.value = otpInput.value.replace(/\D/g, '').slice(0, 6);
+    });
+
+    phoneInput.addEventListener('input', () => {
+      renderUI();
+    });
+
+    passwordInput.addEventListener('input', () => {
+      renderUI();
+    });
+
+    confirmPasswordInput.addEventListener('input', () => {
+      renderUI();
+    });
+
+    supabase.auth.onAuthStateChange(async (event, session) => {
+      if (event === 'SIGNED_OUT') {
+        await syncSession(null);
+        applySessionState(null, 'auth-event');
+        setHeroStatus('已退出登录');
+        return;
+      }
+      if (session) {
+        await syncSession(session);
+        applySessionState(session, 'auth-event');
       }
     });
 
-    setMode('login');
-    loadAuthPointsBalance();
-    checkSession();
+    async function bootstrap() {
+      renderUI();
+      setBusy(true);
+      try {
+        const { data } = await supabase.auth.getSession();
+        const session = data?.session || null;
+        if (session) {
+          await syncSession(session);
+          applySessionState(session, 'bootstrap');
+          const ready = await confirmBackendSession();
+          if (ready) {
+            window.location.replace(nextPath);
+            return;
+          }
+          setStatus('会话已获取，但后端尚未确认，请稍后重试', 'error');
+          setHeroStatus('会话同步中');
+          return;
+        }
+        applySessionState(null, 'bootstrap');
+      } catch (error) {
+        applySessionState(null, 'bootstrap');
+        setStatus(error.message || '会话初始化失败', 'error');
+      } finally {
+        setBusy(false);
+      }
+    }
+
+    bootstrap();
   </script>
 </body>
 </html>
