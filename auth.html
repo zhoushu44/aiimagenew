@@ -833,6 +833,36 @@
       return user.phone || user.email || user.id || '已登录用户';
     }
 
+    function isSupabaseAuthStorageKey(key) {
+      const normalizedKey = String(key || '').toLowerCase();
+      if (!normalizedKey) {
+        return false;
+      }
+      return normalizedKey === 'supabase.auth.token'
+        || normalizedKey.includes('spb-kemqk3h0a423q1q5')
+        || (normalizedKey.startsWith('sb-') && normalizedKey.includes('-auth-token'))
+        || (normalizedKey.includes('supabase') && normalizedKey.includes('auth'));
+    }
+
+    function clearSupabaseBrowserAuthCache() {
+      [window.localStorage, window.sessionStorage].forEach((storage) => {
+        if (!storage) {
+          return;
+        }
+        try {
+          const keys = [];
+          for (let index = 0; index < storage.length; index += 1) {
+            const key = storage.key(index);
+            if (isSupabaseAuthStorageKey(key)) {
+              keys.push(key);
+            }
+          }
+          keys.forEach((key) => storage.removeItem(key));
+        } catch (error) {
+        }
+      });
+    }
+
     function setCountdown(seconds) {
       clearInterval(state.countdownTimer);
       state.countdown = Math.max(0, Number(seconds || 0));
@@ -1195,7 +1225,9 @@
         if (error) {
           throw error;
         }
+        clearSupabaseBrowserAuthCache();
         await syncSession(null);
+        clearSupabaseBrowserAuthCache();
         state.session = null;
         setSessionPill(false, '未登录');
         sessionCard.classList.add('hidden');
@@ -1260,6 +1292,7 @@
 
     supabase.auth.onAuthStateChange(async (event, session) => {
       if (event === 'SIGNED_OUT') {
+        clearSupabaseBrowserAuthCache();
         await syncSession(null);
         applySessionState(null, 'auth-event');
         setHeroStatus('已退出登录');

@@ -61,11 +61,10 @@ IMAGE_SIGNATURES = {
 GENERATED_SUITES_DIR = BASE_DIR / 'generated-suites'
 SUPABASE_SESSION_COOKIE = 'aiimagenew_supabase_session'
 SUPABASE_SESSION_SYNC_COOKIE = 'aiimagenew_supabase_session_sync'
-SUPABASE_REDIRECT_PATH = '/auth'
 PROTECTED_PAGE_PATHS = {'/suite', '/aplus', '/fashion', '/settings'}
 PUBLIC_API_PREFIXES = ('/api/auth/', '/api/app-mode')
 PUBLIC_PATH_PREFIXES = ('/static/', '/generated/')
-PUBLIC_PATHS = {'/', '/auth', '/logout'}
+PUBLIC_PATHS = {'/', '/logout'}
 SUPABASE_URL = (os.getenv('SUPABASE_URL') or os.getenv('SUPABASE_PROJECT_URL') or '').strip()
 SUPABASE_ANON_KEY = (os.getenv('SUPABASE_ANON_KEY') or os.getenv('SUPABASE_PUBLISHABLE_KEY') or '').strip()
 SUPABASE_SERVICE_ROLE_KEY = (os.getenv('SUPABASE_SERVICE_ROLE_KEY') or os.getenv('SUPABASE_SERVICE_KEY') or '').strip()
@@ -1096,8 +1095,9 @@ def parse_supabase_session_cookie() -> dict | None:
     if not raw_cookie:
         return None
     try:
-        session_data = json.loads(raw_cookie)
-    except json.JSONDecodeError:
+        decoded_cookie = base64.urlsafe_b64decode(f'{raw_cookie}=='.encode('utf-8')).decode('utf-8')
+        session_data = json.loads(decoded_cookie)
+    except (ValueError, TypeError, json.JSONDecodeError, UnicodeDecodeError, binascii.Error):
         return None
     if not isinstance(session_data, dict):
         return None
@@ -1142,6 +1142,8 @@ def get_supabase_session() -> dict | None:
     if not access_token:
         return None
 
+    fallback_user = session_data.get('user') if isinstance(session_data.get('user'), dict) else None
+
     sync_cookie = str(request.cookies.get(SUPABASE_SESSION_SYNC_COOKIE) or '').strip()
     if sync_cookie == '1':
         try:
@@ -1154,10 +1156,14 @@ def get_supabase_session() -> dict | None:
                 timeout=15,
             )
         except requests.RequestException:
+            if fallback_user:
+                session_data['user'] = fallback_user
             return session_data
         if response.status_code == 200:
             session_data['user'] = response.json()
             return session_data
+        if fallback_user:
+            session_data['user'] = fallback_user
         return session_data
 
     try:
@@ -1179,6 +1185,9 @@ def get_supabase_session() -> dict | None:
 
     refreshed_session = refresh_supabase_session(session_data)
     if not refreshed_session:
+        if fallback_user:
+            session_data['user'] = fallback_user
+            return session_data
         return None
 
     try:
@@ -1191,9 +1200,13 @@ def get_supabase_session() -> dict | None:
             timeout=15,
         )
     except requests.RequestException:
+        if fallback_user and not refreshed_session.get('user'):
+            refreshed_session['user'] = fallback_user
         return refreshed_session
 
     if refreshed_response.status_code != 200:
+        if fallback_user and not refreshed_session.get('user'):
+            refreshed_session['user'] = fallback_user
         return refreshed_session
 
     refreshed_session['user'] = refreshed_response.json()
@@ -1201,13 +1214,28 @@ def get_supabase_session() -> dict | None:
 
 
 def set_auth_session_cookie(response, session_data: dict):
+    user = session_data.get('user') or {}
+    user_metadata = user.get('user_metadata') or {}
     cookie_data = {
         'access_token': session_data.get('access_token'),
         'refresh_token': session_data.get('refresh_token'),
+        'user': {
+            'id': user.get('id'),
+            'phone': user.get('phone'),
+            'email': user.get('email'),
+            'user_metadata': {
+                'phone': user_metadata.get('phone'),
+                'phone_number': user_metadata.get('phone_number'),
+                'email': user_metadata.get('email'),
+            },
+        },
     }
+    encoded_cookie = base64.urlsafe_b64encode(
+        json.dumps(cookie_data, ensure_ascii=False, separators=(',', ':')).encode('utf-8')
+    ).decode('utf-8').rstrip('=')
     response.set_cookie(
         SUPABASE_SESSION_COOKIE,
-        json.dumps(cookie_data),
+        encoded_cookie,
         max_age=60 * 60 * 24 * 7,
         httponly=True,
         samesite='Lax',
@@ -1228,6 +1256,31 @@ def clear_auth_session_cookie(response):
     response.delete_cookie(SUPABASE_SESSION_COOKIE, path='/')
     response.delete_cookie(SUPABASE_SESSION_SYNC_COOKIE, path='/')
     return response
+
+
+def supabase_logout_session(session_data: dict) -> bool:
+    access_token = str((session_data or {}).get('access_token') or '').strip()
+    if not access_token or not SUPABASE_URL:
+        return False
+
+    try:
+        response = requests.post(
+            build_supabase_request_url('/auth/v1/logout?scope=local'),
+            headers={
+                **build_supabase_auth_headers(),
+                'Authorization': f'Bearer {access_token}',
+            },
+            timeout=15,
+        )
+    except requests.RequestException as exc:
+        app.logger.warning('Failed to revoke Supabase session: %s', exc)
+        return False
+
+    if response.status_code not in {200, 204}:
+        app.logger.warning('Supabase logout returned %s: %s', response.status_code, response.text[:200])
+        return False
+
+    return True
 
 
 def auth_response_from_session(session_data: dict, redirect_path: str | None = None):
@@ -3371,8 +3424,8 @@ def guard_authentication():
         if not session_data:
             if path.startswith('/api/'):
                 return jsonify({'success': False, 'error': '请先登录'}), 401
-            next_path = request.full_path.rstrip('?') if request.query_string else request.path
-            return redirect(f"{SUPABASE_REDIRECT_PATH}?next={next_path}")
+            g.auth_required = True
+            return None
         if path == '/settings' or path.startswith('/api/settings'):
             if not _is_settings_user_allowed(session_data):
                 if path.startswith('/api/'):
@@ -3387,32 +3440,7 @@ def guard_authentication():
 
 @app.get('/auth')
 def auth_page():
-    default_next_path = '/suite'
-
-    def _sanitize_next_path(raw_next_path: str | None) -> str:
-        next_path = str(raw_next_path or '').strip() or default_next_path
-        if (
-            not next_path.startswith('/')
-            or next_path.startswith('//')
-            or next_path in {'/auth', '/logout'}
-            or next_path.startswith('/api/')
-            or next_path.startswith('/static/')
-            or next_path.startswith('/generated/')
-        ):
-            return default_next_path
-        return next_path
-
-    if g.get('supabase_session'):
-        next_path = _sanitize_next_path(request.args.get('next', default_next_path))
-        return redirect(next_path)
-
-    auth_html = (BASE_DIR / 'auth.html').read_text(encoding='utf-8')
-    auth_html = auth_html.replace(
-        '<head>',
-        f'<head>\n  <script>window.__APP_DEFAULT_NEXT_PATH__ = {default_next_path!r};</script>',
-        1,
-    )
-    response = make_response(auth_html)
+    response = redirect('/')
     response.headers['Cache-Control'] = 'no-store, no-cache, must-revalidate, max-age=0'
     response.headers['Pragma'] = 'no-cache'
     response.headers['Expires'] = '0'
@@ -3524,41 +3552,57 @@ def auth_register():
 
 @app.get('/logout')
 def auth_logout_page():
-    response = redirect('/auth')
+    session_data = g.get('supabase_session') or get_supabase_session() or {}
+    supabase_logout_session(session_data)
+    response = redirect('/')
     clear_auth_session_cookie(response)
     return response
 
 
 @app.post('/api/auth/logout')
 def auth_logout_api():
-    response = jsonify({'success': True})
+    session_data = g.get('supabase_session') or get_supabase_session() or {}
+    logout_ok = supabase_logout_session(session_data)
+    response = jsonify({'success': True, 'logout_synced': logout_ok})
     clear_auth_session_cookie(response)
     return response
 
 
 @app.get('/')
 def index():
-    return send_from_directory(BASE_DIR, 'landing.html')
+    return render_html_page('landing.html')
+
+
+def render_html_page(filename: str):
+    html = (BASE_DIR / filename).read_text(encoding='utf-8')
+    if g.get('auth_required'):
+        html = re.sub(r'<body([^>]*)>', r'<body\1 data-auth-required="true">', html, count=1)
+    response = make_response(html)
+    if g.get('auth_required'):
+        response.headers['Cache-Control'] = 'no-store, no-cache, must-revalidate, max-age=0'
+        response.headers['Pragma'] = 'no-cache'
+        response.headers['Expires'] = '0'
+    return response
 
 
 @app.get('/suite')
 def suite_page():
-    return send_from_directory(BASE_DIR, 'suite.html')
+    return render_html_page('suite.html')
 
 
 @app.get('/aplus')
 def aplus_page():
-    return send_from_directory(BASE_DIR, 'aplus.html')
+    return render_html_page('aplus.html')
 
 
 @app.get('/fashion')
 def fashion_page():
-    return send_from_directory(BASE_DIR, 'fashion.html')
+    return render_html_page('fashion.html')
 
 
 @app.get('/settings')
 def settings_page():
-    return send_from_directory(BASE_DIR, 'settings.html')
+    return render_html_page('settings.html')
 
 
 @app.get('/generated/<path:path>')

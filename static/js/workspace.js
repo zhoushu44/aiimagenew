@@ -337,6 +337,8 @@ document.addEventListener('DOMContentLoaded', () => {
 
     const formatOutputCount = (count) => String(count).padStart(2, '0');
 
+    const getCurrentModeConfig = () => modeConfig[currentMode] || modeConfig[PAGE_MODE] || modeConfig.suite;
+
     const getGridLogicLabel = (count) => {
       const columns = count <= 8 ? 2 : 3;
       return `${columns}×${Math.ceil(count / columns)}`;
