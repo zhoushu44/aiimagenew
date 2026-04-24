@@ -780,45 +780,67 @@
 
       .shared-account-panel__points {
         margin-top: -12px;
-        background: linear-gradient(180deg, #fff3e8, #fff7ef);
-        border: 1px solid rgba(251, 146, 60, 0.10);
+        background: linear-gradient(180deg, #f3f1fb 0%, #f7f4ff 100%);
+        border: 0;
         border-top: 0;
-        border-radius: 0 0 7px 7px;
-        padding: 9px 15px 10px;
-        gap: 8px;
+        border-radius: 0 0 12px 12px;
+        padding: 8px 10px 10px;
       }
 
-      .shared-account-panel__points-summary {
-        display: grid;
-        grid-template-columns: minmax(0, 1fr) auto;
-        gap: 12px;
+      .xdesign-user-info-panel__balance {
+        width: 100%;
+      }
+
+      .xdesign-user-info-panel__balance-item {
+        width: 100%;
+        display: block;
+        border-radius: 10px;
+        background: rgba(255, 255, 255, 0.92);
+        padding: 9px 14px;
+        box-sizing: border-box;
+      }
+
+      .xdesign-user-info-panel__balance-name {
+        display: flex;
         align-items: center;
-      }
-
-      .shared-account-panel__points-value {
-        margin: 0;
-        font-family: var(--font-display);
-        font-size: 14px;
-        line-height: 1;
-        letter-spacing: -0.02em;
+        gap: 8px;
         color: #3f342b;
       }
 
-      .shared-account-panel__points-actions {
-        display: flex;
-        flex-wrap: wrap;
-        gap: 8px;
-        justify-content: flex-end;
+      .xdesign-user-info-panel__balance-name.active {
+        color: #3f342b;
       }
 
-      .shared-account-panel__mini-btn {
-        min-height: 34px;
-        padding: 0 12px;
-        border-radius: 999px;
-        border: 1px solid var(--line-strong);
-        background: rgba(255, 255, 255, 0.88);
-        color: var(--text);
-        cursor: pointer;
+      .xdesign-user-info-panel__balance-name img {
+        width: 14px;
+        height: 14px;
+        object-fit: contain;
+        flex: 0 0 auto;
+      }
+
+      .balance-label {
+        display: inline-flex;
+        align-items: center;
+        color: #4b5563;
+        font-size: 13px;
+        line-height: 1;
+      }
+
+      .amount-label {
+        margin-left: auto;
+        display: inline-flex;
+        align-items: center;
+        color: #1f2937;
+        font-size: 20px;
+        line-height: 1;
+        font-weight: 500;
+        letter-spacing: -0.03em;
+      }
+
+      .shared-account-panel__points-note {
+        color: var(--muted);
+        font-size: 12px;
+        line-height: 1.45;
       }
 
       .shared-account-panel__links {
@@ -875,17 +897,8 @@
           border-radius: 22px;
         }
 
-        .shared-account-panel__membership-row,
-        .shared-account-panel__points-summary {
+        .shared-account-panel__membership-row {
           grid-template-columns: 1fr;
-        }
-
-        .shared-account-panel__points-summary {
-          align-items: start;
-        }
-
-        .shared-account-panel__points-actions {
-          justify-content: flex-start;
         }
       }
 
@@ -932,18 +945,15 @@
             </section>
 
             <section class="shared-account-panel__points">
-              <div class="shared-account-panel__points-summary">
-                <div>
-                  <div class="shared-account-panel__label">美豆</div>
-                  <p class="shared-account-panel__points-value" id="shared-account-panel-points">0</p>
-                  <div class="shared-account-panel__points-note" id="shared-account-panel-points-note">余额、充值与明细会在登录后同步。</div>
-                </div>
-                <div class="shared-account-panel__points-actions">
-                  <button class="shared-account-panel__mini-btn" type="button" data-account-panel-login>充值</button>
-                  <button class="shared-account-panel__mini-btn" type="button" data-account-panel-login>明细</button>
+              <div class="xdesign-user-info-panel__balance">
+                <div class="xdesign-user-info-panel__balance-item clickable">
+                  <div class="xdesign-user-info-panel__balance-name active">
+                    <img src="https://public.static.meitudata.com/xiuxiu-pc/xdesign-widgets/images/meidouInfo/meidou-icon.svg" alt="">
+                    <span class="balance-label">积分</span>
+                    <span class="amount-label" id="shared-account-panel-points">0</span>
+                  </div>
                 </div>
               </div>
-              <div class="shared-account-panel__points-note" id="shared-account-panel-summary">登录后可查看更完整的账号信息。</div>
             </section>
           </section>
 
@@ -967,8 +977,8 @@
     accountState.meta = panel.querySelector('#shared-account-panel-meta');
     accountState.note = panel.querySelector('#shared-account-panel-note');
     accountState.pointsValue = panel.querySelector('#shared-account-panel-points');
-    accountState.pointsNote = panel.querySelector('#shared-account-panel-points-note');
-    accountState.summary = panel.querySelector('#shared-account-panel-summary');
+    accountState.pointsNote = null;
+    accountState.summary = null;
     accountState.logoutButton = panel.querySelector('#shared-account-panel-logout');
 
     panel.addEventListener('click', (event) => {
@@ -1266,6 +1276,31 @@
     return accountState.supabaseClientPromise;
   }
 
+  async function loadAccountPoints(force = false) {
+    if (!accountState.session) {
+      accountState.points = null;
+      return null;
+    }
+    if (accountState.points && !force) {
+      return accountState.points;
+    }
+    try {
+      const pointsResponse = await fetch('/api/points/balance', {
+        method: 'GET',
+        headers: { Accept: 'application/json' },
+        credentials: 'same-origin',
+      });
+      const pointsData = await pointsResponse.json();
+      if (pointsResponse.ok && pointsData.success) {
+        accountState.points = pointsData.points || null;
+        return accountState.points;
+      }
+    } catch (error) {
+    }
+    accountState.points = null;
+    return null;
+  }
+
   async function syncLoginModalSession(session) {
     try {
       await fetch('/api/auth/session-sync', {
@@ -1285,6 +1320,7 @@
     await syncLoginModalSession(session);
     accountState.session = session;
     accountState.sessionLoaded = true;
+    await loadAccountPoints(true);
     updateAccountTriggers();
     renderAccountPanel();
     closeLoginModal();
@@ -1688,13 +1724,13 @@
     const displayPhone = userDisplay.displayPhone || '立即登录';
     const userUid = getSessionUserUid(session);
 
+    const pointsBalance = isLoggedIn ? Number(accountState.points?.balance || 0) : 0;
+
     setText(accountState.avatar, '账');
     setText(accountState.meta, isLoggedIn ? displayPhone : '立即登录');
     accountState.meta?.classList.toggle('is-primary', !isLoggedIn);
     setText(accountState.note, isLoggedIn ? `用户UID：${userUid || '暂无 UID'}` : '您还未开通会员');
-    setText(accountState.pointsValue, '0');
-    setText(accountState.pointsNote, '余额、充值与明细会在登录后同步。');
-    setText(accountState.summary, '登录后可查看更完整的账号信息。');
+    setText(accountState.pointsValue, String(Number.isFinite(pointsBalance) ? pointsBalance : 0));
 
     if (accountState.logoutButton) {
       accountState.logoutButton.hidden = false;
@@ -1747,23 +1783,13 @@
       throw new Error(sessionData.error || '读取会话失败');
     }
 
-    accountState.session = sessionData.authenticated ? (sessionData.session || null) : null;
+    accountState.session = sessionData.authenticated
+      ? { ...(sessionData.session || {}), user: sessionData.user || sessionData.session?.user || null }
+      : null;
     accountState.points = null;
 
     if (accountState.session) {
-      try {
-        const pointsResponse = await fetch('/api/points/balance', {
-          method: 'GET',
-          headers: { Accept: 'application/json' },
-          credentials: 'same-origin',
-        });
-        const pointsData = await pointsResponse.json();
-        if (pointsResponse.ok && pointsData.success) {
-          accountState.points = pointsData.points || null;
-        }
-      } catch (error) {
-        accountState.points = null;
-      }
+      await loadAccountPoints(true);
     }
 
     accountState.sessionLoaded = true;
@@ -1946,7 +1972,16 @@
       }
     });
 
-    document.addEventListener('click', (event) => {
+    window.addEventListener('shared-points-updated', (event) => {
+    const nextPoints = event?.detail?.points;
+    if (!nextPoints || typeof nextPoints !== 'object') {
+      return;
+    }
+    accountState.points = nextPoints;
+    renderAccountPanel();
+  });
+
+  document.addEventListener('click', (event) => {
       const trigger = event.target?.closest?.('[data-account-panel-login]');
       if (trigger) {
         event.preventDefault();

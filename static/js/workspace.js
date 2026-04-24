@@ -1264,6 +1264,133 @@ document.addEventListener('DOMContentLoaded', () => {
       }
     };
 
+    const requestPointsSpend = async ({ mode, outputCount = 0, selectedModulesCount = 0, selectedSceneCount = 0, type, reason, metadata }) => {
+      const normalizedMode = String(mode || 'suite').trim() || 'suite';
+      const normalizedMetadata = metadata && typeof metadata === 'object' ? metadata : {};
+      const response = await fetch('/api/points/spend', {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          Accept: 'application/json',
+        },
+        credentials: 'same-origin',
+        body: JSON.stringify({
+          mode: normalizedMode,
+          output_count: Math.max(Number(outputCount) || 0, 0),
+          selected_modules_count: Math.max(Number(selectedModulesCount) || 0, 0),
+          selected_scene_count: Math.max(Number(selectedSceneCount) || 0, 0),
+          type,
+          reason,
+          metadata: normalizedMetadata,
+        }),
+      });
+      const result = await response.json().catch(() => ({}));
+      const consume = result?.consume && typeof result.consume === 'object' ? result.consume : null;
+      const consumeAmount = Number(consume?.amount) || 0;
+      if (!response.ok || !result?.success) {
+        const baseMessage = result?.error || '积分扣减失败，请稍后重试';
+        if (response.status === 401) {
+          throw new Error('请先登录后再生成');
+        }
+        if (response.status === 409 && result?.error === '积分不足') {
+          throw new Error(`积分不足，当前生成需要 ${consumeAmount || 0} 积分`);
+        }
+        throw new Error(baseMessage);
+      }
+      if (consumeAmount <= 0) {
+        return { skipped: true, points: result.points || null, consume };
+      }
+      return {
+        skipped: false,
+        amount: consumeAmount,
+        mode: consume?.mode || normalizedMode,
+        type: consume?.type || type,
+        reason: consume?.reason || reason,
+        metadata: consume?.metadata && typeof consume.metadata === 'object' ? consume.metadata : normalizedMetadata,
+        rule: consume?.rule || null,
+        consume,
+        points: result.points || null,
+      };
+    };
+
+    const requestPointsQuote = async ({ mode, outputCount = 0, selectedModulesCount = 0, selectedSceneCount = 0, type, reason, metadata }) => {
+      const normalizedMode = String(mode || 'suite').trim() || 'suite';
+      const response = await fetch('/api/points/quote', {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          Accept: 'application/json',
+        },
+        credentials: 'same-origin',
+        body: JSON.stringify({
+          mode: normalizedMode,
+          output_count: Math.max(Number(outputCount) || 0, 0),
+          selected_modules_count: Math.max(Number(selectedModulesCount) || 0, 0),
+          selected_scene_count: Math.max(Number(selectedSceneCount) || 0, 0),
+          type,
+          reason,
+          metadata: metadata && typeof metadata === 'object' ? metadata : {},
+        }),
+      });
+      const result = await response.json().catch(() => ({}));
+      if (!response.ok || !result?.success || !result?.quote) {
+        throw new Error(result?.error || '积分报价失败，请稍后重试');
+      }
+      return result.quote;
+    };
+
+    const requestPointsRefund = async (spendRecord) => {
+      if (!spendRecord || spendRecord.skipped || !(Number(spendRecord.amount) > 0)) {
+        return null;
+      }
+      const response = await fetch('/api/points/refund', {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          Accept: 'application/json',
+        },
+        credentials: 'same-origin',
+        body: JSON.stringify({
+          amount: Number(spendRecord.amount),
+          type: `${spendRecord.type || 'refund'}_refund`,
+          reason: spendRecord.reason || '生成失败返还积分',
+          metadata: {
+            ...(spendRecord.metadata && typeof spendRecord.metadata === 'object' ? spendRecord.metadata : {}),
+            refunded: true,
+          },
+        }),
+      });
+      const result = await response.json().catch(() => ({}));
+      if (!response.ok || !result?.success) {
+        throw new Error(result?.error || '积分返还失败');
+      }
+      return result.points || null;
+    };
+
+    const syncSharedPointsState = (points) => {
+      if (!points || typeof points !== 'object') {
+        return;
+      }
+      window.dispatchEvent(new CustomEvent('shared-points-updated', {
+        detail: { points },
+      }));
+    };
+
+    const requestPointsRules = async () => {
+      const response = await fetch('/api/points/rules', {
+        method: 'GET',
+        headers: {
+          Accept: 'application/json',
+        },
+        credentials: 'same-origin',
+      });
+      const result = await response.json().catch(() => ({}));
+      if (!response.ok || !result?.success || !result?.rules) {
+        throw new Error(result?.error || '读取积分规则失败，请稍后重试');
+      }
+      return result.rules;
+    };
+
     const requestFashionScenePlan = async () => {
       const fashionApi = getFashionWorkspaceApi();
       const fashionState = fashionApi?.getState ? fashionApi.getState() : null;
@@ -1398,6 +1525,19 @@ document.addEventListener('DOMContentLoaded', () => {
       }
 
       const config = getCurrentModeConfig();
+      const selectedSceneCount = normalizedSelectedEntries.length || fashionCta.selectedSceneCount || 1;
+      const quotePayload = await requestPointsQuote({
+        mode: 'fashion',
+        selectedSceneCount,
+        type: 'fashion_generate',
+        reason: '服饰穿戴图生成消耗',
+        metadata: {
+          mode: 'fashion',
+          selected_scene_count: selectedSceneCount,
+          pose_ids: normalizedFashionState?.fashionSelectedPoseIds || [],
+        },
+      });
+      const pointsCost = Number(quotePayload?.amount) || 0;
       const formData = buildFashionGenerateFormData();
       await appendFashionSelectedModelToFormData(formData, normalizedFashionState, '当前已选模特图片缺失，请重新选择或重新上传后再生成');
       formData.append('fashion_action', 'generate');
@@ -1421,13 +1561,27 @@ document.addEventListener('DOMContentLoaded', () => {
       }
       generateBtn.disabled = true;
       updateGenerateButtonLabel(config.planLoadingLabel);
-      setResultStatus(config.defaultPrefix);
-      renderLoadingResultCards(fashionCta.selectedSceneCount || getCurrentOutputMetric() || 1);
+      setResultStatus(`正在校验积分并生成，预计消耗 ${pointsCost} 积分`);
+      renderLoadingResultCards(selectedSceneCount);
       showResultView();
       syncFashionState({ fashionFlowStep: 'result' });
       persistState();
 
+      let spendRecord = null;
       try {
+        spendRecord = await requestPointsSpend({
+          mode: 'fashion',
+          selectedSceneCount,
+          type: 'fashion_generate',
+          reason: '服饰穿戴图生成消耗',
+          metadata: {
+            mode: 'fashion',
+            selected_scene_count: selectedSceneCount,
+            pose_ids: normalizedFashionState?.fashionSelectedPoseIds || [],
+          },
+        });
+        syncSharedPointsState(spendRecord?.points);
+
         const responsePromise = fetch('/api/generate-suite', {
           method: 'POST',
           body: formData,
@@ -1454,10 +1608,17 @@ document.addEventListener('DOMContentLoaded', () => {
         selectedResultKeys = new Set();
         updateTaskSummary(result);
         renderResultCards(currentResultItems);
-        setResultStatus(config.successFallback.replace('{count}', String(getCurrentOutputMetric(result))), 'success');
+        setResultStatus(`${config.successFallback.replace('{count}', String(getCurrentOutputMetric(result)))}，已消耗 ${pointsCost} 积分`, 'success');
         syncFashionState({ fashionFlowStep: 'result' });
         saveStateToLocalStorage();
       } catch (error) {
+        if (spendRecord && !currentResultItems.length) {
+          try {
+            const refundedPoints = await requestPointsRefund(spendRecord);
+            syncSharedPointsState(refundedPoints);
+          } catch (refundError) {
+          }
+        }
         resetResultState();
         syncFashionState({ fashionFlowStep: 'scene' });
         if (resultMeta) {
@@ -2525,6 +2686,24 @@ document.addEventListener('DOMContentLoaded', () => {
           formData.append('output_count', String(selectedOutputCount));
         }
 
+        const plannedOutputCount = isMode2
+          ? getMode2RequestedOutputCount()
+          : (currentMode === 'aplus' ? selectedAplusModules.size : selectedOutputCount);
+        const quotePayload = await requestPointsQuote({
+          mode: currentMode,
+          outputCount: plannedOutputCount,
+          selectedModulesCount: selectedAplusModules.size,
+          type: `${currentMode}_generate`,
+          reason: `${config.title}生成消耗`,
+          metadata: {
+            mode: currentMode,
+            output_count: plannedOutputCount,
+            selected_style: selectedStyle?.title || '',
+            selected_modules: currentMode === 'aplus' ? Array.from(selectedAplusModules) : [],
+          },
+        });
+        const pointsCost = Number(quotePayload?.amount) || 0;
+
         resetResultStatus();
         resetResultState();
         if (resultMeta) {
@@ -2534,15 +2713,31 @@ document.addEventListener('DOMContentLoaded', () => {
         }
         generateBtn.disabled = true;
         updateGenerateButtonLabel(config.planLoadingLabel);
-        setResultStatus(selectedStyle?.title ? config.selectedPrefix.replace('{style}', selectedStyle.title) : config.defaultPrefix);
+        setResultStatus(`正在校验积分并生成，预计消耗 ${pointsCost} 积分`);
         showResultView();
-        renderLoadingResultCards(isMode2 ? getMode2RequestedOutputCount() : (currentMode === 'aplus' ? selectedAplusModules.size : selectedOutputCount));
+        renderLoadingResultCards(plannedOutputCount);
         persistState();
 
+        let spendRecord = null;
         try {
+          spendRecord = await requestPointsSpend({
+            mode: currentMode,
+            outputCount: plannedOutputCount,
+            selectedModulesCount: selectedAplusModules.size,
+            type: `${currentMode}_generate`,
+            reason: `${config.title}生成消耗`,
+            metadata: {
+              mode: currentMode,
+              output_count: plannedOutputCount,
+              selected_style: selectedStyle?.title || '',
+              selected_modules: currentMode === 'aplus' ? Array.from(selectedAplusModules) : [],
+            },
+          });
+          syncSharedPointsState(spendRecord?.points);
+
           let result;
           if (isMode2) {
-            result = await generateMode2Results(endpoint, formData, getMode2RequestedOutputCount());
+            result = await generateMode2Results(endpoint, formData, plannedOutputCount);
           } else {
             const response = await fetch(endpoint, {
               method: 'POST',
@@ -2562,9 +2757,16 @@ document.addEventListener('DOMContentLoaded', () => {
           selectedResultKeys = new Set();
           updateTaskSummary(result);
           renderResultCards(currentResultItems);
-          setResultStatus(result.plan?.summary || config.successFallback.replace('{count}', String(getCurrentOutputMetric(result))), 'success');
+          setResultStatus(`${result.plan?.summary || config.successFallback.replace('{count}', String(getCurrentOutputMetric(result)))}，已消耗 ${pointsCost} 积分`, 'success');
           saveStateToLocalStorage();
         } catch (error) {
+          if (spendRecord && !currentResultItems.length) {
+            try {
+              const refundedPoints = await requestPointsRefund(spendRecord);
+              syncSharedPointsState(refundedPoints);
+            } catch (refundError) {
+            }
+          }
           resetResultState();
           if (resultMeta) {
             resultMeta.textContent = '生成失败后可修改卖点、平台或素材后重试。';

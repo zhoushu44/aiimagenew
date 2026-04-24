@@ -62,7 +62,7 @@ GENERATED_SUITES_DIR = BASE_DIR / 'generated-suites'
 SUPABASE_SESSION_COOKIE = 'aiimagenew_supabase_session'
 SUPABASE_SESSION_SYNC_COOKIE = 'aiimagenew_supabase_session_sync'
 PROTECTED_PAGE_PATHS = {'/suite', '/aplus', '/fashion', '/settings'}
-PUBLIC_API_PREFIXES = ('/api/auth/', '/api/app-mode')
+PUBLIC_API_PREFIXES = ('/api/auth/', '/api/app-mode', '/api/points/rules', '/api/points/quote')
 PUBLIC_PATH_PREFIXES = ('/static/', '/generated/')
 PUBLIC_PATHS = {'/', '/logout'}
 SUPABASE_URL = (os.getenv('SUPABASE_URL') or os.getenv('SUPABASE_PROJECT_URL') or '').strip()
@@ -183,12 +183,40 @@ def claim_daily_free_points(user_id: str, amount: int) -> dict | None:
     return payload if isinstance(payload, dict) else None
 
 
-def spend_user_points(user_id: str, amount: int) -> dict | None:
+def spend_user_points(user_id: str, amount: int, transaction_type: str = 'consume', reason: str = '', metadata: dict | None = None) -> dict | None:
     normalized_user_id = str(user_id or '').strip()
     if not normalized_user_id:
         return None
     try:
-        payload = _post_supabase_rpc('spend_user_points', {'p_user_id': normalized_user_id, 'p_amount': int(amount)})
+        payload = _post_supabase_rpc('spend_user_points', {
+            'p_user_id': normalized_user_id,
+            'p_amount': int(amount),
+        })
+    except requests.HTTPError as exc:
+        response = getattr(exc, 'response', None)
+        error_text = ''
+        if response is not None:
+            try:
+                error_payload = response.json()
+                if isinstance(error_payload, dict):
+                    error_text = str(
+                        error_payload.get('message')
+                        or error_payload.get('error')
+                        or error_payload.get('error_description')
+                        or ''
+                    )
+            except ValueError:
+                error_text = response.text or ''
+        if response is not None and response.status_code >= 400 and '积分余额不足' in error_text:
+            balance_row = get_user_points_balance(normalized_user_id) or ensure_user_points_balance(normalized_user_id) or {}
+            return {
+                'success': False,
+                'spent': False,
+                'error': 'INSUFFICIENT_POINTS',
+                'balance_row': balance_row,
+            }
+        app.logger.warning('Failed to spend user points for %s: %s', normalized_user_id, exc)
+        return None
     except requests.RequestException as exc:
         app.logger.warning('Failed to spend user points for %s: %s', normalized_user_id, exc)
         return None
@@ -196,6 +224,59 @@ def spend_user_points(user_id: str, amount: int) -> dict | None:
         app.logger.warning('Failed to spend user points for %s: %s', normalized_user_id, exc)
         return None
     return payload if isinstance(payload, dict) else None
+
+
+def add_user_points(user_id: str, amount: int, transaction_type: str = 'refund', reason: str = '', metadata: dict | None = None) -> dict | None:
+    normalized_user_id = str(user_id or '').strip()
+    if not normalized_user_id:
+        return None
+    normalized_amount = max(int(amount), 0)
+    if normalized_amount <= 0:
+        return ensure_user_points_balance(normalized_user_id) or get_user_points_balance(normalized_user_id)
+    try:
+        base_row = ensure_user_points_balance(normalized_user_id) or get_user_points_balance(normalized_user_id) or {}
+        current_balance = int(base_row.get('balance') or 0)
+        current_total_earned = int(base_row.get('total_earned') or 0)
+        response = requests.patch(
+            build_supabase_request_url(f'/rest/v1/{SUPABASE_POINTS_TABLE}'),
+            headers={
+                **_build_supabase_service_headers(),
+                'Prefer': 'return=representation',
+            },
+            params={
+                'user_id': f'eq.{normalized_user_id}',
+            },
+            json={
+                'balance': current_balance + normalized_amount,
+                'total_earned': current_total_earned + normalized_amount,
+            },
+            timeout=20,
+        )
+        response.raise_for_status()
+        payload = response.json()
+    except requests.RequestException as exc:
+        app.logger.warning('Failed to add user points for %s: %s', normalized_user_id, exc)
+        return None
+    except RuntimeError as exc:
+        app.logger.warning('Failed to add user points for %s: %s', normalized_user_id, exc)
+        return None
+    if isinstance(payload, list) and payload:
+        row = payload[0]
+        return row if isinstance(row, dict) else None
+    return payload if isinstance(payload, dict) else None
+
+
+def serialize_points_payload(points_row: dict | None) -> dict:
+    payload = points_row if isinstance(points_row, dict) else {}
+    return {
+        'balance': int(payload.get('balance') or 0),
+        'total_earned': int(payload.get('total_earned') or 0),
+        'total_spent': int(payload.get('total_spent') or 0),
+        'signup_bonus_awarded_at': payload.get('signup_bonus_awarded_at'),
+        'last_daily_claim_at': payload.get('last_daily_claim_at'),
+        'signup_bonus': POINTS_SIGNUP_BONUS,
+        'daily_free': POINTS_DAILY_FREE,
+    }
 
 
 def get_user_points_balance(user_id: str) -> dict | None:
@@ -534,6 +615,137 @@ def get_supabase_setting_csv(name: str) -> set[str]:
         for value in raw_value.split(',')
         if value.strip()
     }
+
+
+def get_supabase_setting_json(name: str, default=None):
+    raw_value = get_supabase_setting(name, '')
+    if not raw_value:
+        return default
+    try:
+        return json.loads(raw_value)
+    except json.JSONDecodeError as exc:
+        raise ValueError(f'Supabase 设置 {name} 必须为合法 JSON') from exc
+
+
+DEFAULT_POINTS_RULES = {
+    'suite': {
+        'key': 'suite',
+        'label': '套图',
+        'unit_cost': 1,
+        'minimum_cost': 1,
+        'metric': 'output_count',
+    },
+    'mode2': {
+        'key': 'mode2',
+        'label': 'AI 生图',
+        'unit_cost': 1,
+        'minimum_cost': 1,
+        'metric': 'output_count',
+    },
+    'aplus': {
+        'key': 'aplus',
+        'label': 'A+ 模块',
+        'unit_cost': 1,
+        'minimum_cost': 1,
+        'metric': 'selected_modules_count',
+    },
+    'fashion': {
+        'key': 'fashion',
+        'label': '服饰场景',
+        'unit_cost': 1,
+        'minimum_cost': 1,
+        'metric': 'selected_scene_count',
+    },
+}
+
+
+ALLOWED_POINTS_RULE_METRICS = {
+    'output_count',
+    'selected_modules_count',
+    'selected_scene_count',
+}
+
+
+POINTS_RULE_SETTING_KEYS = {
+    'suite': 'POINTS_RULE_SUITE',
+    'mode2': 'POINTS_RULE_MODE2',
+    'aplus': 'POINTS_RULE_APLUS',
+    'fashion': 'POINTS_RULE_FASHION',
+}
+
+
+def normalize_points_rule(mode: str, rule_payload) -> dict:
+    default_rule = dict(DEFAULT_POINTS_RULES.get(mode, DEFAULT_POINTS_RULES['suite']))
+    if not isinstance(rule_payload, dict):
+        return default_rule
+
+    normalized_rule = dict(default_rule)
+    normalized_rule['key'] = str(rule_payload.get('key') or default_rule['key']).strip() or default_rule['key']
+    normalized_rule['label'] = str(rule_payload.get('label') or default_rule['label']).strip() or default_rule['label']
+
+    try:
+        normalized_rule['unit_cost'] = max(int(rule_payload.get('unit_cost', default_rule['unit_cost'])), 0)
+    except (TypeError, ValueError):
+        normalized_rule['unit_cost'] = default_rule['unit_cost']
+
+    try:
+        normalized_rule['minimum_cost'] = max(int(rule_payload.get('minimum_cost', default_rule['minimum_cost'])), 0)
+    except (TypeError, ValueError):
+        normalized_rule['minimum_cost'] = default_rule['minimum_cost']
+
+    metric = str(rule_payload.get('metric') or default_rule['metric']).strip()
+    normalized_rule['metric'] = metric if metric in ALLOWED_POINTS_RULE_METRICS else default_rule['metric']
+    return normalized_rule
+
+
+def get_points_rules() -> dict[str, dict]:
+    rules: dict[str, dict] = {}
+    for mode, setting_key in POINTS_RULE_SETTING_KEYS.items():
+        rules[mode] = normalize_points_rule(mode, get_supabase_setting_json(setting_key, DEFAULT_POINTS_RULES[mode]))
+    return rules
+
+
+def get_points_rule(mode: str) -> dict:
+    normalized_mode = str(mode or '').strip().lower()
+    rules = get_points_rules()
+    return rules.get(normalized_mode, rules['suite'])
+
+
+def calculate_points_cost(mode: str, *, output_count: int = 0, selected_modules_count: int = 0, selected_scene_count: int = 0) -> tuple[int, dict]:
+    rule = get_points_rule(mode)
+    metrics = {
+        'output_count': max(int(output_count or 0), 0),
+        'selected_modules_count': max(int(selected_modules_count or 0), 0),
+        'selected_scene_count': max(int(selected_scene_count or 0), 0),
+    }
+    base_count = max(metrics.get(rule['metric'], 0), 1)
+    unit_cost = max(int(rule.get('unit_cost') or 0), 0)
+    minimum_cost = max(int(rule.get('minimum_cost') or 0), 0)
+    total_cost = max(base_count * unit_cost, minimum_cost)
+    return total_cost, {
+        **rule,
+        'base_count': base_count,
+        'cost': total_cost,
+        'metrics': metrics,
+    }
+
+
+def build_points_consume_payload(mode: str, *, output_count: int = 0, selected_modules_count: int = 0, selected_scene_count: int = 0, transaction_type: str = 'consume', reason: str = '', metadata: dict | None = None) -> dict:
+    total_cost, rule_payload = calculate_points_cost(
+        mode,
+        output_count=output_count,
+        selected_modules_count=selected_modules_count,
+        selected_scene_count=selected_scene_count,
+    )
+    return {
+        'amount': total_cost,
+        'mode': str(mode or '').strip().lower() or 'suite',
+        'type': str(transaction_type or 'consume').strip() or 'consume',
+        'reason': str(reason or '').strip(),
+        'metadata': metadata if isinstance(metadata, dict) else {},
+        'rule': rule_payload,
+    }
+
 
 UPLOAD_MAX_BYTES = max(get_supabase_setting_int('UPLOAD_MAX_BYTES', 15 * 1024 * 1024), 1)
 UPLOAD_MAX_FILE_BYTES = max(get_supabase_setting_int('UPLOAD_MAX_FILE_BYTES', 8 * 1024 * 1024), 1)
@@ -3496,13 +3708,7 @@ def auth_login():
         response_payload = {
             'success': True,
             'user': session_data.get('user'),
-            'points': {
-                'balance': int((points_row or {}).get('balance') or 0),
-                'total_earned': int((points_row or {}).get('total_earned') or 0),
-                'total_spent': int((points_row or {}).get('total_spent') or 0),
-                'signup_bonus': POINTS_SIGNUP_BONUS,
-                'daily_free': POINTS_DAILY_FREE,
-            },
+            'points': serialize_points_payload(points_row),
         }
         response = jsonify(response_payload)
         set_auth_session_cookie(response, session_data)
@@ -3534,11 +3740,7 @@ def auth_register():
             'success': True,
             'user': session_data.get('user'),
             'points': {
-                'balance': int((points_row or {}).get('balance') or 0),
-                'total_earned': int((points_row or {}).get('total_earned') or 0),
-                'total_spent': int((points_row or {}).get('total_spent') or 0),
-                'signup_bonus': POINTS_SIGNUP_BONUS,
-                'daily_free': POINTS_DAILY_FREE,
+                **serialize_points_payload(points_row),
                 'signup_bonus_awarded': bool((signup_result or {}).get('awarded')) if isinstance(signup_result, dict) else False,
             }
         })
@@ -3680,13 +3882,7 @@ def points_balance_api():
             'success': True,
             'points': {
                 'user_id': user_id,
-                'balance': int(points_row.get('balance') or 0),
-                'total_earned': int(points_row.get('total_earned') or 0),
-                'total_spent': int(points_row.get('total_spent') or 0),
-                'signup_bonus_awarded_at': points_row.get('signup_bonus_awarded_at'),
-                'last_daily_claim_at': points_row.get('last_daily_claim_at'),
-                'signup_bonus': POINTS_SIGNUP_BONUS,
-                'daily_free': POINTS_DAILY_FREE,
+                **serialize_points_payload(points_row),
             },
         })
     except requests.RequestException as exc:
@@ -3712,13 +3908,7 @@ def points_daily_claim_api():
                 'claimed': True,
                 'points': {
                     'user_id': user_id,
-                    'balance': int(balance_row.get('balance') or 0),
-                    'total_earned': int(balance_row.get('total_earned') or 0),
-                    'total_spent': int(balance_row.get('total_spent') or 0),
-                    'signup_bonus_awarded_at': balance_row.get('signup_bonus_awarded_at'),
-                    'last_daily_claim_at': balance_row.get('last_daily_claim_at'),
-                    'signup_bonus': POINTS_SIGNUP_BONUS,
-                    'daily_free': POINTS_DAILY_FREE,
+                    **serialize_points_payload(balance_row),
                 },
             })
         return jsonify({
@@ -3727,19 +3917,154 @@ def points_daily_claim_api():
             'error': '今日已领取',
             'points': {
                 'user_id': user_id,
-                'balance': int(balance_row.get('balance') or 0),
-                'total_earned': int(balance_row.get('total_earned') or 0),
-                'total_spent': int(balance_row.get('total_spent') or 0),
-                'signup_bonus_awarded_at': balance_row.get('signup_bonus_awarded_at'),
-                'last_daily_claim_at': balance_row.get('last_daily_claim_at'),
-                'signup_bonus': POINTS_SIGNUP_BONUS,
-                'daily_free': POINTS_DAILY_FREE,
+                **serialize_points_payload(balance_row),
             },
         }), 409
     except requests.RequestException as exc:
         return jsonify({'success': False, 'error': f'领取失败：{exc}'}), 502
     except Exception as exc:
         return jsonify({'success': False, 'error': f'领取失败：{exc}'}), 500
+
+
+@app.get('/api/points/rules')
+def points_rules_api():
+    try:
+        rules = get_points_rules()
+        return jsonify({
+            'success': True,
+            'rules': rules,
+        })
+    except ValueError as exc:
+        return jsonify({'success': False, 'error': str(exc)}), 400
+    except Exception as exc:
+        return jsonify({'success': False, 'error': f'读取积分规则失败：{exc}'}), 500
+
+
+@app.post('/api/points/quote')
+def points_quote_api():
+    try:
+        payload = request.get_json(silent=True) or {}
+        mode = str(payload.get('mode') or 'suite').strip().lower() or 'suite'
+        consume_payload = build_points_consume_payload(
+            mode,
+            output_count=int(payload.get('output_count') or 0),
+            selected_modules_count=int(payload.get('selected_modules_count') or 0),
+            selected_scene_count=int(payload.get('selected_scene_count') or 0),
+            transaction_type=str(payload.get('type') or 'consume').strip() or 'consume',
+            reason=str(payload.get('reason') or '').strip(),
+            metadata=payload.get('metadata') if isinstance(payload.get('metadata'), dict) else {},
+        )
+        return jsonify({
+            'success': True,
+            'quote': consume_payload,
+        })
+    except ValueError:
+        return jsonify({'success': False, 'error': '积分规则参数必须是数字'}), 400
+    except Exception as exc:
+        return jsonify({'success': False, 'error': f'计算积分失败：{exc}'}), 500
+
+
+@app.post('/api/points/spend')
+def points_spend_api():
+    try:
+        payload = request.get_json(silent=True) or {}
+        session_data = g.get('supabase_session') or get_supabase_session()
+        user_id = _get_supabase_user_id(session_data)
+        if not user_id:
+            return jsonify({'success': False, 'error': '请先登录'}), 401
+
+        mode = str(payload.get('mode') or 'suite').strip().lower() or 'suite'
+        transaction_type = str(payload.get('type') or 'consume').strip() or 'consume'
+        reason = str(payload.get('reason') or '').strip()
+        metadata = payload.get('metadata') if isinstance(payload.get('metadata'), dict) else {}
+        consume_payload = build_points_consume_payload(
+            mode,
+            output_count=int(payload.get('output_count') or 0),
+            selected_modules_count=int(payload.get('selected_modules_count') or 0),
+            selected_scene_count=int(payload.get('selected_scene_count') or 0),
+            transaction_type=transaction_type,
+            reason=reason,
+            metadata=metadata,
+        )
+        amount = int(consume_payload['amount'])
+        if amount <= 0:
+            return jsonify({'success': False, 'error': '扣减积分必须大于 0'}), 400
+
+        spend_result = spend_user_points(user_id, amount, transaction_type, reason, metadata)
+        if not isinstance(spend_result, dict):
+            return jsonify({'success': False, 'error': '扣减积分失败'}), 502
+
+        balance_row = spend_result.get('balance_row') or spend_result
+        if spend_result.get('error') == 'INSUFFICIENT_POINTS':
+            return jsonify({
+                'success': False,
+                'spent': False,
+                'error': '积分不足',
+                'points': {
+                    'user_id': user_id,
+                    **serialize_points_payload(balance_row),
+                },
+                'consume': consume_payload,
+            }), 409
+
+        return jsonify({
+            'success': True,
+            'spent': True,
+            'points': {
+                'user_id': user_id,
+                **serialize_points_payload(balance_row),
+            },
+            'consume': consume_payload,
+        })
+    except ValueError:
+        return jsonify({'success': False, 'error': '积分规则参数必须是数字'}), 400
+    except requests.RequestException as exc:
+        return jsonify({'success': False, 'error': f'扣减积分失败：{exc}'}), 502
+    except Exception as exc:
+        return jsonify({'success': False, 'error': f'扣减积分失败：{exc}'}), 500
+
+
+@app.post('/api/points/refund')
+def points_refund_api():
+    try:
+        payload = request.get_json(silent=True) or {}
+        session_data = g.get('supabase_session') or get_supabase_session()
+        user_id = _get_supabase_user_id(session_data)
+        if not user_id:
+            return jsonify({'success': False, 'error': '请先登录'}), 401
+
+        amount = int(payload.get('amount') or 0)
+        if amount <= 0:
+            return jsonify({'success': False, 'error': '返还积分必须大于 0'}), 400
+
+        transaction_type = str(payload.get('type') or 'refund').strip() or 'refund'
+        reason = str(payload.get('reason') or '').strip()
+        metadata = payload.get('metadata') if isinstance(payload.get('metadata'), dict) else {}
+
+        refund_result = add_user_points(user_id, amount, transaction_type, reason, metadata)
+        if not isinstance(refund_result, dict):
+            return jsonify({'success': False, 'error': '返还积分失败'}), 502
+
+        return jsonify({
+            'success': True,
+            'refunded': True,
+            'points': {
+                'user_id': user_id,
+                **serialize_points_payload(refund_result),
+            },
+            'refund': {
+                'amount': amount,
+                'type': transaction_type,
+                'reason': reason,
+                'metadata': metadata,
+            },
+        })
+    except ValueError:
+        return jsonify({'success': False, 'error': 'amount 必须是数字'}), 400
+    except requests.RequestException as exc:
+        return jsonify({'success': False, 'error': f'返还积分失败：{exc}'}), 502
+    except Exception as exc:
+        return jsonify({'success': False, 'error': f'返还积分失败：{exc}'}), 500
 
 
 @app.post('/api/download-zip')
