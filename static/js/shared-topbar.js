@@ -826,6 +826,67 @@
         line-height: 1;
       }
 
+      .shared-account-panel__points-head {
+        display: inline-flex;
+        align-items: center;
+        gap: 10px;
+        min-width: 0;
+      }
+
+      .shared-account-panel__claim-button {
+        display: inline-flex;
+        align-items: center;
+        justify-content: center;
+        min-width: 72px;
+        height: 28px;
+        padding: 0 10px;
+        border: 1px solid rgba(29, 78, 216, 0.16);
+        border-radius: 999px;
+        background: rgba(37, 99, 235, 0.08);
+        color: #1d4ed8;
+        font-size: 12px;
+        font-weight: 600;
+        line-height: 1;
+        cursor: pointer;
+        transition: background-color 0.2s ease, border-color 0.2s ease, color 0.2s ease, opacity 0.2s ease;
+      }
+
+      .shared-account-panel__claim-button:hover:not(:disabled) {
+        background: rgba(37, 99, 235, 0.14);
+        border-color: rgba(29, 78, 216, 0.28);
+      }
+
+      .shared-account-panel__claim-button:disabled {
+        cursor: not-allowed;
+        opacity: 0.66;
+      }
+
+      .shared-account-panel__claim-button.is-claimed {
+        background: rgba(15, 23, 42, 0.06);
+        border-color: rgba(15, 23, 42, 0.08);
+        color: #6b7280;
+      }
+
+      .shared-account-panel__claim-button.is-loading {
+        opacity: 0.78;
+      }
+
+      .shared-account-panel__claim-status {
+        margin-top: 8px;
+        min-height: 18px;
+        color: #6b7280;
+        font-size: 12px;
+        line-height: 1.5;
+      }
+
+      .shared-account-panel__claim-status.is-success {
+        color: #047857;
+      }
+
+      .shared-account-panel__claim-status.is-error {
+        color: #dc2626;
+      }
+
       .amount-label {
         margin-left: auto;
         display: inline-flex;
@@ -949,11 +1010,15 @@
                 <div class="xdesign-user-info-panel__balance-item clickable">
                   <div class="xdesign-user-info-panel__balance-name active">
                     <img src="https://public.static.meitudata.com/xiuxiu-pc/xdesign-widgets/images/meidouInfo/meidou-icon.svg" alt="">
-                    <span class="balance-label">积分</span>
+                    <div class="shared-account-panel__points-head">
+                      <span class="balance-label">积分</span>
+                      <button class="shared-account-panel__claim-button" type="button" id="shared-account-panel-daily-claim">今日领取</button>
+                    </div>
                     <span class="amount-label" id="shared-account-panel-points">0</span>
                   </div>
                 </div>
               </div>
+              <div class="shared-account-panel__claim-status" id="shared-account-panel-claim-status" aria-live="polite"></div>
             </section>
           </section>
 
@@ -977,6 +1042,9 @@
     accountState.meta = panel.querySelector('#shared-account-panel-meta');
     accountState.note = panel.querySelector('#shared-account-panel-note');
     accountState.pointsValue = panel.querySelector('#shared-account-panel-points');
+    accountState.dailyClaimButton = panel.querySelector('#shared-account-panel-daily-claim');
+    accountState.claimStatus = panel.querySelector('#shared-account-panel-claim-status');
+    accountState.claimBusy = false;
     accountState.pointsNote = null;
     accountState.summary = null;
     accountState.logoutButton = panel.querySelector('#shared-account-panel-logout');
@@ -989,6 +1057,10 @@
 
     accountState.closeButtons.forEach((button) => {
       button.addEventListener('click', closeAccountPanel);
+    });
+
+    accountState.dailyClaimButton?.addEventListener('click', () => {
+      void submitDailyClaim();
     });
 
     return panel;
@@ -1276,21 +1348,55 @@
     return accountState.supabaseClientPromise;
   }
 
+  async function getBrowserSupabaseSession() {
+    try {
+      const supabase = await getSupabaseClient();
+      const { data } = await supabase.auth.getSession();
+      return data?.session || null;
+    } catch (error) {
+      return null;
+    }
+  }
+
+  async function syncServerSessionFromBrowser() {
+    const browserSession = await getBrowserSupabaseSession();
+    if (!browserSession) {
+      return null;
+    }
+    await syncLoginModalSession(browserSession);
+    accountState.session = browserSession;
+    accountState.sessionLoaded = true;
+    updateAccountTriggers();
+    return browserSession;
+  }
+
+  async function requestPointsBalance() {
+    const pointsResponse = await fetch('/api/points/balance', {
+      method: 'GET',
+      headers: { Accept: 'application/json' },
+      credentials: 'same-origin',
+    });
+    const pointsData = await pointsResponse.json().catch(() => ({}));
+    return { pointsResponse, pointsData };
+  }
+
   async function loadAccountPoints(force = false) {
     if (!accountState.session) {
-      accountState.points = null;
-      return null;
+      const syncedSession = await syncServerSessionFromBrowser();
+      if (!syncedSession) {
+        accountState.points = null;
+        return null;
+      }
     }
     if (accountState.points && !force) {
       return accountState.points;
     }
     try {
-      const pointsResponse = await fetch('/api/points/balance', {
-        method: 'GET',
-        headers: { Accept: 'application/json' },
-        credentials: 'same-origin',
-      });
-      const pointsData = await pointsResponse.json();
+      let { pointsResponse, pointsData } = await requestPointsBalance();
+      if (pointsResponse.status === 401) {
+        await syncServerSessionFromBrowser();
+        ({ pointsResponse, pointsData } = await requestPointsBalance());
+      }
       if (pointsResponse.ok && pointsData.success) {
         accountState.points = pointsData.points || null;
         return accountState.points;
@@ -1342,6 +1448,129 @@
     }
     status.textContent = message || '';
     status.className = `shared-login-modal__status${type ? ` is-${type}` : ''}`;
+  }
+
+  function setClaimStatus(message, type = '') {
+    if (!accountState.claimStatus) {
+      return;
+    }
+    accountState.claimStatus.textContent = message || '';
+    accountState.claimStatus.className = `shared-account-panel__claim-status${type ? ` is-${type}` : ''}`;
+  }
+
+  function isSameLocalDay(dateValue) {
+    if (!dateValue) {
+      return false;
+    }
+    const currentDate = new Date();
+    const targetDate = new Date(dateValue);
+    if (Number.isNaN(targetDate.getTime())) {
+      return false;
+    }
+    return currentDate.getFullYear() === targetDate.getFullYear()
+      && currentDate.getMonth() === targetDate.getMonth()
+      && currentDate.getDate() === targetDate.getDate();
+  }
+
+  function renderDailyClaimButton() {
+    const button = accountState.dailyClaimButton;
+    if (!button) {
+      return;
+    }
+    const isLoggedIn = Boolean(accountState.session);
+    const alreadyClaimed = isSameLocalDay(accountState.points?.last_daily_claim_at);
+    const busy = Boolean(accountState.claimBusy);
+    button.disabled = busy || alreadyClaimed;
+    button.textContent = busy ? '领取中...' : (alreadyClaimed ? '今日已领取' : '今日领取');
+    button.classList.toggle('is-loading', busy);
+    button.classList.toggle('is-claimed', !busy && alreadyClaimed);
+    if (!isLoggedIn) {
+      setClaimStatus('登录后可领取每日免费积分');
+      return;
+    }
+    if (alreadyClaimed) {
+      setClaimStatus('今日免费积分已领取', 'success');
+      return;
+    }
+    if (!busy && !accountState.claimStatus?.textContent) {
+      setClaimStatus('每日可免费领取一次积分');
+    }
+  }
+
+  async function submitDailyClaim() {
+    if (!accountState.session) {
+      const syncedSession = await syncServerSessionFromBrowser();
+      if (!syncedSession) {
+        setClaimStatus('请先登录后再领取', 'error');
+        openLoginModal();
+        return;
+      }
+    }
+    if (accountState.claimBusy) {
+      return;
+    }
+    if (isSameLocalDay(accountState.points?.last_daily_claim_at)) {
+      renderDailyClaimButton();
+      return;
+    }
+    accountState.claimBusy = true;
+    renderDailyClaimButton();
+    setClaimStatus('正在领取今日免费积分...');
+    try {
+      let response = await fetch('/api/points/daily-claim', {
+        method: 'POST',
+        headers: {
+          Accept: 'application/json',
+        },
+        credentials: 'same-origin',
+      });
+      let result = await response.json().catch(() => ({}));
+      if (response.status === 401) {
+        await syncServerSessionFromBrowser();
+        response = await fetch('/api/points/daily-claim', {
+          method: 'POST',
+          headers: {
+            Accept: 'application/json',
+          },
+          credentials: 'same-origin',
+        });
+        result = await response.json().catch(() => ({}));
+      }
+      if (!response.ok || !result?.success) {
+        const message = result?.error || '领取失败，请稍后重试';
+        const alreadyClaimed = response.status === 409 || message.includes('已领取');
+        if (result?.points && typeof result.points === 'object') {
+          accountState.points = result.points;
+          window.dispatchEvent(new CustomEvent('shared-points-updated', {
+            detail: { points: result.points },
+          }));
+        } else if (response.status === 401) {
+          accountState.points = null;
+        }
+        if (response.status === 401) {
+          setClaimStatus('请先登录后再领取', 'error');
+          openLoginModal();
+          return;
+        }
+        setClaimStatus(alreadyClaimed ? '今日免费积分已领取' : message, alreadyClaimed ? 'success' : 'error');
+        return;
+      }
+      if (result?.points && typeof result.points === 'object') {
+        accountState.points = result.points;
+        window.dispatchEvent(new CustomEvent('shared-points-updated', {
+          detail: { points: result.points },
+        }));
+      } else {
+        await loadAccountPoints(true);
+      }
+      renderAccountPanel();
+      setClaimStatus(`领取成功，已到账 ${Number(result?.claimed ?? 0)} 积分`, 'success');
+    } catch (error) {
+      setClaimStatus(error?.message || '领取失败，请稍后重试', 'error');
+    } finally {
+      accountState.claimBusy = false;
+      renderDailyClaimButton();
+    }
   }
 
   function validateSmsLoginForm(showErrors = true) {
@@ -1732,6 +1961,17 @@
     setText(accountState.note, isLoggedIn ? `用户UID：${userUid || '暂无 UID'}` : '您还未开通会员');
     setText(accountState.pointsValue, String(Number.isFinite(pointsBalance) ? pointsBalance : 0));
 
+    if (!accountState.claimBusy) {
+      if (!isLoggedIn) {
+        setClaimStatus('登录后可领取每日免费积分');
+      } else if (isSameLocalDay(accountState.points?.last_daily_claim_at)) {
+        setClaimStatus('今日免费积分已领取', 'success');
+      } else {
+        setClaimStatus('每日可免费领取一次积分');
+      }
+    }
+    renderDailyClaimButton();
+
     if (accountState.logoutButton) {
       accountState.logoutButton.hidden = false;
       accountState.logoutButton.textContent = isLoggedIn ? '退出登录' : '登录';
@@ -1759,6 +1999,7 @@
           accountState.session = null;
           accountState.points = null;
           accountState.sessionLoaded = true;
+          accountState.claimBusy = false;
           updateAccountTriggers();
           renderAccountPanel();
           closeAccountPanel();
@@ -1786,6 +2027,12 @@
     accountState.session = sessionData.authenticated
       ? { ...(sessionData.session || {}), user: sessionData.user || sessionData.session?.user || null }
       : null;
+
+    if (!accountState.session) {
+      const browserSession = await syncServerSessionFromBrowser();
+      accountState.session = browserSession;
+    }
+
     accountState.points = null;
 
     if (accountState.session) {

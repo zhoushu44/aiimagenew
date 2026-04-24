@@ -27,6 +27,16 @@ BASE_DIR = Path(__file__).resolve().parent
 load_dotenv(BASE_DIR / '.env')
 
 app = Flask(__name__, static_folder=str(BASE_DIR / 'static'), static_url_path='/static')
+app.config['SEND_FILE_MAX_AGE_DEFAULT'] = 0
+
+@app.after_request
+def disable_static_file_cache(response):
+    if request.path.startswith('/static/'):
+        response.headers['Cache-Control'] = 'no-store, no-cache, must-revalidate, max-age=0'
+        response.headers['Pragma'] = 'no-cache'
+        response.headers['Expires'] = '0'
+    return response
+
 
 # 执行SQL脚本的路由
 @app.route('/api/execute-sql', methods=['GET'])
@@ -174,12 +184,44 @@ def claim_daily_free_points(user_id: str, amount: int) -> dict | None:
         return None
     try:
         payload = _post_supabase_rpc('claim_daily_free_points', {'p_user_id': normalized_user_id, 'p_amount': int(amount)})
+    except requests.HTTPError as exc:
+        response = getattr(exc, 'response', None)
+        error_text = ''
+        if response is not None:
+            try:
+                error_payload = response.json()
+                if isinstance(error_payload, dict):
+                    error_text = str(
+                        error_payload.get('message')
+                        or error_payload.get('error')
+                        or error_payload.get('error_description')
+                        or ''
+                    )
+            except ValueError:
+                error_text = response.text or ''
+        app.logger.warning('Failed to claim daily points for %s: %s', normalized_user_id, exc)
+        return {
+            'success': False,
+            'claimed': False,
+            'error': error_text or '领取失败，请稍后重试',
+            'balance_row': get_user_points_balance(normalized_user_id) or ensure_user_points_balance(normalized_user_id) or {},
+        }
     except requests.RequestException as exc:
         app.logger.warning('Failed to claim daily points for %s: %s', normalized_user_id, exc)
-        return None
+        return {
+            'success': False,
+            'claimed': False,
+            'error': '领取失败，请稍后重试',
+            'balance_row': get_user_points_balance(normalized_user_id) or ensure_user_points_balance(normalized_user_id) or {},
+        }
     except RuntimeError as exc:
         app.logger.warning('Failed to claim daily points for %s: %s', normalized_user_id, exc)
-        return None
+        return {
+            'success': False,
+            'claimed': False,
+            'error': str(exc) or '领取失败，请稍后重试',
+            'balance_row': get_user_points_balance(normalized_user_id) or ensure_user_points_balance(normalized_user_id) or {},
+        }
     return payload if isinstance(payload, dict) else None
 
 
@@ -3900,26 +3942,38 @@ def points_daily_claim_api():
             return jsonify({'success': False, 'error': '请先登录'}), 401
         claim_result = claim_daily_free_points(user_id, POINTS_DAILY_FREE)
         if not isinstance(claim_result, dict):
-            return jsonify({'success': False, 'error': '领取失败'}), 502
+            return jsonify({'success': False, 'error': '领取失败，请稍后重试'}), 502
         balance_row = claim_result.get('balance_row') or {}
         if claim_result.get('claimed'):
             return jsonify({
                 'success': True,
-                'claimed': True,
+                'claimed': POINTS_DAILY_FREE,
                 'points': {
                     'user_id': user_id,
                     **serialize_points_payload(balance_row),
                 },
             })
+        error_message = str(claim_result.get('error') or '').strip()
+        reason = str(claim_result.get('reason') or '').strip().lower()
+        if reason == 'already_claimed_today' or '已领取' in error_message:
+            return jsonify({
+                'success': False,
+                'claimed': False,
+                'error': '今日已领取',
+                'points': {
+                    'user_id': user_id,
+                    **serialize_points_payload(balance_row),
+                },
+            }), 409
         return jsonify({
             'success': False,
             'claimed': False,
-            'error': '今日已领取',
+            'error': error_message or '领取失败，请稍后重试',
             'points': {
                 'user_id': user_id,
                 **serialize_points_payload(balance_row),
             },
-        }), 409
+        }), 502
     except requests.RequestException as exc:
         return jsonify({'success': False, 'error': f'领取失败：{exc}'}), 502
     except Exception as exc:
