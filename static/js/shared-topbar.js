@@ -33,21 +33,54 @@
   const ACCOUNT_STYLE_ID = 'shared-account-panel-styles';
   const VIP_REFERENCE_IMAGES = [
     {
-      src: 'https://pc.meitudata.com/saas-subscription/static/media/material-vip.ffdda35dbe1aa5bdf1d4.png',
       title: 'VIP 专属工作台',
       description: '会员可解锁更完整的电商设计工作流与高质感画面模板。',
+      eyebrow: 'WORKSPACE',
+      metrics: ['模板 120+', '批量任务', '高阶出图'],
     },
     {
-      src: 'https://pc.meitudata.com/saas-subscription/static/media/material-vip.ffdda35dbe1aa5bdf1d4.png',
       title: '高阶视觉参考',
       description: '通过精选参考图案例，快速了解开通 VIP 后的创作风格与交付效果。',
+      eyebrow: 'REFERENCE',
+      metrics: ['风格案例', '商业质感', '品牌统一'],
     },
     {
-      src: 'https://pc.meitudata.com/saas-subscription/static/media/material-vip.ffdda35dbe1aa5bdf1d4.png',
       title: '多端权益展示',
       description: '展示会员权益、专属模板和更顺滑的任务处理体验。',
+      eyebrow: 'BENEFITS',
+      metrics: ['Web / H5 / 详情页', '专属权益', '稳定协作'],
     },
   ];
+  const VIP_PLAN_OPTIONS = [
+    {
+      key: 'month',
+      title: '连续包月',
+      price: '30',
+      origin: '原价 ¥48',
+      unit: '¥1/天',
+      badge: '',
+      trial: '',
+    },
+    {
+      key: 'year',
+      title: '连续包年',
+      price: '1.1',
+      origin: '原价 ¥358',
+      unit: '¥0.6/天',
+      badge: '超低价试用',
+      trial: '试用 7 天',
+    },
+    {
+      key: 'quarter',
+      title: '连续包季',
+      price: '68',
+      origin: '原价 ¥128',
+      unit: '¥0.76/天',
+      badge: '',
+      trial: '',
+    },
+  ];
+
   const SUPABASE_URL = 'https://spb-kemqk3h0a423q1q5.supabase.opentrust.net';
   const SUPABASE_ANON_KEY = 'eyJ0eXAiOiJKV1QiLCJhbGciOiJIUzI1NiJ9.eyJyb2xlIjoiYW5vbiIsInJlZiI6InNwYi1rZW1xazNoMGE0MjNxMXE1IiwiaXNzIjoic3VwYWJhc2UiLCJpYXQiOjE3NzYyNjcxMjUsImV4cCI6MjA5MTg0MzEyNX0.hKFA4d_dQwbecO8t0na0DptshXQNHTSEQ5E2VAd3o18';
   const LOGIN_COUNTDOWN_SECONDS = 60;
@@ -57,6 +90,10 @@
     loginOpen: false,
     vipPreviewOpen: false,
     vipPreviewIndex: 0,
+    vipSelectedPlan: 'plan_2',
+    vipPlans: [],
+    vipPlansLoaded: false,
+    vipPlansPromise: null,
     loading: false,
     session: null,
     points: null,
@@ -88,6 +125,141 @@
     returnFocusTo: null,
     sessionLoaded: false,
   };
+
+  function getVipPlanList() {
+    return Array.isArray(accountState.vipPlans) && accountState.vipPlans.length ? accountState.vipPlans : VIP_PLAN_OPTIONS;
+  }
+
+  function normalizeVipPlanValue(value) {
+    return value == null ? '' : String(value).trim();
+  }
+
+  function buildVipPlansFromConfig(config) {
+    if (!config || typeof config !== 'object') {
+      return [];
+    }
+    return [1, 2, 3].map((index) => {
+      const title = normalizeVipPlanValue(config[`plan_name_${index}`]);
+      const price = normalizeVipPlanValue(config[`discount_price_${index}`]);
+      if (!title || !price) {
+        return null;
+      }
+      const originalPrice = normalizeVipPlanValue(config[`original_price_${index}`]);
+      return {
+        key: `plan_${index}`,
+        title,
+        price,
+        origin: originalPrice ? `原价 ¥${originalPrice}` : '',
+        unit: normalizeVipPlanValue(config[`price_note_${index}`]),
+        points: Number(config[`points_${index}`] || 0),
+        badge: normalizeVipPlanValue(config[`badge_${index}`]),
+        trial: normalizeVipPlanValue(config[`trial_text_${index}`]),
+      };
+    }).filter(Boolean);
+  }
+
+  async function loadVipPlanConfig(force = false) {
+    if (accountState.vipPlansLoaded && !force) {
+      return accountState.vipPlans;
+    }
+    if (accountState.vipPlansPromise && !force) {
+      return accountState.vipPlansPromise;
+    }
+    accountState.vipPlansPromise = (async () => {
+      try {
+        const supabase = await getSupabaseClient();
+        const { data, error } = await supabase
+          .from('vip_plan_config')
+          .select('*')
+          .eq('config_key', 'default')
+          .maybeSingle();
+        if (error) {
+          throw error;
+        }
+        const plans = buildVipPlansFromConfig(data);
+        accountState.vipPlans = plans.length ? plans : VIP_PLAN_OPTIONS;
+      } catch (error) {
+        accountState.vipPlans = VIP_PLAN_OPTIONS;
+      }
+      accountState.vipPlansLoaded = true;
+      const currentPlans = getVipPlanList();
+      if (!currentPlans.some((item) => item.key === accountState.vipSelectedPlan)) {
+        accountState.vipSelectedPlan = currentPlans[1]?.key || currentPlans[0]?.key || 'plan_1';
+      }
+      if (accountState.vipModal) {
+        renderVipPlanCards();
+        syncVipPreviewSelectedPlan();
+      }
+      return accountState.vipPlans;
+    })().finally(() => {
+      accountState.vipPlansPromise = null;
+    });
+    return accountState.vipPlansPromise;
+  }
+
+  function setVipPlanSelection(planKey) {
+    const plans = getVipPlanList();
+    if (!plans.some((item) => item.key === planKey)) {
+      return;
+    }
+    accountState.vipSelectedPlan = planKey;
+    syncVipPreviewSelectedPlan();
+  }
+
+  function getVipPlanArticleMarkup(plan, isSelected) {
+    const badgeHtml = plan.badge && isSelected
+      ? `<div class="shared-vip-preview-modal__plan-badge">${plan.badge}</div>`
+      : '';
+    const trialHtml = plan.trial ? `<span>${plan.trial}</span>` : '';
+    const originHtml = plan.origin ? `<div class="shared-vip-preview-modal__plan-origin">${plan.origin}</div>` : '';
+    const unitHtml = plan.unit ? `<div class="shared-vip-preview-modal__plan-unit">${plan.unit}</div>` : '';
+    const pointsHtml = Number.isFinite(plan.points) && plan.points > 0
+      ? `<div class="shared-vip-preview-modal__plan-points">赠送积分 ${plan.points}</div>`
+      : '';
+    return `
+      <article class="shared-vip-preview-modal__plan${isSelected ? ' is-featured' : ''}" tabindex="0" role="button" data-vip-plan="${plan.key}" aria-pressed="${isSelected ? 'true' : 'false'}">
+        ${badgeHtml}
+        <div class="shared-vip-preview-modal__plan-title">${plan.title}</div>
+        <div class="shared-vip-preview-modal__plan-price">¥${plan.price}${trialHtml}</div>
+        ${originHtml}
+        ${unitHtml}
+        ${pointsHtml}
+      </article>
+    `;
+  }
+
+  function bindVipPlanEvents(modal) {
+    modal.querySelectorAll('[data-vip-plan]').forEach((planEl) => {
+      const activatePlan = () => {
+        const planKey = planEl.getAttribute('data-vip-plan');
+        if (!planKey || planKey === accountState.vipSelectedPlan) {
+          return;
+        }
+        setVipPlanSelection(planKey);
+      };
+      planEl.addEventListener('click', activatePlan);
+      planEl.addEventListener('keydown', (event) => {
+        if (event.key === 'Enter' || event.key === ' ') {
+          event.preventDefault();
+          activatePlan();
+        }
+      });
+    });
+  }
+
+  function renderVipPlanCards() {
+    const modal = accountState.vipModal;
+    if (!modal) {
+      return;
+    }
+    const pricingEl = modal.querySelector('.shared-vip-preview-modal__pricing');
+    if (!pricingEl) {
+      return;
+    }
+    const plans = getVipPlanList();
+    pricingEl.innerHTML = plans.map((plan) => getVipPlanArticleMarkup(plan, plan.key === accountState.vipSelectedPlan)).join('');
+    bindVipPlanEvents(modal);
+  }
 
   function getMode() {
     const bodyMode = document.body?.dataset?.pageMode?.trim();
@@ -147,12 +319,13 @@
   }
 
   function ensureStyles() {
-    if (document.getElementById(ACCOUNT_STYLE_ID)) {
-      return;
+    let style = document.getElementById(ACCOUNT_STYLE_ID);
+    if (!style) {
+      style = document.createElement('style');
+      style.id = ACCOUNT_STYLE_ID;
+      document.head.appendChild(style);
     }
 
-    const style = document.createElement('style');
-    style.id = ACCOUNT_STYLE_ID;
     style.textContent = `
       .shared-account-panel {
         position: fixed;
@@ -178,7 +351,8 @@
       }
 
       .shared-account-panel[hidden],
-      .shared-login-modal[hidden] {
+      .shared-login-modal[hidden],
+      .shared-vip-preview-modal[hidden] {
         display: none !important;
       }
 
@@ -1001,47 +1175,441 @@
 
       .shared-vip-preview-modal__dialog {
         position: relative;
-        width: min(920px, calc(100vw - 32px));
-        min-height: min(620px, calc(100dvh - 48px));
+        width: 800px;
+        height: 500px;
+        max-width: calc(100vw - 24px);
+        max-height: calc(100dvh - 24px);
         display: grid;
-        grid-template-columns: minmax(0, 1.16fr) minmax(280px, 0.84fr);
+        grid-template-columns: 292px minmax(0, 1fr);
         overflow: hidden;
-        border: 1px solid rgba(255, 255, 255, 0.08);
-        border-radius: 32px;
+        border: 1px solid rgba(255, 255, 255, 0.06);
+        border-radius: 10px;
         background:
-          radial-gradient(circle at top left, rgba(255, 196, 125, 0.24), transparent 32%),
-          linear-gradient(145deg, rgba(15, 17, 24, 0.98), rgba(34, 24, 16, 0.96));
-        box-shadow: 0 30px 90px rgba(0, 0, 0, 0.42);
+          radial-gradient(circle at 78% 14%, rgba(255, 194, 124, 0.1), transparent 24%),
+          linear-gradient(180deg, rgba(10, 10, 11, 0.99), rgba(15, 14, 14, 0.985));
+        box-shadow: 0 24px 80px rgba(0, 0, 0, 0.48);
         outline: none;
       }
 
       .shared-vip-preview-modal__media {
         position: relative;
-        min-height: 460px;
-        background: rgba(255, 255, 255, 0.03);
+        min-height: 100%;
+        border-radius: 10px 0 0 10px;
+        background:
+          radial-gradient(circle at top, rgba(96, 165, 250, 0.24), transparent 44%),
+          linear-gradient(160deg, #0f172a 0%, #162447 48%, #1d4ed8 100%);
+        color: #fff;
+        padding: 0;
+        overflow: hidden;
       }
 
-      .shared-vip-preview-modal__image {
+      .shared-vip-preview-modal__visual {
+        position: relative;
+        display: grid;
+        grid-template-rows: auto 1fr auto;
+        align-content: space-between;
+        gap: 28px;
         width: 100%;
+        min-height: 100%;
+        padding: 54px 36px 46px;
+        box-sizing: border-box;
+        background: transparent;
+        box-shadow: none;
+        overflow: hidden;
+      }
+
+      #shared-vip-preview-image {
+        width: 100%;
+        max-width: 100%;
         height: 100%;
-        object-fit: cover;
-        display: block;
+      }
+
+      #shared-vip-preview-image::before,
+      #shared-vip-preview-image::after {
+        content: none;
+      }
+
+      .shared-vip-preview-modal__visual-top {
+        display: grid;
+        justify-items: start;
+        gap: 12px;
+        position: relative;
+        z-index: 1;
+      }
+
+      .shared-vip-preview-modal__visual-badge,
+      .shared-vip-preview-modal__visual-status {
+        display: inline-flex;
+        align-items: center;
+        min-height: 30px;
+        padding: 0 12px;
+        border-radius: 999px;
+        border: 1px solid rgba(255, 221, 176, 0.08);
+        background: rgba(255, 244, 228, 0.06);
+        color: rgba(255, 236, 212, 0.78);
+        font-size: 11px;
+        letter-spacing: 0.14em;
+      }
+
+      .shared-vip-preview-modal__visual-stage {
+        display: grid;
+        align-content: end;
+        gap: 18px;
+        position: relative;
+        z-index: 1;
+      }
+
+      .shared-vip-preview-modal__visual-card {
+        position: relative;
+        display: grid;
+        gap: 18px;
+        padding: 26px 24px 22px;
+        border-radius: 24px;
+        border: 1px solid rgba(255, 255, 255, 0.12);
+        background: rgba(255, 255, 255, 0.08);
+        backdrop-filter: blur(10px);
+        box-shadow:
+          inset 0 1px 0 rgba(255, 255, 255, 0.14),
+          0 18px 32px rgba(8, 15, 32, 0.22);
+      }
+
+      .shared-vip-preview-modal__visual-card::before {
+        content: '';
+        position: absolute;
+        inset: 12px;
+        border-radius: 18px;
+        border: 1px solid rgba(255, 255, 255, 0.08);
+        pointer-events: none;
+      }
+
+      .shared-vip-preview-modal__visual-card-head {
+        display: grid;
+        justify-items: center;
+        gap: 16px;
+        text-align: center;
+      }
+
+      .shared-vip-preview-modal__visual-card-title {
+        margin: 0 0 10px;
+        color: #ffffff;
+        font-size: clamp(28px, 2.8vw, 40px);
+        line-height: 1.12;
+        letter-spacing: -0.04em;
+        text-align: center;
+      }
+
+      .shared-vip-preview-modal__visual-card-copy {
+        margin: 0;
+        color: rgba(255, 255, 255, 0.8);
+        font-size: 13px;
+        line-height: 1.7;
+        text-align: center;
+      }
+
+      .shared-vip-preview-modal__visual-pill {
+        display: inline-flex;
+        align-items: center;
+        justify-content: center;
+        min-width: 62px;
+        min-height: 62px;
+        padding: 0 16px;
+        border-radius: 20px;
+        background: rgba(255, 255, 255, 0.12);
+        color: #ffffff;
+        font-size: 17px;
+        font-weight: 700;
+        letter-spacing: 0.08em;
+        box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.14);
+      }
+
+      .shared-vip-preview-modal__visual-metrics {
+        display: grid;
+        gap: 12px;
+      }
+
+      .shared-vip-preview-modal__visual-metric {
+        display: grid;
+        grid-template-columns: 42px minmax(0, 1fr);
+        align-items: center;
+        gap: 4px 12px;
+      }
+
+      .shared-vip-preview-modal__visual-metric-value {
+        grid-column: 2;
+        color: #ffffff;
+        font-size: 14px;
+        font-weight: 700;
+      }
+
+      .shared-vip-preview-modal__visual-metric-label {
+        grid-column: 2;
+        color: rgba(255, 255, 255, 0.72);
+        font-size: 12px;
+      }
+
+      .shared-vip-preview-modal__visual-metric::before {
+        content: '';
+        grid-column: 1;
+        grid-row: 1 / span 2;
+        width: 34px;
+        height: 34px;
+        border-radius: 999px;
+        background: rgba(255, 255, 255, 0.2);
+        box-shadow: inset 0 1px 1px rgba(255, 255, 255, 0.18), 0 8px 14px rgba(15, 23, 42, 0.24);
+      }
+
+      .shared-vip-preview-modal__visual-bottom {
+        display: grid;
+        gap: 10px;
+        padding-top: 2px;
+        position: relative;
+        z-index: 1;
+      }
+
+      .shared-vip-preview-modal__visual-chip {
+        display: inline-flex;
+        align-items: center;
+        gap: 10px;
+        color: rgba(255, 255, 255, 0.84);
+        font-size: 12px;
+      }
+
+      .shared-vip-preview-modal__visual-chip::before {
+        content: '';
+        width: 5px;
+        height: 5px;
+        border-radius: 999px;
+        background: rgba(255, 255, 255, 0.82);
+        box-shadow: 0 0 10px rgba(255, 255, 255, 0.24);
       }
 
       .shared-vip-preview-modal__glow {
         position: absolute;
         inset: auto 0 0 0;
-        height: 42%;
-        background: linear-gradient(180deg, rgba(10, 10, 10, 0), rgba(10, 10, 10, 0.72));
+        height: 46%;
+        background: linear-gradient(180deg, rgba(10, 10, 10, 0), rgba(10, 10, 10, 0.8));
         pointer-events: none;
       }
 
       .shared-vip-preview-modal__content {
         display: grid;
-        gap: 18px;
-        padding: 38px 34px 32px;
+        grid-template-rows: auto auto auto auto 1fr;
+        gap: 12px;
+        padding: 16px 18px 16px 14px;
         color: #f8eadb;
-        align-content: space-between;
+        align-content: start;
+        background:
+          radial-gradient(circle at 86% 8%, rgba(255, 197, 120, 0.08), transparent 24%),
+          linear-gradient(180deg, rgba(9, 9, 9, 0.96), rgba(14, 14, 14, 0.99));
+      }
+
+      .shared-vip-preview-modal__account {
+        display: grid;
+        grid-template-columns: auto minmax(0, 1fr) auto;
+        align-items: center;
+        gap: 12px;
+        padding: 4px 2px 10px;
+        border-bottom: 1px solid rgba(255, 255, 255, 0.06);
+      }
+
+      .shared-vip-preview-modal__avatar {
+        width: 42px;
+        height: 42px;
+        border-radius: 12px;
+        display: inline-flex;
+        align-items: center;
+        justify-content: center;
+        background: linear-gradient(135deg, #f8d6b0, #b6733c);
+        color: #3f240f;
+        font-size: 13px;
+        font-weight: 800;
+        letter-spacing: 0.08em;
+      }
+
+      .shared-vip-preview-modal__account-copy {
+        min-width: 0;
+      }
+
+      .shared-vip-preview-modal__account-name {
+        color: #fff8ef;
+        font-size: 16px;
+        font-weight: 700;
+      }
+
+      .shared-vip-preview-modal__account-meta {
+        margin-top: 3px;
+        color: rgba(255, 233, 208, 0.62);
+        font-size: 11px;
+      }
+
+      .shared-vip-preview-modal__account-id {
+        color: rgba(255, 233, 208, 0.72);
+        font-size: 12px;
+        white-space: nowrap;
+      }
+
+      .shared-vip-preview-modal__switcher {
+        display: inline-grid;
+        grid-template-columns: 1fr 1fr;
+        gap: 5px;
+        width: 110px;
+        padding: 3px;
+        border-radius: 999px;
+        background: rgba(255, 255, 255, 0.05);
+      }
+
+      .shared-vip-preview-modal__switcher-btn {
+        min-width: 102px;
+        height: 34px;
+        padding: 0 14px;
+        border: none;
+        border-radius: 999px;
+        background: transparent;
+        color: rgba(255, 232, 208, 0.64);
+        font-size: 12px;
+        font-weight: 500;
+        cursor: pointer;
+      }
+
+      .shared-vip-preview-modal__switcher-btn.is-active {
+        background: linear-gradient(135deg, rgba(255, 226, 190, 0.28), rgba(206, 137, 76, 0.28));
+        color: #fff5ea;
+        box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.1);
+      }
+
+      .shared-vip-preview-modal__pricing {
+        display: grid;
+        grid-template-columns: repeat(3, minmax(0, 1fr));
+        gap: 10px;
+      }
+
+      .shared-vip-preview-modal__plan {
+        position: relative;
+        display: grid;
+        align-content: start;
+        gap: 5px;
+        min-height: 136px;
+        padding: 15px 12px 12px;
+        border-radius: 18px;
+        border: 1px solid rgba(255, 229, 194, 0.08);
+        background: linear-gradient(180deg, rgba(255, 248, 236, 0.045), rgba(255, 242, 224, 0.018));
+        box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.04);
+        cursor: pointer;
+        transition: transform 0.18s ease, border-color 0.18s ease, background 0.18s ease, box-shadow 0.18s ease;
+      }
+
+      .shared-vip-preview-modal__plan:hover {
+        border-color: rgba(247, 192, 122, 0.28);
+        transform: translateY(-1px);
+      }
+
+      .shared-vip-preview-modal__plan.is-featured {
+        border-color: rgba(247, 192, 122, 0.72);
+        background:
+          radial-gradient(circle at 50% 0, rgba(255, 214, 154, 0.34), transparent 34%),
+          linear-gradient(180deg, rgba(98, 66, 40, 0.92), rgba(58, 38, 25, 0.96));
+        transform: translateY(-2px);
+        box-shadow:
+          0 12px 24px rgba(0, 0, 0, 0.22),
+          inset 0 1px 0 rgba(255, 240, 220, 0.18);
+      }
+
+      .shared-vip-preview-modal__plan-badge {
+        position: absolute;
+        top: -9px;
+        left: 50%;
+        transform: translateX(-50%);
+        padding: 4px 10px;
+        border-radius: 999px;
+        background: linear-gradient(135deg, #ffe3b8, #f6b56f);
+        color: #5d3313;
+        font-size: 10px;
+        font-weight: 700;
+        white-space: nowrap;
+        box-shadow: 0 6px 12px rgba(0, 0, 0, 0.14);
+      }
+
+      .shared-vip-preview-modal__plan-title {
+        margin-top: 4px;
+        color: rgba(255, 241, 223, 0.88);
+        font-size: 12px;
+        font-weight: 500;
+      }
+
+      .shared-vip-preview-modal__plan-price {
+        color: #fff8ed;
+        font-size: 28px;
+        font-weight: 800;
+        line-height: 0.96;
+        letter-spacing: -0.03em;
+      }
+
+      .shared-vip-preview-modal__plan-price span {
+        margin-left: 4px;
+        color: rgba(255, 237, 214, 0.88);
+        font-size: 11px;
+        font-weight: 600;
+      }
+
+      .shared-vip-preview-modal__plan-origin {
+        color: rgba(255, 232, 206, 0.42);
+        font-size: 11px;
+        text-decoration: line-through;
+      }
+
+      .shared-vip-preview-modal__plan-unit {
+        margin-top: auto;
+        color: rgba(255, 236, 213, 0.76);
+        font-size: 11px;
+      }
+
+      .shared-vip-preview-modal__benefit-bar {
+        display: flex;
+        align-items: center;
+        gap: 8px;
+        min-height: 40px;
+        padding: 0 14px;
+        border-radius: 14px;
+        background: linear-gradient(90deg, rgba(138, 89, 41, 0.74), rgba(82, 55, 31, 0.34));
+        color: rgba(255, 239, 218, 0.92);
+      }
+
+      .shared-vip-preview-modal__benefit-bar span {
+        display: inline-flex;
+        align-items: center;
+        justify-content: center;
+        width: 20px;
+        height: 20px;
+        border-radius: 999px;
+        background: linear-gradient(135deg, #ffe0b1, #f4af67);
+        color: #643515;
+        font-size: 11px;
+        font-weight: 800;
+      }
+
+      .shared-vip-preview-modal__benefit-bar strong {
+        font-size: 11px;
+        font-weight: 600;
+      }
+
+      .shared-vip-preview-modal__detail-card {
+        position: relative;
+        display: block;
+        padding: 0;
+        border-radius: 22px;
+        background: transparent;
+        border: none;
+        box-shadow: none;
+        transform: none;
+        overflow: visible;
+      }
+
+      .shared-vip-preview-modal__detail-card::before {
+        content: none;
+      }
+
+      .shared-vip-preview-modal__detail-copy {
+        display: none;
       }
 
       .shared-vip-preview-modal__eyebrow {
@@ -1049,70 +1617,344 @@
         align-items: center;
         gap: 8px;
         width: fit-content;
-        padding: 7px 12px;
+        padding: 5px 10px;
         border-radius: 999px;
-        background: rgba(255, 217, 176, 0.12);
-        color: #ffd6ab;
-        font-size: 12px;
-        letter-spacing: 0.08em;
+        background: rgba(255, 217, 176, 0.08);
+        color: #f4cfa2;
+        font-size: 10px;
+        letter-spacing: 0.14em;
       }
 
       .shared-vip-preview-modal__title {
         margin: 0;
-        font-size: clamp(30px, 3vw, 42px);
-        line-height: 1.08;
-        letter-spacing: -0.04em;
-        color: #fff6eb;
+        font-size: clamp(25px, 2.3vw, 35px);
+        line-height: 0.98;
+        letter-spacing: -0.06em;
+        color: #fff7eb;
       }
 
       .shared-vip-preview-modal__description {
         margin: 0;
+        max-width: 30ch;
         color: rgba(255, 238, 219, 0.76);
-        font-size: 14px;
-        line-height: 1.75;
+        font-size: 12px;
+        line-height: 1.7;
       }
 
       .shared-vip-preview-modal__list {
         display: grid;
-        gap: 10px;
-        margin: 0;
-        padding: 0;
+        gap: 9px;
+        margin: 6px 0 0;
+        padding: 14px 15px;
         list-style: none;
+        border-radius: 16px;
+        background: linear-gradient(180deg, rgba(255, 255, 255, 0.034), rgba(255, 255, 255, 0.018));
+        border: 1px solid rgba(255, 255, 255, 0.05);
       }
 
       .shared-vip-preview-modal__list li {
         display: flex;
-        align-items: center;
-        gap: 10px;
+        align-items: flex-start;
+        gap: 8px;
         color: rgba(255, 241, 226, 0.9);
-        font-size: 13px;
+        font-size: 12px;
+        line-height: 1.52;
       }
 
       .shared-vip-preview-modal__list li::before {
         content: '✦';
-        color: #ffca91;
-        font-size: 13px;
+        color: #ffcf97;
+        font-size: 12px;
+      }
+
+      .shared-vip-preview-modal__paybox {
+        position: relative;
+        display: grid;
+        grid-template-columns: 128px minmax(0, 1fr);
+        align-items: center;
+        gap: 18px;
+        min-height: 172px;
+        padding: 18px 22px;
+        border-radius: 22px;
+        background: linear-gradient(180deg, rgba(24, 24, 24, 0.98), rgba(18, 18, 18, 0.99));
+        border: 1px solid rgba(255, 255, 255, 0.06);
+        box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.04);
+        overflow: hidden;
+      }
+
+      .shared-vip-preview-modal__paybox::before {
+        content: none;
+      }
+
+      .shared-vip-preview-modal__qr {
+        position: relative;
+        left: -25px;
+        width: 155px;
+        height: 155px;
+        border-radius: 14px;
+        background:
+          linear-gradient(90deg, rgba(255, 255, 255, 0.96) 8%, transparent 8% 12%, rgba(255, 255, 255, 0.96) 12% 20%, transparent 20% 24%, rgba(255, 255, 255, 0.96) 24% 32%, transparent 32% 36%, rgba(255, 255, 255, 0.96) 36% 44%, transparent 44% 48%, rgba(255, 255, 255, 0.96) 48% 56%, transparent 56% 60%, rgba(255, 255, 255, 0.96) 60% 68%, transparent 68% 72%, rgba(255, 255, 255, 0.96) 72% 80%, transparent 80% 84%, rgba(255, 255, 255, 0.96) 84% 92%, transparent 92%),
+          linear-gradient(rgba(255, 255, 255, 0.98) 8%, transparent 8% 12%, rgba(255, 255, 255, 0.98) 12% 20%, transparent 20% 24%, rgba(255, 255, 255, 0.98) 24% 32%, transparent 32% 36%, rgba(255, 255, 255, 0.98) 36% 44%, transparent 44% 48%, rgba(255, 255, 255, 0.98) 48% 56%, transparent 56% 60%, rgba(255, 255, 255, 0.98) 60% 68%, transparent 68% 72%, rgba(255, 255, 255, 0.98) 72% 80%, transparent 80% 84%, rgba(255, 255, 255, 0.98) 84% 92%, transparent 92%),
+          #fff;
+        box-shadow: inset 0 0 0 8px rgba(255, 255, 255, 0.98);
+        flex: 0 0 auto;
+      }
+
+      .shared-vip-preview-modal__qr::before,
+      .shared-vip-preview-modal__qr::after {
+        content: '';
+        position: absolute;
+        width: 25px;
+        height: 25px;
+        border: 5px solid #111;
+        border-radius: 6px;
+        background: #fff;
+      }
+
+      .shared-vip-preview-modal__qr::before {
+        top: 10px;
+        left: 10px;
+      }
+
+      .shared-vip-preview-modal__qr::after {
+        right: 10px;
+        bottom: 10px;
+      }
+
+      .shared-vip-preview-modal__qr::marker {
+        content: '';
+      }
+
+      .shared-vip-preview-modal__payinfo {
+        display: grid;
+        align-content: center;
+        gap: 8px;
+        min-width: 0;
+      }
+
+      .shared-vip-preview-modal__plan-points {
+        color: rgba(255, 232, 204, 0.72);
+        font-size: 11px;
+        line-height: 1.4;
+      }
+
+      .shared-vip-preview-modal__paylabel {
+        display: flex;
+        align-items: baseline;
+        gap: 4px;
+        color: #ffffff;
+        font-size: 17px;
+        font-weight: 600;
+        line-height: 1;
+      }
+
+      .shared-vip-preview-modal__paycurrency {
+        color: #ffffff;
+        font-size: 26px;
+        font-weight: 700;
+        line-height: 1;
+      }
+
+      .shared-vip-preview-modal__paylabel strong {
+        font-size: 46px;
+        line-height: 0.92;
+        letter-spacing: -0.04em;
+        color: #ffffff;
+      }
+
+      .shared-vip-preview-modal__paylabel-trial {
+        margin-left: 8px;
+        color: rgba(255, 232, 204, 0.8);
+        font-size: 12px;
+        font-weight: 600;
+      }
+
+      .shared-vip-preview-modal__paymethod {
+        display: inline-flex;
+        align-items: center;
+        gap: 9px;
+        min-height: 22px;
+        color: #f7f7f7;
+        font-size: 14px;
+        line-height: 1.4;
+      }
+
+      .shared-vip-preview-modal__paymethod-icon {
+        width: 18px;
+        height: 18px;
+        border-radius: 5px;
+        background: linear-gradient(180deg, #4da3ff, #1677ff);
+        position: relative;
+        flex: 0 0 auto;
+      }
+
+      .shared-vip-preview-modal__paymethod-icon::before {
+        content: '支';
+        position: absolute;
+        inset: 0;
+        display: grid;
+        place-items: center;
+        color: #fff;
+        font-size: 11px;
+        font-weight: 700;
+      }
+
+      .shared-vip-preview-modal__agreement {
+        color: rgba(255, 255, 255, 0.72);
+        font-size: 12px;
+        line-height: 1.45;
+      }
+
+      .shared-vip-preview-modal__agreement-link {
+        color: rgba(221, 191, 152, 0.9);
+      }
+
+      .shared-vip-preview-modal__payextras {
+        display: flex;
+        align-items: center;
+        gap: 10px;
+        margin-top: 6px;
+        color: rgba(216, 185, 148, 0.96);
+        font-size: 12px;
+        flex-wrap: wrap;
+      }
+
+      .shared-vip-preview-modal__payextra {
+        padding: 0;
+        border: none;
+        background: transparent;
+        color: inherit;
+        font-size: inherit;
+        line-height: 1.2;
+        cursor: pointer;
+        transition: color 0.18s ease, opacity 0.18s ease;
+      }
+
+      .shared-vip-preview-modal__payextra:hover {
+        color: rgba(255, 226, 190, 0.88);
+      }
+
+      .shared-vip-preview-modal__payextra-divider {
+        width: 1px;
+        height: 12px;
+        background: rgba(216, 185, 148, 0.34);
       }
 
       .shared-vip-preview-modal__footer {
         display: grid;
-        gap: 12px;
-      }
-
-      .shared-vip-preview-modal__nav {
-        display: flex;
+        grid-template-columns: auto 1fr;
         align-items: center;
-        justify-content: space-between;
-        gap: 10px;
+        gap: 14px;
+        margin-top: 8px;
       }
 
-      .shared-vip-preview-modal__counter {
-        color: rgba(255, 232, 207, 0.68);
-        font-size: 12px;
-        letter-spacing: 0.08em;
+      .shared-vip-preview-modal__action {
+        min-height: 46px;
+        border-radius: 14px;
+        padding: 0 18px;
+        background: linear-gradient(135deg, #ffe6c8, #f6bb75 56%, #efaa60);
+        color: #4e2a10;
+        font-size: 14px;
+        font-weight: 700;
+        box-shadow:
+          inset 0 1px 0 rgba(255, 255, 255, 0.22),
+          0 8px 18px rgba(164, 103, 43, 0.18);
       }
 
-      .shared-vip-preview-modal__nav-btn,
+      .shared-vip-preview-modal__close {
+        position: absolute;
+        top: 18px;
+        right: 18px;
+        z-index: 8;
+        width: 40px;
+        height: 40px;
+        border-radius: 999px;
+        background: rgba(255, 255, 255, 0.08);
+        color: #fff4e8;
+        font-size: 20px;
+        pointer-events: auto;
+      }
+
+      @media (max-width: 980px) {
+        .shared-vip-preview-modal__dialog {
+          width: min(800px, calc(100vw - 24px));
+          height: auto;
+          grid-template-columns: 1fr;
+          min-height: auto;
+        }
+
+        .shared-vip-preview-modal__media {
+          min-height: 280px;
+          padding: 20px 20px 0;
+        }
+
+        .shared-vip-preview-modal__content {
+          padding: 18px 18px 18px;
+        }
+
+        .shared-vip-preview-modal__pricing {
+          grid-template-columns: 1fr;
+        }
+
+        .shared-vip-preview-modal__paybox {
+          grid-template-columns: 112px minmax(0, 1fr);
+          gap: 16px;
+          min-height: 156px;
+          padding: 16px 18px;
+        }
+
+        .shared-vip-preview-modal__qr {
+          width: 104px;
+          height: 104px;
+        }
+      }
+
+      @media (max-width: 720px) {
+        .shared-vip-preview-modal {
+          padding: 16px;
+        }
+
+        .shared-vip-preview-modal__account {
+          grid-template-columns: auto 1fr;
+        }
+
+        .shared-vip-preview-modal__pricing {
+          grid-template-columns: 1fr;
+        }
+
+        .shared-vip-preview-modal__plan.is-featured {
+          transform: none;
+        }
+
+        .shared-vip-preview-modal__paybox {
+          grid-template-columns: 1fr;
+          justify-items: center;
+          text-align: left;
+        }
+
+        .shared-vip-preview-modal__payinfo {
+          width: 100%;
+        }
+
+        .shared-vip-preview-modal__footer {
+          grid-template-columns: 1fr;
+        }
+      }
+
+      @media (max-width: 560px) {
+        .shared-vip-preview-modal__title {
+          font-size: 24px;
+        }
+
+        .shared-vip-preview-modal__switcher {
+          width: 100%;
+        }
+
+        .shared-vip-preview-modal__switcher-btn {
+          min-width: 0;
+        }
+      }
+
       .shared-vip-preview-modal__action,
       .shared-vip-preview-modal__close {
         border: none;
@@ -1120,29 +1962,9 @@
         transition: transform 0.18s ease, opacity 0.18s ease, background 0.18s ease;
       }
 
-      .shared-vip-preview-modal__nav-btn {
-        width: 42px;
-        height: 42px;
-        border-radius: 999px;
-        background: rgba(255, 255, 255, 0.06);
-        color: #fff4e8;
-        font-size: 18px;
-      }
-
-      .shared-vip-preview-modal__nav-btn:hover,
       .shared-vip-preview-modal__close:hover {
         transform: translateY(-1px);
         background: rgba(255, 255, 255, 0.12);
-      }
-
-      .shared-vip-preview-modal__action {
-        min-height: 48px;
-        border-radius: 16px;
-        padding: 0 18px;
-        background: linear-gradient(135deg, #ffd7b2, #f7b36a);
-        color: #4e2a10;
-        font-size: 15px;
-        font-weight: 700;
       }
 
       .shared-vip-preview-modal__action:hover {
@@ -1150,49 +1972,7 @@
         opacity: 0.96;
       }
 
-      .shared-vip-preview-modal__close {
-        position: absolute;
-        top: 18px;
-        right: 18px;
-        width: 40px;
-        height: 40px;
-        border-radius: 999px;
-        background: rgba(255, 255, 255, 0.08);
-        color: #fff4e8;
-        font-size: 20px;
-      }
-
-      @media (max-width: 820px) {
-        .shared-vip-preview-modal {
-          padding: 16px;
-        }
-
-        .shared-vip-preview-modal__dialog {
-          grid-template-columns: 1fr;
-          min-height: auto;
-        }
-
-        .shared-vip-preview-modal__media {
-          min-height: 280px;
-        }
-
-        .shared-vip-preview-modal__content {
-          padding: 24px 20px 20px;
-        }
-      }
-
-      @media (max-width: 560px) {
-        .shared-vip-preview-modal__title {
-          font-size: 28px;
-        }
-
-        .shared-vip-preview-modal__nav {
-          flex-wrap: wrap;
-        }
-      }
-
       @media (prefers-reduced-motion: reduce) {
-        .shared-vip-preview-modal__nav-btn,
         .shared-vip-preview-modal__action,
         .shared-vip-preview-modal__close {
           transition: none;
@@ -1200,7 +1980,6 @@
       }
 
     `;
-    document.head.appendChild(style);
   }
 
   function ensureAccountPanel() {
@@ -1236,7 +2015,6 @@
                 <div class="shared-account-panel__membership-desc">登录后即可查看账号权益、同步会话和积分余额。</div>
               </div>
               <div class="shared-account-panel__membership-row">
-                <div class="shared-account-panel__link-note">点击查看开通后的界面参考和会员权益。</div>
                 <button class="btn primary" type="button" data-account-panel-login id="shared-account-panel-login-link">开通VIP</button>
               </div>
             </section>
@@ -1301,7 +2079,12 @@
 
     panel.querySelector('[data-account-panel-login]')?.addEventListener('click', (event) => {
       event.preventDefault();
-      openVipPreviewModal(event.currentTarget);
+      closeAccountPanel();
+      if (accountState.session) {
+        openVipPreviewModal(event.currentTarget);
+        return;
+      }
+      openLoginModal(event.currentTarget);
     });
 
     accountState.logoutButton?.addEventListener('click', (event) => {
@@ -1312,9 +2095,31 @@
     return panel;
   }
 
+  function disposeVipPreviewModal() {
+    if (accountState.vipModal?.parentNode) {
+      accountState.vipModal.parentNode.removeChild(accountState.vipModal);
+    }
+    accountState.vipModal = null;
+    accountState.vipDialog = null;
+    accountState.vipImage = null;
+    accountState.vipTitle = null;
+    accountState.vipDescription = null;
+  }
+
   function ensureVipPreviewModal() {
-    if (accountState.vipModal) {
+    const existingModal = document.getElementById(ACCOUNT_VIP_MODAL_ID);
+    const needsRebuild = !existingModal
+      || !existingModal.querySelector('.shared-vip-preview-modal__detail-card')
+      || !existingModal.querySelector('.shared-vip-preview-modal__paymethod-icon');
+
+    if (!needsRebuild && accountState.vipModal === existingModal) {
       return accountState.vipModal;
+    }
+
+    disposeVipPreviewModal();
+
+    if (existingModal?.parentNode) {
+      existingModal.parentNode.removeChild(existingModal);
     }
 
     ensureStyles();
@@ -1326,30 +2131,36 @@
     modal.innerHTML = `
       <div class="shared-vip-preview-modal__dialog" role="dialog" aria-modal="true" aria-labelledby="shared-vip-preview-title" tabindex="-1">
         <button class="shared-vip-preview-modal__close" type="button" data-vip-preview-close aria-label="关闭会员参考弹窗">×</button>
-        <div class="shared-vip-preview-modal__media">
-          <img class="shared-vip-preview-modal__image" id="shared-vip-preview-image" alt="VIP 参考图片预览">
-          <div class="shared-vip-preview-modal__glow"></div>
+        <div class="shared-vip-preview-modal__media" aria-hidden="true">
+          <div class="shared-vip-preview-modal__visual" id="shared-vip-preview-image" aria-label="VIP 权益预览" role="img"></div>
         </div>
         <div class="shared-vip-preview-modal__content">
-          <div>
-            <div class="shared-vip-preview-modal__eyebrow">VIP REFERENCE</div>
-            <h2 class="shared-vip-preview-modal__title" id="shared-vip-preview-title"></h2>
-            <p class="shared-vip-preview-modal__description" id="shared-vip-preview-description"></p>
-          </div>
-          <ul class="shared-vip-preview-modal__list">
-            <li>查看开通会员后的界面氛围与视觉交付风格</li>
-            <li>提前预览更丰富的模板、任务上限与高阶能力</li>
-            <li>需要登录时仍可通过底部登录入口进入账号体系</li>
-          </ul>
-          <div class="shared-vip-preview-modal__footer">
-            <div class="shared-vip-preview-modal__nav">
-              <div>
-                <button class="shared-vip-preview-modal__nav-btn" type="button" data-vip-preview-nav="prev" aria-label="上一张">‹</button>
-                <button class="shared-vip-preview-modal__nav-btn" type="button" data-vip-preview-nav="next" aria-label="下一张">›</button>
-              </div>
-              <div class="shared-vip-preview-modal__counter" id="shared-vip-preview-counter"></div>
+          <div class="shared-vip-preview-modal__account">
+            <div class="shared-vip-preview-modal__avatar">VIP</div>
+            <div class="shared-vip-preview-modal__account-copy">
+              <div class="shared-vip-preview-modal__account-name">已登录用户</div>
+              <div class="shared-vip-preview-modal__account-meta">登录后可同步账号信息并开通会员</div>
             </div>
-            <button class="shared-vip-preview-modal__action" type="button" data-vip-preview-open-login>立即登录并开通</button>
+          </div>
+          <div class="shared-vip-preview-modal__switcher">
+            <button class="shared-vip-preview-modal__switcher-btn is-active" type="button">标准会员</button>
+          </div>
+          <div class="shared-vip-preview-modal__pricing"></div>
+          <div class="shared-vip-preview-modal__detail-card">
+            <div class="shared-vip-preview-modal__paybox">
+              <div class="shared-vip-preview-modal__qr"></div>
+              <div class="shared-vip-preview-modal__payinfo">
+                <div class="shared-vip-preview-modal__paylabel">支付：<span class="shared-vip-preview-modal__paycurrency">¥</span><strong>1.1</strong><span class="shared-vip-preview-modal__paylabel-trial">试用 7 天</span></div>
+                <div class="shared-vip-preview-modal__paymethod">
+                  <span class="shared-vip-preview-modal__paymethod-icon"></span>
+                  <span>支付宝扫码开通</span>
+                </div>
+                <div class="shared-vip-preview-modal__agreement">支付即视为您已同意<span class="shared-vip-preview-modal__agreement-link">《会员服务协议》</span></div>
+                <div class="shared-vip-preview-modal__footer">
+                  <button class="shared-vip-preview-modal__action" type="button" data-vip-preview-open-login>立即开通</button>
+                </div>
+              </div>
+            </div>
           </div>
         </div>
       </div>
@@ -1362,28 +2173,40 @@
     accountState.vipImage = modal.querySelector('#shared-vip-preview-image');
     accountState.vipTitle = modal.querySelector('#shared-vip-preview-title');
     accountState.vipDescription = modal.querySelector('#shared-vip-preview-description');
-    accountState.vipCounter = modal.querySelector('#shared-vip-preview-counter');
+
+    modal.querySelectorAll('[data-vip-preview-close]').forEach((button) => {
+      button.addEventListener('click', (event) => {
+        event.preventDefault();
+        event.stopPropagation();
+        closeVipPreviewModal();
+      });
+    });
 
     modal.addEventListener('click', (event) => {
+      const closeButton = event.target instanceof Element
+        ? event.target.closest('[data-vip-preview-close]')
+        : null;
+      if (closeButton) {
+        event.preventDefault();
+        closeVipPreviewModal();
+        return;
+      }
       if (event.target === modal) {
         closeVipPreviewModal();
       }
     });
 
-    modal.querySelectorAll('[data-vip-preview-close]').forEach((button) => {
-      button.addEventListener('click', closeVipPreviewModal);
-    });
+    renderVipPlanCards();
+    syncVipPreviewSelectedPlan();
 
-    modal.querySelectorAll('[data-vip-preview-nav]').forEach((button) => {
-      button.addEventListener('click', () => {
-        const direction = button.getAttribute('data-vip-preview-nav') === 'prev' ? -1 : 1;
-        showVipPreviewSlide(accountState.vipPreviewIndex + direction);
-      });
-    });
-
-    modal.querySelector('[data-vip-preview-open-login]')?.addEventListener('click', () => {
-      closeVipPreviewModal();
-      openLoginModal(document.querySelector('#shared-account-panel-logout') || null);
+    modal.querySelector('[data-vip-preview-open-login]')?.addEventListener('click', (event) => {
+      event.preventDefault();
+      if (accountState.session) {
+        closeVipPreviewModal();
+        return;
+      }
+      closeVipPreviewModal({ restoreFocus: false });
+      openLoginModal(event.currentTarget);
     });
 
     return modal;
@@ -1398,8 +2221,21 @@
     const current = VIP_REFERENCE_IMAGES[normalizedIndex];
     accountState.vipPreviewIndex = normalizedIndex;
     if (accountState.vipImage) {
-      accountState.vipImage.src = current.src;
-      accountState.vipImage.alt = current.title;
+      accountState.vipImage.innerHTML = `
+        <div class="shared-vip-preview-modal__visual-top">
+          <div class="shared-login-modal__brand">
+            <p class="shared-login-modal__brand-name">aiimg</p>
+            <p class="shared-login-modal__brand-tag">ai image workspace</p>
+          </div>
+        </div>
+        <div class="shared-vip-preview-modal__visual-stage">
+          <div class="shared-login-modal__left-copy">
+            <h3 class="shared-login-modal__left-title">一站式 AI 出图空间</h3>
+            <p class="shared-vip-preview-modal__visual-card-copy">开通会员后可解锁更多专属权益与更高任务上限</p>
+          </div>
+        </div>
+      `;
+      accountState.vipImage.setAttribute('aria-label', current.title);
     }
     if (accountState.vipTitle) {
       accountState.vipTitle.textContent = current.title;
@@ -1407,19 +2243,81 @@
     if (accountState.vipDescription) {
       accountState.vipDescription.textContent = current.description;
     }
-    if (accountState.vipCounter) {
-      accountState.vipCounter.textContent = `${normalizedIndex + 1} / ${total}`;
+  }
+
+  function syncVipPreviewSelectedPlan() {
+    const modal = accountState.vipModal;
+    if (!modal) {
+      return;
+    }
+    const plans = getVipPlanList();
+    const selectedPlan = plans.find((item) => item.key === accountState.vipSelectedPlan) || plans[0];
+    if (!selectedPlan) {
+      return;
+    }
+    modal.querySelectorAll('[data-vip-plan]').forEach((planEl) => {
+      const isSelected = planEl.getAttribute('data-vip-plan') === selectedPlan.key;
+      planEl.classList.toggle('is-featured', isSelected);
+      if (planEl instanceof HTMLElement) {
+        planEl.setAttribute('aria-pressed', isSelected ? 'true' : 'false');
+      }
+      const badgeEl = planEl.querySelector('.shared-vip-preview-modal__plan-badge');
+      if (badgeEl) {
+        badgeEl.hidden = !isSelected || !selectedPlan.badge;
+        badgeEl.textContent = selectedPlan.badge || '';
+      } else if (isSelected && selectedPlan.badge) {
+        planEl.insertAdjacentHTML('afterbegin', `<div class="shared-vip-preview-modal__plan-badge">${selectedPlan.badge}</div>`);
+      }
+    });
+
+    const payStrong = modal.querySelector('.shared-vip-preview-modal__paylabel strong');
+    if (payStrong) {
+      payStrong.textContent = selectedPlan.price;
+    }
+
+    const trialText = modal.querySelector('.shared-vip-preview-modal__paylabel-trial');
+    if (trialText) {
+      trialText.textContent = selectedPlan.trial || '';
+      trialText.hidden = !selectedPlan.trial;
     }
   }
 
-  function openVipPreviewModal(trigger) {
+  function syncVipPreviewAccountInfo() {
+    const modal = accountState.vipModal;
+    if (!modal) {
+      return;
+    }
+    const nameEl = modal.querySelector('.shared-vip-preview-modal__account-name');
+    const metaEl = modal.querySelector('.shared-vip-preview-modal__account-meta');
+    const userDisplay = getSessionUserDisplay(accountState.session);
+    const phoneText = userDisplay.phone ? maskPhoneDisplay(userDisplay.phone) : userDisplay.displayPhone;
+    if (nameEl) {
+      nameEl.textContent = phoneText || '已登录用户';
+    }
+    if (metaEl) {
+      metaEl.textContent = accountState.session ? '当前已登录账号，可直接开通会员' : '登录后可同步账号信息并开通会员';
+    }
+  }
+
+  async function openVipPreviewModal(trigger) {
+    if (!accountState.session) {
+      openLoginModal(trigger);
+      return;
+    }
+    await loadVipPlanConfig();
     const modal = ensureVipPreviewModal();
     if (!modal) {
       return;
     }
+    if (accountState.loginOpen) {
+      closeLoginModal({ restoreFocus: false });
+    }
     accountState.returnFocusTo = trigger || document.activeElement;
     accountState.vipPreviewOpen = true;
+    syncVipPreviewAccountInfo();
     showVipPreviewSlide(accountState.vipPreviewIndex || 0);
+    renderVipPlanCards();
+    syncVipPreviewSelectedPlan();
     modal.hidden = false;
     document.body.style.overflow = 'hidden';
     requestAnimationFrame(() => {
@@ -1427,15 +2325,20 @@
     });
   }
 
-  function closeVipPreviewModal() {
-    if (!accountState.vipModal || !accountState.vipPreviewOpen) {
+  function closeVipPreviewModal(options = {}) {
+    const { restoreFocus = true } = options;
+    if (!accountState.vipModal) {
       return;
     }
     accountState.vipPreviewOpen = false;
     accountState.vipModal.hidden = true;
     document.body.style.overflow = '';
-    if (accountState.returnFocusTo && typeof accountState.returnFocusTo.focus === 'function') {
-      accountState.returnFocusTo.focus();
+    const returnFocusTo = accountState.returnFocusTo;
+    if (restoreFocus) {
+      accountState.returnFocusTo = null;
+    }
+    if (restoreFocus && returnFocusTo && typeof returnFocusTo.focus === 'function') {
+      returnFocusTo.focus();
     }
   }
 
@@ -2470,6 +3373,9 @@
 
   function openLoginModal(trigger) {
     ensureLoginModal();
+    if (accountState.vipPreviewOpen) {
+      closeVipPreviewModal({ restoreFocus: false });
+    }
     setLoginModalView('sms');
     accountState.returnFocusTo = trigger || document.activeElement;
     accountState.loginOpen = true;
@@ -2480,7 +3386,8 @@
     }, 0);
   }
 
-  function closeLoginModal() {
+  function closeLoginModal(options = {}) {
+    const { restoreFocus = true } = options;
     if (!accountState.loginModal) {
       return;
     }
@@ -2490,8 +3397,10 @@
       document.body.style.overflow = '';
     }
     const returnFocusTo = accountState.returnFocusTo;
-    accountState.returnFocusTo = null;
-    if (returnFocusTo && typeof returnFocusTo.focus === 'function') {
+    if (restoreFocus) {
+      accountState.returnFocusTo = null;
+    }
+    if (restoreFocus && returnFocusTo && typeof returnFocusTo.focus === 'function') {
       returnFocusTo.focus();
     }
   }
@@ -2637,3 +3546,6 @@
     init();
   }
 })();
+
+
+
