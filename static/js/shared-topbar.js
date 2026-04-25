@@ -29,7 +29,25 @@
 
   const ACCOUNT_PANEL_ID = 'shared-account-panel';
   const ACCOUNT_LOGIN_MODAL_ID = 'shared-login-modal';
+  const ACCOUNT_VIP_MODAL_ID = 'shared-vip-preview-modal';
   const ACCOUNT_STYLE_ID = 'shared-account-panel-styles';
+  const VIP_REFERENCE_IMAGES = [
+    {
+      src: 'https://pc.meitudata.com/saas-subscription/static/media/material-vip.ffdda35dbe1aa5bdf1d4.png',
+      title: 'VIP 专属工作台',
+      description: '会员可解锁更完整的电商设计工作流与高质感画面模板。',
+    },
+    {
+      src: 'https://pc.meitudata.com/saas-subscription/static/media/material-vip.ffdda35dbe1aa5bdf1d4.png',
+      title: '高阶视觉参考',
+      description: '通过精选参考图案例，快速了解开通 VIP 后的创作风格与交付效果。',
+    },
+    {
+      src: 'https://pc.meitudata.com/saas-subscription/static/media/material-vip.ffdda35dbe1aa5bdf1d4.png',
+      title: '多端权益展示',
+      description: '展示会员权益、专属模板和更顺滑的任务处理体验。',
+    },
+  ];
   const SUPABASE_URL = 'https://spb-kemqk3h0a423q1q5.supabase.opentrust.net';
   const SUPABASE_ANON_KEY = 'eyJ0eXAiOiJKV1QiLCJhbGciOiJIUzI1NiJ9.eyJyb2xlIjoiYW5vbiIsInJlZiI6InNwYi1rZW1xazNoMGE0MjNxMXE1IiwiaXNzIjoic3VwYWJhc2UiLCJpYXQiOjE3NzYyNjcxMjUsImV4cCI6MjA5MTg0MzEyNX0.hKFA4d_dQwbecO8t0na0DptshXQNHTSEQ5E2VAd3o18';
   const LOGIN_COUNTDOWN_SECONDS = 60;
@@ -37,6 +55,8 @@
   const accountState = {
     open: false,
     loginOpen: false,
+    vipPreviewOpen: false,
+    vipPreviewIndex: 0,
     loading: false,
     session: null,
     points: null,
@@ -44,6 +64,11 @@
     dialog: null,
     loginModal: null,
     loginDialog: null,
+    vipModal: null,
+    vipDialog: null,
+    vipImage: null,
+    vipTitle: null,
+    vipDescription: null,
     loginPhoneInput: null,
     supabaseClient: null,
     supabaseClientPromise: null,
@@ -963,6 +988,217 @@
         }
       }
 
+      .shared-vip-preview-modal {
+        position: fixed;
+        inset: 0;
+        z-index: 181;
+        display: grid;
+        place-items: center;
+        padding: 24px;
+        background: rgba(11, 15, 25, 0.58);
+        backdrop-filter: blur(16px);
+      }
+
+      .shared-vip-preview-modal__dialog {
+        position: relative;
+        width: min(920px, calc(100vw - 32px));
+        min-height: min(620px, calc(100dvh - 48px));
+        display: grid;
+        grid-template-columns: minmax(0, 1.16fr) minmax(280px, 0.84fr);
+        overflow: hidden;
+        border: 1px solid rgba(255, 255, 255, 0.08);
+        border-radius: 32px;
+        background:
+          radial-gradient(circle at top left, rgba(255, 196, 125, 0.24), transparent 32%),
+          linear-gradient(145deg, rgba(15, 17, 24, 0.98), rgba(34, 24, 16, 0.96));
+        box-shadow: 0 30px 90px rgba(0, 0, 0, 0.42);
+        outline: none;
+      }
+
+      .shared-vip-preview-modal__media {
+        position: relative;
+        min-height: 460px;
+        background: rgba(255, 255, 255, 0.03);
+      }
+
+      .shared-vip-preview-modal__image {
+        width: 100%;
+        height: 100%;
+        object-fit: cover;
+        display: block;
+      }
+
+      .shared-vip-preview-modal__glow {
+        position: absolute;
+        inset: auto 0 0 0;
+        height: 42%;
+        background: linear-gradient(180deg, rgba(10, 10, 10, 0), rgba(10, 10, 10, 0.72));
+        pointer-events: none;
+      }
+
+      .shared-vip-preview-modal__content {
+        display: grid;
+        gap: 18px;
+        padding: 38px 34px 32px;
+        color: #f8eadb;
+        align-content: space-between;
+      }
+
+      .shared-vip-preview-modal__eyebrow {
+        display: inline-flex;
+        align-items: center;
+        gap: 8px;
+        width: fit-content;
+        padding: 7px 12px;
+        border-radius: 999px;
+        background: rgba(255, 217, 176, 0.12);
+        color: #ffd6ab;
+        font-size: 12px;
+        letter-spacing: 0.08em;
+      }
+
+      .shared-vip-preview-modal__title {
+        margin: 0;
+        font-size: clamp(30px, 3vw, 42px);
+        line-height: 1.08;
+        letter-spacing: -0.04em;
+        color: #fff6eb;
+      }
+
+      .shared-vip-preview-modal__description {
+        margin: 0;
+        color: rgba(255, 238, 219, 0.76);
+        font-size: 14px;
+        line-height: 1.75;
+      }
+
+      .shared-vip-preview-modal__list {
+        display: grid;
+        gap: 10px;
+        margin: 0;
+        padding: 0;
+        list-style: none;
+      }
+
+      .shared-vip-preview-modal__list li {
+        display: flex;
+        align-items: center;
+        gap: 10px;
+        color: rgba(255, 241, 226, 0.9);
+        font-size: 13px;
+      }
+
+      .shared-vip-preview-modal__list li::before {
+        content: '✦';
+        color: #ffca91;
+        font-size: 13px;
+      }
+
+      .shared-vip-preview-modal__footer {
+        display: grid;
+        gap: 12px;
+      }
+
+      .shared-vip-preview-modal__nav {
+        display: flex;
+        align-items: center;
+        justify-content: space-between;
+        gap: 10px;
+      }
+
+      .shared-vip-preview-modal__counter {
+        color: rgba(255, 232, 207, 0.68);
+        font-size: 12px;
+        letter-spacing: 0.08em;
+      }
+
+      .shared-vip-preview-modal__nav-btn,
+      .shared-vip-preview-modal__action,
+      .shared-vip-preview-modal__close {
+        border: none;
+        cursor: pointer;
+        transition: transform 0.18s ease, opacity 0.18s ease, background 0.18s ease;
+      }
+
+      .shared-vip-preview-modal__nav-btn {
+        width: 42px;
+        height: 42px;
+        border-radius: 999px;
+        background: rgba(255, 255, 255, 0.06);
+        color: #fff4e8;
+        font-size: 18px;
+      }
+
+      .shared-vip-preview-modal__nav-btn:hover,
+      .shared-vip-preview-modal__close:hover {
+        transform: translateY(-1px);
+        background: rgba(255, 255, 255, 0.12);
+      }
+
+      .shared-vip-preview-modal__action {
+        min-height: 48px;
+        border-radius: 16px;
+        padding: 0 18px;
+        background: linear-gradient(135deg, #ffd7b2, #f7b36a);
+        color: #4e2a10;
+        font-size: 15px;
+        font-weight: 700;
+      }
+
+      .shared-vip-preview-modal__action:hover {
+        transform: translateY(-1px);
+        opacity: 0.96;
+      }
+
+      .shared-vip-preview-modal__close {
+        position: absolute;
+        top: 18px;
+        right: 18px;
+        width: 40px;
+        height: 40px;
+        border-radius: 999px;
+        background: rgba(255, 255, 255, 0.08);
+        color: #fff4e8;
+        font-size: 20px;
+      }
+
+      @media (max-width: 820px) {
+        .shared-vip-preview-modal {
+          padding: 16px;
+        }
+
+        .shared-vip-preview-modal__dialog {
+          grid-template-columns: 1fr;
+          min-height: auto;
+        }
+
+        .shared-vip-preview-modal__media {
+          min-height: 280px;
+        }
+
+        .shared-vip-preview-modal__content {
+          padding: 24px 20px 20px;
+        }
+      }
+
+      @media (max-width: 560px) {
+        .shared-vip-preview-modal__title {
+          font-size: 28px;
+        }
+
+        .shared-vip-preview-modal__nav {
+          flex-wrap: wrap;
+        }
+      }
+
+      @media (prefers-reduced-motion: reduce) {
+        .shared-vip-preview-modal__nav-btn,
+        .shared-vip-preview-modal__action,
+        .shared-vip-preview-modal__close {
+          transition: none;
+        }
+      }
+
     `;
     document.head.appendChild(style);
   }
@@ -1000,8 +1236,8 @@
                 <div class="shared-account-panel__membership-desc">登录后即可查看账号权益、同步会话和积分余额。</div>
               </div>
               <div class="shared-account-panel__membership-row">
-                <div class="shared-account-panel__link-note">支持从当前入口直接跳转登录。</div>
-                <button class="btn primary" type="button" data-account-panel-login id="shared-account-panel-login-link">立即登录</button>
+                <div class="shared-account-panel__link-note">点击查看开通后的界面参考和会员权益。</div>
+                <button class="btn primary" type="button" data-account-panel-login id="shared-account-panel-login-link">开通VIP</button>
               </div>
             </section>
 
@@ -1063,7 +1299,144 @@
       void submitDailyClaim();
     });
 
+    panel.querySelector('[data-account-panel-login]')?.addEventListener('click', (event) => {
+      event.preventDefault();
+      openVipPreviewModal(event.currentTarget);
+    });
+
+    accountState.logoutButton?.addEventListener('click', (event) => {
+      event.preventDefault();
+      openLoginModal(event.currentTarget);
+    });
+
     return panel;
+  }
+
+  function ensureVipPreviewModal() {
+    if (accountState.vipModal) {
+      return accountState.vipModal;
+    }
+
+    ensureStyles();
+
+    const modal = document.createElement('div');
+    modal.id = ACCOUNT_VIP_MODAL_ID;
+    modal.className = 'shared-vip-preview-modal';
+    modal.hidden = true;
+    modal.innerHTML = `
+      <div class="shared-vip-preview-modal__dialog" role="dialog" aria-modal="true" aria-labelledby="shared-vip-preview-title" tabindex="-1">
+        <button class="shared-vip-preview-modal__close" type="button" data-vip-preview-close aria-label="关闭会员参考弹窗">×</button>
+        <div class="shared-vip-preview-modal__media">
+          <img class="shared-vip-preview-modal__image" id="shared-vip-preview-image" alt="VIP 参考图片预览">
+          <div class="shared-vip-preview-modal__glow"></div>
+        </div>
+        <div class="shared-vip-preview-modal__content">
+          <div>
+            <div class="shared-vip-preview-modal__eyebrow">VIP REFERENCE</div>
+            <h2 class="shared-vip-preview-modal__title" id="shared-vip-preview-title"></h2>
+            <p class="shared-vip-preview-modal__description" id="shared-vip-preview-description"></p>
+          </div>
+          <ul class="shared-vip-preview-modal__list">
+            <li>查看开通会员后的界面氛围与视觉交付风格</li>
+            <li>提前预览更丰富的模板、任务上限与高阶能力</li>
+            <li>需要登录时仍可通过底部登录入口进入账号体系</li>
+          </ul>
+          <div class="shared-vip-preview-modal__footer">
+            <div class="shared-vip-preview-modal__nav">
+              <div>
+                <button class="shared-vip-preview-modal__nav-btn" type="button" data-vip-preview-nav="prev" aria-label="上一张">‹</button>
+                <button class="shared-vip-preview-modal__nav-btn" type="button" data-vip-preview-nav="next" aria-label="下一张">›</button>
+              </div>
+              <div class="shared-vip-preview-modal__counter" id="shared-vip-preview-counter"></div>
+            </div>
+            <button class="shared-vip-preview-modal__action" type="button" data-vip-preview-open-login>立即登录并开通</button>
+          </div>
+        </div>
+      </div>
+    `;
+
+    document.body.appendChild(modal);
+
+    accountState.vipModal = modal;
+    accountState.vipDialog = modal.querySelector('.shared-vip-preview-modal__dialog');
+    accountState.vipImage = modal.querySelector('#shared-vip-preview-image');
+    accountState.vipTitle = modal.querySelector('#shared-vip-preview-title');
+    accountState.vipDescription = modal.querySelector('#shared-vip-preview-description');
+    accountState.vipCounter = modal.querySelector('#shared-vip-preview-counter');
+
+    modal.addEventListener('click', (event) => {
+      if (event.target === modal) {
+        closeVipPreviewModal();
+      }
+    });
+
+    modal.querySelectorAll('[data-vip-preview-close]').forEach((button) => {
+      button.addEventListener('click', closeVipPreviewModal);
+    });
+
+    modal.querySelectorAll('[data-vip-preview-nav]').forEach((button) => {
+      button.addEventListener('click', () => {
+        const direction = button.getAttribute('data-vip-preview-nav') === 'prev' ? -1 : 1;
+        showVipPreviewSlide(accountState.vipPreviewIndex + direction);
+      });
+    });
+
+    modal.querySelector('[data-vip-preview-open-login]')?.addEventListener('click', () => {
+      closeVipPreviewModal();
+      openLoginModal(document.querySelector('#shared-account-panel-logout') || null);
+    });
+
+    return modal;
+  }
+
+  function showVipPreviewSlide(index = 0) {
+    const total = VIP_REFERENCE_IMAGES.length;
+    if (!total) {
+      return;
+    }
+    const normalizedIndex = ((index % total) + total) % total;
+    const current = VIP_REFERENCE_IMAGES[normalizedIndex];
+    accountState.vipPreviewIndex = normalizedIndex;
+    if (accountState.vipImage) {
+      accountState.vipImage.src = current.src;
+      accountState.vipImage.alt = current.title;
+    }
+    if (accountState.vipTitle) {
+      accountState.vipTitle.textContent = current.title;
+    }
+    if (accountState.vipDescription) {
+      accountState.vipDescription.textContent = current.description;
+    }
+    if (accountState.vipCounter) {
+      accountState.vipCounter.textContent = `${normalizedIndex + 1} / ${total}`;
+    }
+  }
+
+  function openVipPreviewModal(trigger) {
+    const modal = ensureVipPreviewModal();
+    if (!modal) {
+      return;
+    }
+    accountState.returnFocusTo = trigger || document.activeElement;
+    accountState.vipPreviewOpen = true;
+    showVipPreviewSlide(accountState.vipPreviewIndex || 0);
+    modal.hidden = false;
+    document.body.style.overflow = 'hidden';
+    requestAnimationFrame(() => {
+      accountState.vipDialog?.focus();
+    });
+  }
+
+  function closeVipPreviewModal() {
+    if (!accountState.vipModal || !accountState.vipPreviewOpen) {
+      return;
+    }
+    accountState.vipPreviewOpen = false;
+    accountState.vipModal.hidden = true;
+    document.body.style.overflow = '';
+    if (accountState.returnFocusTo && typeof accountState.returnFocusTo.focus === 'function') {
+      accountState.returnFocusTo.focus();
+    }
   }
 
   function ensureLoginModal() {
@@ -2095,9 +2468,10 @@
     }, 0);
   }
 
-  function openLoginModal() {
+  function openLoginModal(trigger) {
     ensureLoginModal();
     setLoginModalView('sms');
+    accountState.returnFocusTo = trigger || document.activeElement;
     accountState.loginOpen = true;
     accountState.loginModal.hidden = false;
     document.body.style.overflow = 'hidden';
@@ -2112,10 +2486,14 @@
     }
     accountState.loginOpen = false;
     accountState.loginModal.hidden = true;
-    if (!accountState.open) {
+    if (!accountState.open && !accountState.vipPreviewOpen) {
       document.body.style.overflow = '';
     }
-    accountState.dialog?.focus();
+    const returnFocusTo = accountState.returnFocusTo;
+    accountState.returnFocusTo = null;
+    if (returnFocusTo && typeof returnFocusTo.focus === 'function') {
+      returnFocusTo.focus();
+    }
   }
 
   function openLoginPage() {
@@ -2232,7 +2610,7 @@
       const trigger = event.target?.closest?.('[data-account-panel-login]');
       if (trigger) {
         event.preventDefault();
-        openLoginModal();
+        openVipPreviewModal(trigger);
       }
     });
   }

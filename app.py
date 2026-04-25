@@ -229,10 +229,14 @@ def spend_user_points(user_id: str, amount: int, transaction_type: str = 'consum
     normalized_user_id = str(user_id or '').strip()
     if not normalized_user_id:
         return None
+    normalized_metadata = metadata if isinstance(metadata, dict) else {}
     try:
         payload = _post_supabase_rpc('spend_user_points', {
             'p_user_id': normalized_user_id,
             'p_amount': int(amount),
+            'p_transaction_type': str(transaction_type or 'consume').strip() or 'consume',
+            'p_reason': str(reason or '').strip(),
+            'p_metadata': normalized_metadata,
         })
     except requests.HTTPError as exc:
         response = getattr(exc, 'response', None)
@@ -275,36 +279,21 @@ def add_user_points(user_id: str, amount: int, transaction_type: str = 'refund',
     normalized_amount = max(int(amount), 0)
     if normalized_amount <= 0:
         return ensure_user_points_balance(normalized_user_id) or get_user_points_balance(normalized_user_id)
+    normalized_metadata = metadata if isinstance(metadata, dict) else {}
     try:
-        base_row = ensure_user_points_balance(normalized_user_id) or get_user_points_balance(normalized_user_id) or {}
-        current_balance = int(base_row.get('balance') or 0)
-        current_total_earned = int(base_row.get('total_earned') or 0)
-        response = requests.patch(
-            build_supabase_request_url(f'/rest/v1/{SUPABASE_POINTS_TABLE}'),
-            headers={
-                **_build_supabase_service_headers(),
-                'Prefer': 'return=representation',
-            },
-            params={
-                'user_id': f'eq.{normalized_user_id}',
-            },
-            json={
-                'balance': current_balance + normalized_amount,
-                'total_earned': current_total_earned + normalized_amount,
-            },
-            timeout=20,
-        )
-        response.raise_for_status()
-        payload = response.json()
+        payload = _post_supabase_rpc('add_user_points', {
+            'p_user_id': normalized_user_id,
+            'p_amount': normalized_amount,
+            'p_transaction_type': str(transaction_type or 'refund').strip() or 'refund',
+            'p_reason': str(reason or '').strip(),
+            'p_metadata': normalized_metadata,
+        })
     except requests.RequestException as exc:
         app.logger.warning('Failed to add user points for %s: %s', normalized_user_id, exc)
         return None
     except RuntimeError as exc:
         app.logger.warning('Failed to add user points for %s: %s', normalized_user_id, exc)
         return None
-    if isinstance(payload, list) and payload:
-        row = payload[0]
-        return row if isinstance(row, dict) else None
     return payload if isinstance(payload, dict) else None
 
 
