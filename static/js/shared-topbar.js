@@ -307,7 +307,7 @@
     if (phone) {
       return {
         phone,
-        displayPhone: String(phone),
+        displayPhone: maskPhoneDisplay(phone),
       };
     }
 
@@ -2290,7 +2290,7 @@
     const nameEl = modal.querySelector('.shared-vip-preview-modal__account-name');
     const metaEl = modal.querySelector('.shared-vip-preview-modal__account-meta');
     const userDisplay = getSessionUserDisplay(accountState.session);
-    const phoneText = userDisplay.phone ? maskPhoneDisplay(userDisplay.phone) : userDisplay.displayPhone;
+    const phoneText = userDisplay.displayPhone;
     if (nameEl) {
       nameEl.textContent = phoneText || '已登录用户';
     }
