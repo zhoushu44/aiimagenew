@@ -16,86 +16,164 @@
       display: grid;
       gap: 16px;
     }
-    .settings-header,
-    .settings-toolbar,
     .settings-card,
-    .settings-empty {
+    .settings-empty,
+    .mode-hero {
       border: 1px solid var(--line);
       background: var(--surface);
       box-shadow: var(--shadow);
       backdrop-filter: blur(18px);
       border-radius: var(--radius-xl);
     }
-    .settings-header {
-      padding: 24px;
-      display: flex;
-      justify-content: space-between;
+    .settings-login {
+      padding: 22px;
+      display: grid;
       gap: 16px;
-      align-items: flex-start;
-      flex-wrap: wrap;
+      max-width: 560px;
+      margin: 0 auto;
     }
-    .settings-kicker {
-      text-transform: uppercase;
-      letter-spacing: 0.18em;
-      font-size: 11px;
-      color: var(--muted);
-      margin-bottom: 10px;
-    }
-    .settings-title {
+    .settings-login-title {
       margin: 0;
       font-family: var(--font-display);
-      font-size: clamp(30px, 4vw, 54px);
-      line-height: 0.98;
-      letter-spacing: -0.06em;
+      font-size: clamp(24px, 3vw, 36px);
+      line-height: 1;
+      letter-spacing: -0.05em;
     }
-    .settings-copy {
-      margin: 12px 0 0;
-      max-width: 66ch;
+    .settings-login-copy {
+      margin: 0;
       color: var(--muted);
       line-height: 1.7;
     }
-    .settings-header-actions {
+    .settings-login-actions {
+      display: flex;
+      justify-content: flex-end;
+      gap: 10px;
+    }
+    .login-status {
+      min-height: 20px;
+      font-size: 13px;
+      color: var(--muted);
+    }
+    .login-status.is-success {
+      color: #166534;
+    }
+    .login-status.is-error {
+      color: #b91c1c;
+    }
+    .settings-content {
+      display: grid;
+      gap: 16px;
+    }
+    .mode-hero {
+      padding: 22px;
+      display: grid;
+      gap: 18px;
+      background: linear-gradient(135deg, rgba(255,255,255,0.92), rgba(248,250,252,0.88));
+    }
+    .mode-hero-top {
       display: flex;
       flex-wrap: wrap;
-      gap: 10px;
-      align-items: center;
-      justify-content: flex-end;
+      justify-content: space-between;
+      gap: 16px;
+      align-items: flex-start;
     }
-    .pill {
-      min-height: 38px;
-      padding: 0 14px;
-      border-radius: 999px;
+    .mode-hero-meta {
+      display: grid;
+      gap: 10px;
+    }
+    .mode-hero-title {
+      margin: 0;
+      font-family: var(--font-display);
+      font-size: clamp(24px, 3vw, 38px);
+      line-height: 1;
+      letter-spacing: -0.05em;
+    }
+    .mode-hero-copy {
+      margin: 0;
+      color: var(--muted);
+      line-height: 1.7;
+      max-width: 72ch;
+    }
+    .mode-badge {
       display: inline-flex;
       align-items: center;
-      border: 1px solid var(--line);
-      background: rgba(255,255,255,0.72);
+      gap: 8px;
+      width: fit-content;
+      padding: 8px 12px;
+      border-radius: 999px;
+      border: 1px solid rgba(15, 23, 42, 0.1);
+      background: rgba(255,255,255,0.84);
       color: var(--muted-strong);
       font-size: 12px;
-      white-space: nowrap;
+      text-transform: uppercase;
+      letter-spacing: 0.14em;
     }
-    .pill.accent {
-      border-color: rgba(17,24,39,0.16);
-      background: rgba(17,24,39,0.03);
+    .mode-badge strong {
+      color: var(--text);
+      letter-spacing: 0.04em;
+    }
+    .mode-hero-side {
+      display: grid;
+      gap: 10px;
+      justify-items: end;
+      min-width: min(100%, 220px);
+    }
+    .mode-status-card {
+      width: 100%;
+      min-height: 120px;
+      border-radius: 22px;
+      padding: 18px;
+      display: grid;
+      gap: 10px;
+      border: 1px solid rgba(15, 23, 42, 0.08);
+      background: rgba(255,255,255,0.82);
+    }
+    .mode-status-card[data-mode="mode1"] {
+      background: linear-gradient(135deg, rgba(226, 232, 240, 0.82), rgba(255,255,255,0.92));
+    }
+    .mode-status-card[data-mode="mode2"] {
+      background: linear-gradient(135deg, rgba(219, 234, 254, 0.92), rgba(255,255,255,0.96));
+    }
+    .mode-status-label {
+      font-size: 12px;
+      text-transform: uppercase;
+      letter-spacing: 0.14em;
+      color: var(--muted);
+    }
+    .mode-status-value {
+      font-family: var(--font-display);
+      font-size: clamp(28px, 4vw, 44px);
+      line-height: 0.95;
+      letter-spacing: -0.06em;
       color: var(--text);
     }
-    .settings-toolbar {
-      padding: 14px 16px;
-      display: flex;
-      justify-content: space-between;
-      gap: 12px;
-      align-items: center;
-      flex-wrap: wrap;
+    .mode-status-note {
+      color: var(--muted-strong);
+      line-height: 1.6;
+      font-size: 13px;
     }
-    .toolbar-group {
-      display: flex;
-      flex-wrap: wrap;
+    .mode-hero-controls {
+      display: grid;
       gap: 10px;
-      align-items: center;
+      grid-template-columns: minmax(0, 1fr) auto;
+      align-items: end;
     }
-    .toolbar-note {
+    .mode-hero-hint {
       color: var(--muted);
       font-size: 13px;
-      line-height: 1.5;
+      line-height: 1.6;
+      margin: 0;
+    }
+    .settings-status {
+      min-height: 20px;
+      font-size: 13px;
+      color: var(--muted);
+    }
+    .settings-status.is-success {
+      color: #166534;
+    }
+    .settings-status.is-error {
+      color: #b91c1c;
     }
     .btn {
       min-height: 40px;
@@ -111,47 +189,44 @@
       justify-content: center;
       transition: transform 160ms ease, background 160ms ease, border-color 160ms ease;
     }
-    .btn:hover {
+    .btn:hover:not(:disabled) {
       transform: translateY(-1px);
-    }
-    .btn.primary {
-      border-color: var(--accent);
-      background: var(--accent);
-      color: #fff;
-    }
-    .btn.ghost {
-      background: transparent;
+      background: rgba(255,255,255,1);
     }
     .btn:disabled {
-      opacity: 0.55;
+      opacity: 0.52;
       cursor: not-allowed;
       transform: none;
     }
-    .settings-status {
-      min-height: 20px;
-      color: var(--muted);
-      font-size: 13px;
-      line-height: 1.5;
+    .btn.primary {
+      background: var(--text);
+      color: white;
+      border-color: var(--text);
     }
-    .settings-status.is-error {
-      color: var(--danger);
+    .btn.primary:hover:not(:disabled) {
+      background: #0f172a;
     }
-    .settings-status.is-success {
-      color: var(--success);
+    .btn.is-idle {
+      background: rgba(255,255,255,0.9);
+      color: var(--muted-strong);
+      border-color: var(--line-strong);
+    }
+    .btn.is-idle:hover:not(:disabled) {
+      background: rgba(255,255,255,1);
     }
     .settings-list {
       display: grid;
       gap: 14px;
     }
     .settings-empty {
-      padding: 28px;
+      padding: 22px;
       color: var(--muted);
-      line-height: 1.7;
+      text-align: center;
     }
     .setting-row {
       padding: 18px;
       display: grid;
-      gap: 14px;
+      gap: 16px;
     }
     .setting-meta {
       display: grid;
@@ -160,33 +235,46 @@
     .setting-head {
       display: flex;
       flex-wrap: wrap;
-      gap: 10px;
+      gap: 8px;
       align-items: center;
     }
     .setting-scope,
     .setting-key,
-    .setting-updated,
-    .setting-sensitive {
-      border: 1px solid var(--line);
+    .setting-sensitive,
+    .setting-updated {
+      display: inline-flex;
+      align-items: center;
+      min-height: 30px;
+      padding: 0 10px;
       border-radius: 999px;
-      padding: 5px 10px;
       font-size: 12px;
-      color: var(--muted-strong);
-      background: rgba(255,255,255,0.65);
+      border: 1px solid var(--line);
+      background: rgba(255,255,255,0.74);
     }
     .setting-key {
-      font-weight: 600;
+      font-weight: 700;
       color: var(--text);
+    }
+    .setting-sensitive {
+      color: #7c3aed;
+      border-color: rgba(124,58,237,0.16);
+      background: rgba(124,58,237,0.08);
+    }
+    .setting-updated {
+      color: var(--muted);
     }
     .setting-description {
       color: var(--muted);
-      font-size: 14px;
       line-height: 1.6;
-      min-height: 22px;
     }
     .setting-editor {
       display: grid;
-      gap: 10px;
+      gap: 12px;
+    }
+    .inline-grid {
+      display: grid;
+      gap: 12px;
+      grid-template-columns: repeat(2, minmax(0, 1fr));
     }
     .setting-field {
       display: grid;
@@ -194,112 +282,174 @@
     }
     .field-label {
       font-size: 12px;
-      letter-spacing: 0.12em;
       text-transform: uppercase;
+      letter-spacing: 0.14em;
       color: var(--muted);
     }
     .setting-input {
-      min-height: 48px;
-      border-radius: 16px;
-      border: 1px solid var(--line-strong);
+      width: 100%;
+      min-height: 44px;
       padding: 0 14px;
+      border-radius: 14px;
+      border: 1px solid var(--line-strong);
       background: rgba(255,255,255,0.92);
       color: var(--text);
-      outline: none;
+      font: inherit;
     }
-    .setting-input:focus {
-      border-color: rgba(17,24,39,0.3);
-      box-shadow: 0 0 0 4px rgba(17,24,39,0.06);
-    }
-    .setting-actions {
-      display: flex;
-      flex-wrap: wrap;
-      gap: 10px;
-      justify-content: flex-end;
+    .setting-input[readonly] {
+      color: var(--muted-strong);
+      background: rgba(248,250,252,0.9);
     }
     .setting-note {
       color: var(--muted);
-      font-size: 12px;
+      font-size: 13px;
       line-height: 1.5;
     }
-    .masked-preview {
-      font-family: var(--font-mono, ui-monospace, SFMono-Regular, Menlo, Consolas, monospace);
-      letter-spacing: 0.08em;
-    }
-    .inline-grid {
-      display: grid;
-      grid-template-columns: repeat(2, minmax(0, 1fr));
-      gap: 12px;
+    .setting-actions {
+      display: flex;
+      justify-content: flex-end;
+      gap: 10px;
     }
     @media (max-width: 860px) {
       .inline-grid {
         grid-template-columns: 1fr;
       }
-      .settings-header,
-      .settings-toolbar {
+      .mode-hero-controls {
+        grid-template-columns: 1fr;
+      }
+      .mode-hero-top {
         align-items: stretch;
       }
-      .settings-header-actions,
-      .setting-actions {
+      .setting-actions,
+      .mode-hero-side,
+      .settings-login-actions {
         justify-content: flex-start;
+        justify-items: stretch;
       }
     }
   </style>
-  <script src="/static/js/shared-topbar.js" defer></script>
 </head>
 <body class="settings-page" data-page-mode="settings">
   <div class="settings-shell">
-    <header class="console-topbar" data-shared-topbar>
-      <div class="console-brand">
-        <a class="console-home" href="/" data-topbar-home>AIC</a>
-        <div>
-          <div class="console-kicker" data-topbar-kicker></div>
-          <div class="console-title" data-topbar-title></div>
+    <section class="settings-card settings-login" id="loginGate" hidden>
+      <div class="mode-badge">Admin Access <strong>settings</strong></div>
+      <h1 class="settings-login-title">登录管理员账号</h1>
+      <p class="settings-login-copy">当前设置页需要管理员登录后才会加载 APP_MODE 与其他配置。请输入已写入环境变量的手机号或邮箱，以及对应密码。</p>
+      <div class="inline-grid">
+        <label class="setting-field">
+          <span class="field-label">identifier</span>
+          <input class="setting-input" id="adminIdentifier" type="text" placeholder="管理员手机号或邮箱" autocomplete="username">
+        </label>
+        <label class="setting-field">
+          <span class="field-label">password</span>
+          <input class="setting-input" id="adminPassword" type="password" placeholder="管理员密码" autocomplete="current-password">
+        </label>
+      </div>
+      <div class="settings-login-actions">
+        <button class="btn primary" id="adminLoginBtn" type="button">登录并加载设置</button>
+      </div>
+      <div class="login-status" id="loginStatus" aria-live="polite"></div>
+    </section>
+
+    <div class="settings-content" id="settingsContent" hidden>
+      <section class="mode-hero" id="appModeHero" aria-live="polite">
+        <div class="mode-hero-top">
+          <div class="mode-hero-meta">
+            <div class="mode-badge">Application Mode <strong id="appModeBadge">mode1</strong></div>
+            <h2 class="mode-hero-title">当前运行模式</h2>
+            <p class="mode-hero-copy" id="appModeDescription">mode1 适合稳定的默认生成链路，通常用于常规套图、A+ 与服饰工作流。</p>
+          </div>
+          <div class="mode-hero-side">
+            <div class="mode-status-card" id="appModeStatusCard" data-mode="mode1">
+              <div class="mode-status-label">Current active mode</div>
+              <div class="mode-status-value" id="appModeValue">mode1</div>
+              <div class="mode-status-note" id="appModeNote">稳定模式，适合日常生产使用。</div>
+            </div>
+          </div>
         </div>
-      </div>
-      <div class="console-topbar-meta" data-topbar-meta></div>
-    </header>
+        <div class="mode-hero-controls">
+          <label class="setting-field">
+            <span class="field-label">APP_MODE</span>
+            <select class="setting-input" id="appModeSelect" autocomplete="off">
+              <option value="mode1">mode1</option>
+              <option value="mode2">mode2</option>
+            </select>
+          </label>
+          <button class="btn primary is-idle" id="appModeSaveBtn" type="button">当前已生效</button>
+        </div>
+        <div class="settings-status" id="status" aria-live="polite"></div>
+        <p class="mode-hero-hint">保存模式后会自动刷新并重新读取数据库与后端 settings cache。</p>
+      </section>
 
-    <header class="settings-header">
-      <div>
-        <div class="settings-kicker">Protected Admin Screen</div>
-        <h1 class="settings-title">API Settings</h1>
-        <p class="settings-copy">通过后端受保护接口查看和编辑 <code>public.api_settings</code>。浏览器只接收经过脱敏处理后的内容，保存与刷新都由 Flask 服务端完成。</p>
-      </div>
-    </header>
+      <main class="settings-list" id="settingsList" aria-live="polite"></main>
 
-    <section class="settings-toolbar">
-      <div class="toolbar-group">
-        <button class="btn primary" id="refreshBtn" type="button">刷新</button>
-        <span class="toolbar-note">刷新会重新读取数据库并同步后端 settings cache。</span>
-      </div>
-      <div class="settings-status" id="status" aria-live="polite"></div>
-    </section>
-
-    <main class="settings-list" id="settingsList" aria-live="polite"></main>
-
-    <section class="settings-empty" id="emptyState" hidden>
-      当前 scope 下没有可显示的配置项。
-    </section>
+      <section class="settings-empty" id="emptyState" hidden>
+        当前 scope 下没有可显示的配置项。
+      </section>
+    </div>
   </div>
 
   <script>
     const DEFAULT_SCOPE = 'global';
+    const APP_MODE_CONFIG = {
+      mode1: {
+        description: 'mode1 适合稳定的默认生成链路，通常用于常规套图、A+ 与服饰工作流。',
+        note: '稳定模式，适合日常生产使用。',
+      },
+      mode2: {
+        description: 'mode2 会启用新的图像生成链路，可根据是否上传参考图自动切换文生图与图生图能力。',
+        note: '实验与增强模式，适合验证新模型与新流程。',
+      },
+    };
+
     const state = {
       scope: DEFAULT_SCOPE,
       records: [],
+      appModeRecord: null,
+      appModeOriginalValue: 'mode1',
+      loadFailed: false,
+      loadErrorMessage: '',
+      authRequired: document.body.dataset.authRequired === 'true',
     };
 
-    const scopePill = document.getElementById('scopePill');
-    const countPill = document.getElementById('countPill');
-    const refreshBtn = document.getElementById('refreshBtn');
+    const loginGate = document.getElementById('loginGate');
+    const settingsContent = document.getElementById('settingsContent');
+    const loginStatusEl = document.getElementById('loginStatus');
+    const adminIdentifierInput = document.getElementById('adminIdentifier');
+    const adminPasswordInput = document.getElementById('adminPassword');
+    const adminLoginBtn = document.getElementById('adminLoginBtn');
     const statusEl = document.getElementById('status');
     const settingsList = document.getElementById('settingsList');
     const emptyState = document.getElementById('emptyState');
+    const appModeHero = document.getElementById('appModeHero');
+    const appModeBadge = document.getElementById('appModeBadge');
+    const appModeValue = document.getElementById('appModeValue');
+    const appModeDescription = document.getElementById('appModeDescription');
+    const appModeNote = document.getElementById('appModeNote');
+    const appModeStatusCard = document.getElementById('appModeStatusCard');
+    const appModeSelect = document.getElementById('appModeSelect');
+    const appModeSaveBtn = document.getElementById('appModeSaveBtn');
 
     function setStatus(message, type = '') {
       statusEl.className = `settings-status${type ? ` is-${type}` : ''}`;
       statusEl.textContent = message || '';
+    }
+
+    function setLoginStatus(message, type = '') {
+      loginStatusEl.className = `login-status${type ? ` is-${type}` : ''}`;
+      loginStatusEl.textContent = message || '';
+    }
+
+    function showLoginGate(message = '', type = '') {
+      settingsContent.hidden = true;
+      loginGate.hidden = false;
+      setLoginStatus(message, type);
+    }
+
+    function showSettingsContent() {
+      loginGate.hidden = true;
+      settingsContent.hidden = false;
+      setLoginStatus('');
     }
 
     function isSensitive(key) {
@@ -315,10 +465,118 @@
         .replaceAll("'", '&#39;');
     }
 
+    function normalizeAppMode(value) {
+      return ['mode1', 'mode2'].includes(String(value || '').trim().toLowerCase()) ? String(value).trim().toLowerCase() : 'mode1';
+    }
+
+    function updateAppModeHero(mode) {
+      const normalizedMode = normalizeAppMode(mode);
+      const config = APP_MODE_CONFIG[normalizedMode] || APP_MODE_CONFIG.mode1;
+      appModeBadge.textContent = normalizedMode;
+      appModeValue.textContent = normalizedMode;
+      appModeDescription.textContent = config.description;
+      appModeNote.textContent = config.note;
+      appModeStatusCard.dataset.mode = normalizedMode;
+    }
+
+    function syncAppModeControls() {
+      const currentValue = normalizeAppMode(appModeSelect.value);
+      const originalValue = normalizeAppMode(state.appModeOriginalValue);
+      const dirty = currentValue !== originalValue;
+      updateAppModeHero(currentValue);
+      appModeSaveBtn.disabled = false;
+      if (state.loadFailed) {
+        appModeSaveBtn.textContent = '重新加载设置';
+        appModeSaveBtn.classList.remove('is-idle');
+        return;
+      }
+      if (!state.appModeRecord) {
+        appModeSaveBtn.textContent = '未找到 APP_MODE';
+        appModeSaveBtn.classList.remove('is-idle');
+        return;
+      }
+      appModeSaveBtn.textContent = dirty ? '保存模式' : '当前已生效';
+      appModeSaveBtn.classList.toggle('is-idle', !dirty);
+    }
+
+    function hydrateAppModeRecord(records) {
+      const appModeRecord = Array.isArray(records)
+        ? records.find((record) => record && record.scope === state.scope && record.setting_key === 'APP_MODE') || null
+        : null;
+
+      state.appModeRecord = appModeRecord;
+      const currentMode = normalizeAppMode(appModeRecord?.setting_value || 'mode1');
+      state.appModeOriginalValue = currentMode;
+      appModeSelect.value = currentMode;
+      appModeHero.hidden = false;
+      syncAppModeControls();
+    }
+
+    async function requestJson(url, options = {}) {
+      const response = await fetch(url, {
+        credentials: 'same-origin',
+        headers: {
+          'Accept': 'application/json',
+          ...(options.headers || {}),
+        },
+        ...options,
+      });
+      let data = null;
+      try {
+        data = await response.json();
+      } catch (error) {
+        data = null;
+      }
+      return { response, data };
+    }
+
+    async function checkAdminSession() {
+      const { response, data } = await requestJson('/api/admin/session', {
+        method: 'POST',
+      });
+      if (!response.ok) {
+        return false;
+      }
+      return Boolean(data?.authenticated && data?.admin);
+    }
+
+    async function refreshSettingsCache() {
+      const { response, data } = await requestJson('/api/settings/refresh', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ scope: state.scope }),
+      });
+      if (!response.ok || !data?.success) {
+        throw new Error(data?.error || '刷新失败');
+      }
+      state.loadFailed = false;
+      state.loadErrorMessage = '';
+      state.records = Array.isArray(data.records) ? data.records : [];
+      hydrateAppModeRecord(state.records);
+      renderRecords(state.records);
+    }
+
+    async function saveAppMode(nextValue) {
+      if (!state.appModeRecord) {
+        throw new Error('未找到 APP_MODE 配置项');
+      }
+      const { response, data } = await requestJson('/api/settings', {
+        method: 'PATCH',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          scope: state.appModeRecord.scope,
+          setting_key: state.appModeRecord.setting_key,
+          setting_value: normalizeAppMode(nextValue),
+        }),
+      });
+      if (!response.ok || !data?.success) {
+        throw new Error(data?.error || '保存失败');
+      }
+    }
+
     function renderRecords(records) {
       settingsList.innerHTML = '';
       emptyState.hidden = records.length > 0;
-      countPill.textContent = `${records.length} items`;
 
       for (const record of records) {
         const sensitive = Boolean(record.is_sensitive);
@@ -399,7 +657,7 @@
           setStatus(`正在保存 ${record.setting_key}…`);
 
           try {
-            const response = await fetch('/api/settings', {
+            const { response, data } = await requestJson('/api/settings', {
               method: 'PATCH',
               headers: { 'Content-Type': 'application/json' },
               body: JSON.stringify({
@@ -408,9 +666,8 @@
                 setting_value: nextValue,
               }),
             });
-            const data = await response.json();
-            if (!response.ok || !data.success) {
-              throw new Error(data.error || '保存失败');
+            if (!response.ok || !data?.success) {
+              throw new Error(data?.error || '保存失败');
             }
 
             if (sensitive) {
@@ -421,7 +678,7 @@
             row.dataset.dirty = 'false';
             saveBtn.disabled = true;
 
-            await loadSettings(true);
+            await refreshSettingsCache();
             setStatus(`${record.setting_key} 已保存`, 'success');
           } catch (error) {
             setStatus(error.message || '保存失败', 'error');
@@ -434,61 +691,157 @@
       }
     }
 
-    function normalizeAppMode(value) {
-      return ['mode1', 'mode2'].includes(String(value || '').trim().toLowerCase()) ? String(value).trim().toLowerCase() : 'mode1';
-    }
-
     async function loadSettings(silent = false) {
       if (!silent) {
         setStatus('正在加载设置…');
       }
-      refreshBtn.disabled = true;
       try {
-        const response = await fetch(`/api/settings?scope=${encodeURIComponent(state.scope)}`);
-        const data = await response.json();
-        if (!response.ok || !data.success) {
-          throw new Error(data.error || '加载失败');
+        const { response, data } = await requestJson(`/api/settings?scope=${encodeURIComponent(state.scope)}`);
+        if (response.status === 401) {
+          state.authRequired = true;
+          state.loadFailed = true;
+          state.loadErrorMessage = data?.error || '请先登录';
+          settingsList.innerHTML = '';
+          emptyState.hidden = true;
+          state.appModeRecord = null;
+          state.appModeOriginalValue = 'mode1';
+          appModeSelect.value = 'mode1';
+          syncAppModeControls();
+          showLoginGate('请先使用管理员账号登录后再加载设置。', 'error');
+          setStatus('请先使用管理员账号登录后再加载设置。', 'error');
+          return;
+        }
+        if (response.status === 403) {
+          state.loadFailed = true;
+          state.loadErrorMessage = data?.error || '无权访问设置页面';
+          settingsList.innerHTML = '';
+          emptyState.hidden = true;
+          state.appModeRecord = null;
+          state.appModeOriginalValue = 'mode1';
+          appModeSelect.value = 'mode1';
+          syncAppModeControls();
+          showLoginGate('当前账号无权访问设置页面，请使用环境变量中配置的管理员账号登录。', 'error');
+          setStatus(state.loadErrorMessage, 'error');
+          return;
+        }
+        if (!response.ok || !data?.success) {
+          throw new Error(data?.error || '加载失败');
         }
 
+        showSettingsContent();
+        state.loadFailed = false;
+        state.loadErrorMessage = '';
         state.records = Array.isArray(data.records) ? data.records : [];
-        scopePill.textContent = `scope: ${data.scope || state.scope}`;
+        hydrateAppModeRecord(state.records);
         renderRecords(state.records);
         if (!silent) {
           setStatus(`已加载 ${state.records.length} 条配置`, 'success');
         }
       } catch (error) {
-        setStatus(error.message || '加载失败', 'error');
+        state.loadFailed = true;
+        state.loadErrorMessage = error.message || '加载失败';
+        setStatus(state.loadErrorMessage, 'error');
         settingsList.innerHTML = '';
         emptyState.hidden = false;
-      } finally {
-        refreshBtn.disabled = false;
+        state.appModeRecord = null;
+        state.appModeOriginalValue = 'mode1';
+        appModeSelect.value = 'mode1';
+        syncAppModeControls();
       }
     }
 
-    refreshBtn.addEventListener('click', async () => {
-      refreshBtn.disabled = true;
-      setStatus('正在刷新缓存…');
+    async function loginAsAdmin() {
+      const identifier = adminIdentifierInput.value.trim();
+      const password = adminPasswordInput.value;
+      if (!identifier || !password) {
+        setLoginStatus('请输入管理员手机号或邮箱，以及对应密码。', 'error');
+        return;
+      }
+      adminLoginBtn.disabled = true;
+      adminLoginBtn.textContent = '登录中…';
+      setLoginStatus('正在验证管理员账号…');
       try {
-        const response = await fetch('/api/settings/refresh', {
+        const { response, data } = await requestJson('/api/admin/login', {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ scope: state.scope }),
+          body: JSON.stringify({ identifier, password }),
         });
-        const data = await response.json();
-        if (!response.ok || !data.success) {
-          throw new Error(data.error || '刷新失败');
+        if (!response.ok || !data?.success) {
+          throw new Error(data?.error || '登录失败');
         }
-        state.records = Array.isArray(data.records) ? data.records : [];
-        renderRecords(state.records);
-        setStatus(`缓存已刷新，当前共 ${state.records.length} 条配置`, 'success');
+        state.authRequired = false;
+        adminPasswordInput.value = '';
+        showSettingsContent();
+        setLoginStatus('登录成功，正在加载设置…', 'success');
+        await loadSettings();
       } catch (error) {
-        setStatus(error.message || '刷新失败', 'error');
+        showLoginGate(error.message || '登录失败', 'error');
       } finally {
-        refreshBtn.disabled = false;
+        adminLoginBtn.disabled = false;
+        adminLoginBtn.textContent = '登录并加载设置';
+      }
+    }
+
+    async function bootstrap() {
+      syncAppModeControls();
+      if (state.authRequired) {
+        showLoginGate('请先使用管理员手机号和密码登录。');
+        return;
+      }
+      try {
+        const adminLoggedIn = await checkAdminSession();
+        if (adminLoggedIn) {
+          showSettingsContent();
+          await loadSettings();
+          return;
+        }
+      } catch (error) {
+      }
+      showSettingsContent();
+      await loadSettings();
+    }
+
+    appModeSelect.addEventListener('change', syncAppModeControls);
+    appModeSelect.addEventListener('input', syncAppModeControls);
+    appModeSaveBtn.addEventListener('click', async () => {
+      if (state.loadFailed) {
+        await loadSettings();
+        return;
+      }
+      if (!state.appModeRecord) {
+        setStatus('未找到 APP_MODE 配置，请先确认已登录并成功加载设置。', 'error');
+        return;
+      }
+      const nextValue = normalizeAppMode(appModeSelect.value);
+      appModeSaveBtn.disabled = true;
+      appModeSaveBtn.textContent = '保存中…';
+      appModeSaveBtn.classList.remove('is-idle');
+      setStatus('正在保存 APP_MODE…');
+      try {
+        await saveAppMode(nextValue);
+        await refreshSettingsCache();
+        setStatus(`APP_MODE 已切换为 ${nextValue}`, 'success');
+      } catch (error) {
+        setStatus(error.message || '保存失败', 'error');
+      } finally {
+        syncAppModeControls();
+      }
+    });
+    adminLoginBtn.addEventListener('click', loginAsAdmin);
+    adminIdentifierInput.addEventListener('keydown', (event) => {
+      if (event.key === 'Enter') {
+        event.preventDefault();
+        loginAsAdmin();
+      }
+    });
+    adminPasswordInput.addEventListener('keydown', (event) => {
+      if (event.key === 'Enter') {
+        event.preventDefault();
+        loginAsAdmin();
       }
     });
 
-    loadSettings();
+    bootstrap();
   </script>
 </body>
 </html>

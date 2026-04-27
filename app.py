@@ -1,6 +1,7 @@
 import base64
 import binascii
 import hashlib
+import hmac
 import io
 import ipaddress
 import json
@@ -10,6 +11,7 @@ import re
 import shutil
 import socket
 import threading
+import time
 import uuid
 import zipfile
 from datetime import datetime, timedelta, timezone
@@ -66,8 +68,9 @@ IMAGE_SIGNATURES = {
 GENERATED_SUITES_DIR = BASE_DIR / 'generated-suites'
 SUPABASE_SESSION_COOKIE = 'aiimagenew_supabase_session'
 SUPABASE_SESSION_SYNC_COOKIE = 'aiimagenew_supabase_session_sync'
+ADMIN_SESSION_COOKIE = 'aiimagenew_admin_session'
 PROTECTED_PAGE_PATHS = {'/suite', '/aplus', '/fashion', '/settings'}
-PUBLIC_API_PREFIXES = ('/api/auth/', '/api/app-mode', '/api/points/rules', '/api/points/quote', '/api/pay/notify')
+PUBLIC_API_PREFIXES = ('/api/auth/', '/api/admin/', '/api/app-mode', '/api/points/rules', '/api/points/quote', '/api/pay/notify')
 PUBLIC_PATH_PREFIXES = ('/static/', '/generated/')
 PUBLIC_PATHS = {'/', '/logout'}
 SUPABASE_URL = (os.getenv('SUPABASE_URL') or os.getenv('SUPABASE_PROJECT_URL') or '').strip()
@@ -152,19 +155,144 @@ def _fetch_user_points_row(user_id: str) -> dict | None:
     return row if isinstance(row, dict) else None
 
 
+def _normalize_points_row(points_row: dict | None, user_id: str = '') -> dict:
+    payload = points_row if isinstance(points_row, dict) else {}
+    normalized_user_id = str(payload.get('user_id') or user_id or '').strip()
+    balance = payload.get('balance')
+    if balance is None:
+        balance = payload.get('points_balance')
+    total_earned = payload.get('total_earned')
+    total_spent = payload.get('total_spent')
+    return {
+        'user_id': normalized_user_id,
+        'balance': int(balance or 0),
+        'total_earned': int(total_earned or 0),
+        'total_spent': int(total_spent or 0),
+        'signup_bonus_awarded_at': payload.get('signup_bonus_awarded_at'),
+        'last_daily_claim_at': payload.get('last_daily_claim_at'),
+        'created_at': payload.get('created_at'),
+        'updated_at': payload.get('updated_at'),
+    }
+
+
+def _build_legacy_points_balance_row(user_id: str) -> dict:
+    normalized_user_id = str(user_id or '').strip()
+    timestamp = datetime.now(timezone.utc).isoformat()
+    return {
+        'user_id': normalized_user_id,
+        'balance': 0,
+        'total_earned': 0,
+        'total_spent': 0,
+        'signup_bonus_awarded_at': None,
+        'last_daily_claim_at': None,
+        'created_at': timestamp,
+        'updated_at': timestamp,
+    }
+
+
+def _create_legacy_points_balance_row(user_id: str) -> dict | None:
+    normalized_user_id = str(user_id or '').strip()
+    if not normalized_user_id or not SUPABASE_URL or not SUPABASE_SERVICE_ROLE_KEY:
+        return None
+    seed_row = _build_legacy_points_balance_row(normalized_user_id)
+    response = requests.post(
+        build_supabase_request_url(f'/rest/v1/{SUPABASE_POINTS_TABLE}'),
+        headers={
+            **_build_supabase_service_headers(),
+            'Prefer': 'resolution=merge-duplicates,return=representation',
+        },
+        json=seed_row,
+        timeout=20,
+    )
+    response.raise_for_status()
+    payload = response.json()
+    if isinstance(payload, list) and payload:
+        return _normalize_points_row(payload[0], normalized_user_id)
+    if isinstance(payload, dict):
+        return _normalize_points_row(payload, normalized_user_id)
+    return _normalize_points_row(seed_row, normalized_user_id)
+
+
+def _ensure_points_balance_row_direct(user_id: str) -> dict | None:
+    normalized_user_id = str(user_id or '').strip()
+    if not normalized_user_id:
+        return None
+    points_row = get_user_points_balance(normalized_user_id)
+    if points_row:
+        return _normalize_points_row(points_row, normalized_user_id)
+    try:
+        return _create_legacy_points_balance_row(normalized_user_id)
+    except requests.RequestException as exc:
+        app.logger.warning('Failed to create legacy points balance row for %s: %s', normalized_user_id, exc)
+        return _normalize_points_row(_build_legacy_points_balance_row(normalized_user_id), normalized_user_id)
+
+
+def _claim_daily_free_points_direct(user_id: str, amount: int) -> dict | None:
+    normalized_user_id = str(user_id or '').strip()
+    normalized_amount = max(int(amount or 0), 0)
+    if not normalized_user_id:
+        return None
+    points_row = _ensure_points_balance_row_direct(normalized_user_id)
+    if not points_row:
+        return None
+
+    last_claim_at = parse_iso_datetime(points_row.get('last_daily_claim_at'))
+    now = datetime.now(timezone.utc)
+    if last_claim_at and last_claim_at.astimezone(timezone.utc).date() >= now.date():
+        return {
+            'success': True,
+            'claimed': False,
+            'reason': 'already_claimed_today',
+            'balance_row': points_row,
+        }
+
+    updated_row = {
+        'balance': int(points_row.get('balance') or 0) + normalized_amount,
+        'total_earned': int(points_row.get('total_earned') or 0) + normalized_amount,
+        'last_daily_claim_at': now.isoformat(),
+        'updated_at': now.isoformat(),
+    }
+    response = requests.patch(
+        build_supabase_request_url(f'/rest/v1/{SUPABASE_POINTS_TABLE}'),
+        headers={
+            **_build_supabase_service_headers(),
+            'Prefer': 'return=representation',
+        },
+        params={
+            'user_id': f'eq.{normalized_user_id}',
+        },
+        json=updated_row,
+        timeout=20,
+    )
+    response.raise_for_status()
+    payload = response.json()
+    if isinstance(payload, list) and payload:
+        updated_points_row = _normalize_points_row(payload[0], normalized_user_id)
+    elif isinstance(payload, dict):
+        updated_points_row = _normalize_points_row(payload, normalized_user_id)
+    else:
+        updated_points_row = _normalize_points_row({**points_row, **updated_row}, normalized_user_id)
+    return {
+        'success': True,
+        'claimed': True,
+        'balance_row': updated_points_row,
+    }
+
+
 def ensure_user_points_balance(user_id: str) -> dict | None:
     normalized_user_id = str(user_id or '').strip()
     if not normalized_user_id:
         return None
     try:
         payload = _post_supabase_rpc('ensure_user_points_balance', {'p_user_id': normalized_user_id})
+        if isinstance(payload, dict):
+            balance_row = payload.get('balance_row') if isinstance(payload.get('balance_row'), dict) else payload
+            return _normalize_points_row(balance_row, normalized_user_id)
     except requests.RequestException as exc:
         app.logger.warning('Failed to ensure user points balance for %s: %s', normalized_user_id, exc)
-        return None
     except RuntimeError as exc:
         app.logger.warning('Failed to ensure user points balance for %s: %s', normalized_user_id, exc)
-        return None
-    return payload if isinstance(payload, dict) else None
+    return _ensure_points_balance_row_direct(normalized_user_id)
 
 
 def award_signup_bonus_points(user_id: str, amount: int) -> dict | None:
@@ -188,6 +316,10 @@ def claim_daily_free_points(user_id: str, amount: int) -> dict | None:
         return None
     try:
         payload = _post_supabase_rpc('claim_daily_free_points', {'p_user_id': normalized_user_id, 'p_amount': int(amount)})
+        if isinstance(payload, dict):
+            balance_row = payload.get('balance_row') if isinstance(payload.get('balance_row'), dict) else payload
+            payload['balance_row'] = _normalize_points_row(balance_row, normalized_user_id)
+        return payload if isinstance(payload, dict) else None
     except requests.HTTPError as exc:
         response = getattr(exc, 'response', None)
         error_text = ''
@@ -204,6 +336,13 @@ def claim_daily_free_points(user_id: str, amount: int) -> dict | None:
             except ValueError:
                 error_text = response.text or ''
         app.logger.warning('Failed to claim daily points for %s: %s', normalized_user_id, exc)
+        try:
+            fallback_payload = _claim_daily_free_points_direct(normalized_user_id, amount)
+            if fallback_payload:
+                app.logger.warning('Claim daily points fallback applied for %s after RPC HTTP failure', normalized_user_id)
+                return fallback_payload
+        except requests.RequestException as fallback_exc:
+            app.logger.warning('Daily points fallback failed for %s: %s', normalized_user_id, fallback_exc)
         return {
             'success': False,
             'claimed': False,
@@ -212,6 +351,13 @@ def claim_daily_free_points(user_id: str, amount: int) -> dict | None:
         }
     except requests.RequestException as exc:
         app.logger.warning('Failed to claim daily points for %s: %s', normalized_user_id, exc)
+        try:
+            fallback_payload = _claim_daily_free_points_direct(normalized_user_id, amount)
+            if fallback_payload:
+                app.logger.warning('Claim daily points fallback applied for %s after RPC request failure', normalized_user_id)
+                return fallback_payload
+        except requests.RequestException as fallback_exc:
+            app.logger.warning('Daily points fallback failed for %s: %s', normalized_user_id, fallback_exc)
         return {
             'success': False,
             'claimed': False,
@@ -220,13 +366,19 @@ def claim_daily_free_points(user_id: str, amount: int) -> dict | None:
         }
     except RuntimeError as exc:
         app.logger.warning('Failed to claim daily points for %s: %s', normalized_user_id, exc)
+        try:
+            fallback_payload = _claim_daily_free_points_direct(normalized_user_id, amount)
+            if fallback_payload:
+                app.logger.warning('Claim daily points fallback applied for %s after RPC runtime failure', normalized_user_id)
+                return fallback_payload
+        except requests.RequestException as fallback_exc:
+            app.logger.warning('Daily points fallback failed for %s: %s', normalized_user_id, fallback_exc)
         return {
             'success': False,
             'claimed': False,
             'error': str(exc) or '领取失败，请稍后重试',
             'balance_row': get_user_points_balance(normalized_user_id) or ensure_user_points_balance(normalized_user_id) or {},
         }
-    return payload if isinstance(payload, dict) else None
 
 
 def spend_user_points(user_id: str, amount: int, transaction_type: str = 'consume', reason: str = '', metadata: dict | None = None) -> dict | None:
@@ -302,7 +454,7 @@ def add_user_points(user_id: str, amount: int, transaction_type: str = 'refund',
 
 
 def serialize_points_payload(points_row: dict | None, user_profile_row: dict | None = None) -> dict:
-    payload = points_row if isinstance(points_row, dict) else {}
+    payload = _normalize_points_row(points_row)
     profile_payload = user_profile_row if isinstance(user_profile_row, dict) else {}
     subscribe_expire = profile_payload.get('subscribe_expire')
     subscribe_expire_at = parse_iso_datetime(subscribe_expire)
@@ -702,17 +854,49 @@ def get_mode2_allowed_image_hosts() -> set[str]:
 
 
 def get_settings_allowed_emails() -> set[str]:
-    allowed_emails = get_env_csv('SUPABASE_SETTINGS_ALLOWED_EMAILS')
-    single_email = os.getenv('SUPABASE_SETTINGS_ALLOWED_EMAIL', '').strip().lower()
+    allowed_emails = get_env_csv('ADMIN_ALLOWED_EMAILS')
+    single_email = os.getenv('ADMIN_ALLOWED_EMAIL', '').strip().lower()
     if single_email:
         allowed_emails.add(single_email)
     return allowed_emails
+
+
+def get_settings_allowed_phones() -> set[str]:
+    allowed_phones = get_env_csv('ADMIN_ALLOWED_PHONES')
+    single_phone = os.getenv('ADMIN_ALLOWED_PHONE', '').strip().lower()
+    if single_phone:
+        allowed_phones.add(single_phone)
+    return allowed_phones
+
+
+def get_admin_password() -> str:
+    return os.getenv('ADMIN_PASSWORD', '').strip()
+
+
+def get_admin_session_secret() -> str:
+    return os.getenv('ADMIN_SESSION_SECRET', '').strip() or SUPABASE_SERVICE_ROLE_KEY or SUPABASE_ANON_KEY or 'aiimagenew-local-admin'
+
+
+def _normalize_phone_identifier(value: str | None) -> str:
+    normalized = str(value or '').strip().replace(' ', '').replace('-', '')
+    if normalized.startswith('+86') and len(normalized) == 14:
+        return normalized[3:]
+    if normalized.startswith('86') and len(normalized) == 13:
+        return normalized[2:]
+    return normalized
 
 
 def _get_supabase_user_email(session_data: dict | None = None) -> str:
     session_payload = session_data or g.get('supabase_session') or {}
     user = session_payload.get('user') or {}
     return str(user.get('email') or '').strip().lower()
+
+
+def _get_supabase_user_phone(session_data: dict | None = None) -> str:
+    session_payload = session_data or g.get('supabase_session') or {}
+    user = session_payload.get('user') or {}
+    metadata = user.get('user_metadata') or {}
+    return _normalize_phone_identifier(user.get('phone') or metadata.get('phone') or metadata.get('phone_number'))
 
 
 def _is_truthy_flag(value) -> bool:
@@ -785,8 +969,83 @@ def _is_supabase_admin_user(session_data: dict | None = None) -> bool:
 
 def _is_settings_user_allowed(session_data: dict | None = None) -> bool:
     allowed_emails = get_settings_allowed_emails()
+    allowed_phones = {_normalize_phone_identifier(phone) for phone in get_settings_allowed_phones()}
     user_email = _get_supabase_user_email(session_data)
-    return bool((user_email and user_email in allowed_emails) or _is_supabase_admin_user(session_data))
+    user_phone = _get_supabase_user_phone(session_data)
+    return bool(
+        (user_email and user_email in allowed_emails)
+        or (user_phone and user_phone in allowed_phones)
+    )
+
+
+def build_admin_session_signature(identifier: str, expires_at: int) -> str:
+    message = f'{identifier}:{expires_at}'.encode('utf-8')
+    return hmac.new(get_admin_session_secret().encode('utf-8'), message, hashlib.sha256).hexdigest()
+
+
+def create_admin_session_payload(identifier: str) -> dict:
+    expires_at = int(time.time()) + 60 * 60 * 24
+    normalized_identifier = _normalize_phone_identifier(identifier).lower()
+    return {
+        'identifier': normalized_identifier,
+        'expires_at': expires_at,
+        'signature': build_admin_session_signature(normalized_identifier, expires_at),
+    }
+
+
+def get_admin_session() -> dict | None:
+    raw_cookie = request.cookies.get(ADMIN_SESSION_COOKIE)
+    if not raw_cookie:
+        return None
+    try:
+        decoded_cookie = base64.urlsafe_b64decode(f'{raw_cookie}=='.encode('utf-8')).decode('utf-8')
+        payload = json.loads(decoded_cookie)
+    except (ValueError, TypeError, json.JSONDecodeError, UnicodeDecodeError, binascii.Error):
+        return None
+    if not isinstance(payload, dict):
+        return None
+    identifier = _normalize_phone_identifier(payload.get('identifier')).lower()
+    expires_at = int(payload.get('expires_at') or 0)
+    signature = str(payload.get('signature') or '')
+    if not identifier or expires_at < int(time.time()):
+        return None
+    expected_signature = build_admin_session_signature(identifier, expires_at)
+    if not hmac.compare_digest(signature, expected_signature):
+        return None
+    allowed_phones = {_normalize_phone_identifier(phone).lower() for phone in get_settings_allowed_phones()}
+    allowed_emails = {email.lower() for email in get_settings_allowed_emails()}
+    if identifier not in allowed_phones and identifier not in allowed_emails:
+        return None
+    return {'identifier': identifier, 'expires_at': expires_at}
+
+
+def set_admin_session_cookie(response, identifier: str):
+    payload = create_admin_session_payload(identifier)
+    encoded_cookie = base64.urlsafe_b64encode(json.dumps(payload, separators=(',', ':')).encode('utf-8')).decode('utf-8').rstrip('=')
+    response.set_cookie(
+        ADMIN_SESSION_COOKIE,
+        encoded_cookie,
+        max_age=60 * 60 * 24,
+        httponly=True,
+        samesite='Lax',
+        path='/',
+    )
+
+
+def clear_admin_session_cookie(response):
+    response.delete_cookie(ADMIN_SESSION_COOKIE, path='/')
+
+
+def verify_admin_credentials(identifier: str, password: str) -> bool:
+    normalized_identifier = _normalize_phone_identifier(identifier).lower()
+    allowed_phones = {_normalize_phone_identifier(phone).lower() for phone in get_settings_allowed_phones()}
+    allowed_emails = {email.lower() for email in get_settings_allowed_emails()}
+    admin_password = get_admin_password()
+    if not normalized_identifier or not admin_password:
+        return False
+    if normalized_identifier not in allowed_phones and normalized_identifier not in allowed_emails:
+        return False
+    return hmac.compare_digest(str(password or ''), admin_password)
 
 
 
@@ -860,20 +1119,35 @@ def fetch_supabase_setting_records(scope: str = SUPABASE_SETTINGS_SCOPE) -> list
         return []
 
     normalized_scope = str(scope or '').strip() or SUPABASE_SETTINGS_SCOPE
+    headers = {
+        'apikey': SUPABASE_SERVICE_ROLE_KEY,
+        'Authorization': f'Bearer {SUPABASE_SERVICE_ROLE_KEY}',
+        'Content-Type': 'application/json',
+    }
+    params = {
+        'select': 'scope,setting_key,setting_value,description,updated_at',
+        'scope': f'eq.{normalized_scope}',
+        'order': 'setting_key.asc',
+    }
     response = requests.get(
         build_supabase_request_url(f'/rest/v1/{SUPABASE_SETTINGS_TABLE}'),
-        headers={
-            'apikey': SUPABASE_SERVICE_ROLE_KEY,
-            'Authorization': f'Bearer {SUPABASE_SERVICE_ROLE_KEY}',
-            'Content-Type': 'application/json',
-        },
-        params={
-            'select': 'scope,setting_key,setting_value,description,updated_at',
-            'scope': f'eq.{normalized_scope}',
-            'order': 'setting_key.asc',
-        },
+        headers=headers,
+        params=params,
         timeout=20,
     )
+    if response.status_code == 400:
+        error_text = response.text.lower()
+        if 'description' in error_text and ('column' in error_text or 'schema cache' in error_text):
+            response = requests.get(
+                build_supabase_request_url(f'/rest/v1/{SUPABASE_SETTINGS_TABLE}'),
+                headers=headers,
+                params={
+                    'select': 'scope,setting_key,setting_value,updated_at',
+                    'scope': f'eq.{normalized_scope}',
+                    'order': 'setting_key.asc',
+                },
+                timeout=20,
+            )
     response.raise_for_status()
     payload = response.json()
     if not isinstance(payload, list):
@@ -2127,14 +2401,12 @@ def create_chat_completion_session():
     return session
 
 
-def call_chat_completion(system_prompt: str, user_content, temperature: float = 0.7, timeout_seconds: int = 60):
-    client = OpenAI(
-        api_key=get_supabase_setting('OPENAI_API_KEY', get_env('OPENAI_API_KEY')),
-        base_url=get_supabase_setting('OPENAI_BASE_URL', get_env('OPENAI_BASE_URL')).rstrip('/'),
-    )
-    model = get_supabase_setting('OPENAI_MODEL', get_env('OPENAI_MODEL'))
+def _create_chat_client(api_key: str, base_url: str) -> OpenAI:
+    return OpenAI(api_key=api_key, base_url=base_url.rstrip('/'))
 
-    response = client.chat.completions.create(
+
+def _run_chat_completion(client: OpenAI, model: str, system_prompt: str, user_content, temperature: float, timeout_seconds: int):
+    return client.chat.completions.create(
         model=model,
         messages=[
             {'role': 'system', 'content': system_prompt},
@@ -2143,6 +2415,50 @@ def call_chat_completion(system_prompt: str, user_content, temperature: float = 
         temperature=temperature,
         timeout=timeout_seconds,
     )
+
+
+def call_chat_completion(system_prompt: str, user_content, temperature: float = 0.7, timeout_seconds: int = 60):
+    primary_api_key = get_supabase_setting('OPENAI_API_KEY', get_env('OPENAI_API_KEY'))
+    primary_base_url = get_supabase_setting('OPENAI_BASE_URL', get_env('OPENAI_BASE_URL'))
+    primary_model = get_supabase_setting('OPENAI_MODEL', get_env('OPENAI_MODEL'))
+
+    try:
+        response = _run_chat_completion(
+            _create_chat_client(primary_api_key, primary_base_url),
+            primary_model,
+            system_prompt,
+            user_content,
+            temperature,
+            timeout_seconds,
+        )
+        model = primary_model
+    except Exception as exc:
+        error_text = str(exc)
+        should_fallback_to_ark = 'Your request was blocked' in error_text
+        if not should_fallback_to_ark:
+            raise
+
+        fallback_api_key = get_supabase_setting('ARK_CHAT_API_KEY', get_optional_env('ARK_CHAT_API_KEY', '')) or get_supabase_setting('ARK_API_KEY', get_optional_env('ARK_API_KEY', ''))
+        fallback_base_url = get_supabase_setting('ARK_CHAT_BASE_URL', get_optional_env('ARK_CHAT_BASE_URL', '')) or get_supabase_setting('ARK_BASE_URL', get_optional_env('ARK_BASE_URL', 'https://ark.cn-beijing.volces.com/api/v3'))
+        fallback_model = get_supabase_setting('ARK_CHAT_MODEL', get_optional_env('ARK_CHAT_MODEL', 'doubao-1-5-lite-32k-250115'))
+        if not fallback_api_key:
+            raise
+
+        app.logger.warning(
+            'Primary chat completion blocked, fallback to Ark chat model=%s base_url=%s original_error=%s',
+            fallback_model,
+            fallback_base_url,
+            error_text,
+        )
+        response = _run_chat_completion(
+            _create_chat_client(fallback_api_key, fallback_base_url),
+            fallback_model,
+            system_prompt,
+            user_content,
+            temperature,
+            timeout_seconds,
+        )
+        model = fallback_model
 
     try:
         raw_response_text = response.model_dump_json(indent=2)
@@ -3478,8 +3794,8 @@ def get_ark_client() -> OpenAI:
 
 def get_mode2_client() -> OpenAI:
     return OpenAI(
-        api_key=get_supabase_setting('MODE2_OPENAI_API_KEY', get_env('MODE2_OPENAI_API_KEY')),
-        base_url=get_supabase_setting('MODE2_OPENAI_BASE_URL', get_env('MODE2_OPENAI_BASE_URL')).rstrip('/'),
+        api_key=get_supabase_setting('MODE2_OPENAI_API_KEY'),
+        base_url=get_supabase_setting('MODE2_OPENAI_BASE_URL', get_optional_env('MODE2_OPENAI_BASE_URL', 'https://ark.cn-beijing.volces.com/api/v3')).rstrip('/'),
     )
 
 
@@ -4026,12 +4342,22 @@ def guard_authentication():
     if path in PUBLIC_PATHS or any(path.startswith(prefix) for prefix in PUBLIC_PATH_PREFIXES):
         g.supabase_session = get_supabase_session()
         g.supabase_user = (g.supabase_session or {}).get('user') if g.supabase_session else None
+        g.admin_session = get_admin_session()
         return None
 
     if any(path.startswith(prefix) for prefix in PUBLIC_API_PREFIXES):
         g.supabase_session = get_supabase_session()
         g.supabase_user = (g.supabase_session or {}).get('user') if g.supabase_session else None
+        g.admin_session = get_admin_session()
         return None
+
+    if path == '/settings' or path.startswith('/api/settings'):
+        admin_session = get_admin_session()
+        if admin_session:
+            g.admin_session = admin_session
+            g.supabase_session = None
+            g.supabase_user = None
+            return None
 
     if path in PROTECTED_PAGE_PATHS or path.startswith('/generated') or path.startswith('/api/'):
         session_data = get_supabase_session()
@@ -4051,6 +4377,7 @@ def guard_authentication():
 
     g.supabase_session = get_supabase_session()
     g.supabase_user = (g.supabase_session or {}).get('user') if g.supabase_session else None
+    g.admin_session = get_admin_session()
     return None
 
 
@@ -4090,9 +4417,39 @@ def auth_session_sync_api():
 @app.post('/api/auth/session')
 def auth_session_api():
     session_data = g.get('supabase_session') or get_supabase_session()
+    admin_session = g.get('admin_session') or get_admin_session()
+    if admin_session and not session_data:
+        return jsonify({'success': True, 'authenticated': True, 'user': {'id': 'local-admin', 'phone': admin_session.get('identifier'), 'role': 'admin'}, 'session': None, 'admin': True})
     if not session_data:
         return jsonify({'success': True, 'authenticated': False, 'user': None})
     return jsonify({'success': True, 'authenticated': True, 'user': session_data.get('user'), 'session': session_data})
+
+
+@app.post('/api/admin/login')
+def admin_login_api():
+    payload = request.get_json(silent=True) or {}
+    identifier = str(payload.get('identifier') or payload.get('phone') or payload.get('email') or '').strip()
+    password = str(payload.get('password') or '')
+    if not verify_admin_credentials(identifier, password):
+        return jsonify({'success': False, 'error': '管理员账号或密码错误'}), 401
+    response = jsonify({'success': True, 'authenticated': True, 'admin': True, 'user': {'id': 'local-admin', 'phone': _normalize_phone_identifier(identifier), 'role': 'admin'}})
+    set_admin_session_cookie(response, identifier)
+    return response
+
+
+@app.post('/api/admin/logout')
+def admin_logout_api():
+    response = jsonify({'success': True})
+    clear_admin_session_cookie(response)
+    return response
+
+
+@app.post('/api/admin/session')
+def admin_session_api():
+    admin_session = g.get('admin_session') or get_admin_session()
+    if not admin_session:
+        return jsonify({'success': True, 'authenticated': False, 'admin': False})
+    return jsonify({'success': True, 'authenticated': True, 'admin': True, 'user': {'id': 'local-admin', 'phone': admin_session.get('identifier'), 'role': 'admin'}})
 
 
 @app.post('/api/pay/create')
@@ -4287,6 +4644,7 @@ def auth_logout_page():
     supabase_logout_session(session_data)
     response = redirect('/')
     clear_auth_session_cookie(response)
+    clear_admin_session_cookie(response)
     return response
 
 
@@ -4296,6 +4654,7 @@ def auth_logout_api():
     logout_ok = supabase_logout_session(session_data)
     response = jsonify({'success': True, 'logout_synced': logout_ok})
     clear_auth_session_cookie(response)
+    clear_admin_session_cookie(response)
     return response
 
 
