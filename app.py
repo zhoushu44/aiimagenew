@@ -1,5 +1,6 @@
 import base64
 import binascii
+import hashlib
 import io
 import ipaddress
 import json
@@ -11,9 +12,10 @@ import socket
 import threading
 import uuid
 import zipfile
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone
+from decimal import Decimal, InvalidOperation, ROUND_HALF_UP
 from pathlib import Path
-from urllib.parse import urljoin, urlparse
+from urllib.parse import urlencode, urljoin, urlparse
 
 import requests
 from dotenv import load_dotenv
@@ -72,7 +74,7 @@ GENERATED_SUITES_DIR = BASE_DIR / 'generated-suites'
 SUPABASE_SESSION_COOKIE = 'aiimagenew_supabase_session'
 SUPABASE_SESSION_SYNC_COOKIE = 'aiimagenew_supabase_session_sync'
 PROTECTED_PAGE_PATHS = {'/suite', '/aplus', '/fashion', '/settings'}
-PUBLIC_API_PREFIXES = ('/api/auth/', '/api/app-mode', '/api/points/rules', '/api/points/quote')
+PUBLIC_API_PREFIXES = ('/api/auth/', '/api/app-mode', '/api/points/rules', '/api/points/quote', '/api/pay/notify')
 PUBLIC_PATH_PREFIXES = ('/static/', '/generated/')
 PUBLIC_PATHS = {'/', '/logout'}
 SUPABASE_URL = (os.getenv('SUPABASE_URL') or os.getenv('SUPABASE_PROJECT_URL') or '').strip()
@@ -82,6 +84,15 @@ SUPABASE_SETTINGS_TABLE = 'api_settings'
 SUPABASE_SETTINGS_SCOPE = 'global'
 SUPABASE_USER_PROFILES_TABLE = 'user_profiles'
 SUPABASE_POINTS_TABLE = 'user_points_balances'
+SUPABASE_PAYMENTS_TABLE = 'zpay_transactions'
+ZPAY_PID = (os.getenv('ZPAY_PID') or '').strip()
+ZPAY_KEY = (os.getenv('ZPAY_KEY') or '').strip()
+ZPAY_GATEWAY = (os.getenv('ZPAY_GATEWAY') or 'https://zpayz.cn/submit.php').strip()
+ZPAY_NOTIFY_URL = (os.getenv('ZPAY_NOTIFY_URL') or '').strip()
+ZPAY_RETURN_URL = (os.getenv('ZPAY_RETURN_URL') or '').strip()
+ZPAY_DEFAULT_CHANNEL = (os.getenv('ZPAY_DEFAULT_CHANNEL') or 'alipay').strip()
+ZPAY_SUBSCRIPTION_PRODUCT_DAYS = (os.getenv('SUBSCRIPTION_PRODUCT_DAYS_JSON') or '{}').strip()
+ZPAY_SUCCESS_STATUSES = {'TRADE_SUCCESS', 'TRADE_FINISHED', 'SUCCESS'}
 
 
 def build_supabase_request_url(path: str) -> str:
@@ -297,8 +308,12 @@ def add_user_points(user_id: str, amount: int, transaction_type: str = 'refund',
     return payload if isinstance(payload, dict) else None
 
 
-def serialize_points_payload(points_row: dict | None) -> dict:
+def serialize_points_payload(points_row: dict | None, user_profile_row: dict | None = None) -> dict:
     payload = points_row if isinstance(points_row, dict) else {}
+    profile_payload = user_profile_row if isinstance(user_profile_row, dict) else {}
+    subscribe_expire = profile_payload.get('subscribe_expire')
+    subscribe_expire_at = parse_iso_datetime(subscribe_expire)
+    membership_active = bool(subscribe_expire_at and subscribe_expire_at > datetime.now(timezone.utc))
     return {
         'balance': int(payload.get('balance') or 0),
         'total_earned': int(payload.get('total_earned') or 0),
@@ -307,6 +322,8 @@ def serialize_points_payload(points_row: dict | None) -> dict:
         'last_daily_claim_at': payload.get('last_daily_claim_at'),
         'signup_bonus': POINTS_SIGNUP_BONUS,
         'daily_free': POINTS_DAILY_FREE,
+        'subscribe_expire': subscribe_expire,
+        'membership_active': membership_active,
     }
 
 
@@ -319,6 +336,356 @@ def get_user_points_balance(user_id: str) -> dict | None:
     except requests.RequestException as exc:
         app.logger.warning('Failed to fetch user points balance for %s: %s', normalized_user_id, exc)
         return None
+
+
+def parse_money_amount(value) -> Decimal:
+    try:
+        amount = Decimal(str(value)).quantize(Decimal('0.01'), rounding=ROUND_HALF_UP)
+    except (InvalidOperation, TypeError, ValueError) as exc:
+        raise ValueError('金额格式不正确') from exc
+    if amount <= Decimal('0.00'):
+        raise ValueError('金额必须大于 0')
+    return amount
+
+
+def load_subscription_days_config() -> dict[str, int]:
+    try:
+        payload = json.loads(ZPAY_SUBSCRIPTION_PRODUCT_DAYS or '{}')
+    except json.JSONDecodeError:
+        payload = {}
+    if not isinstance(payload, dict):
+        return {}
+    normalized: dict[str, int] = {}
+    for key, value in payload.items():
+        key_str = str(key or '').strip()
+        if not key_str:
+            continue
+        try:
+            normalized[key_str] = max(int(value), 0)
+        except (TypeError, ValueError):
+            continue
+    return normalized
+
+
+def get_subscription_days(product_id: str) -> int:
+    normalized_product_id = str(product_id or '').strip()
+    days = load_subscription_days_config().get(normalized_product_id, 0)
+    if days <= 0:
+        raise ValueError(f'订阅商品 {normalized_product_id} 未配置有效时长')
+    return days
+
+
+def generate_payment_order_no() -> str:
+    return f"{datetime.now(timezone.utc).strftime('%Y%m%d%H%M%S')}{uuid.uuid4().hex[:12]}"[:32]
+
+
+def _extract_single_supabase_row(payload, *, allow_empty: bool = False) -> dict | None:
+    if isinstance(payload, dict):
+        return payload
+    if isinstance(payload, list):
+        if not payload:
+            return {} if allow_empty else None
+        row = payload[0]
+        return row if isinstance(row, dict) else None
+    return None
+
+
+def fetch_latest_active_subscription(user_id: str, product_id: str) -> dict | None:
+    normalized_user_id = str(user_id or '').strip()
+    normalized_product_id = str(product_id or '').strip()
+    if not normalized_user_id or not normalized_product_id:
+        return None
+    if not SUPABASE_URL or not SUPABASE_SERVICE_ROLE_KEY:
+        raise RuntimeError('Supabase 服务配置缺失')
+    response = requests.get(
+        build_supabase_request_url(f'/rest/v1/{SUPABASE_PAYMENTS_TABLE}'),
+        headers=_build_supabase_service_headers(),
+        params={
+            'select': 'subscribe_expire',
+            'user_id': f'eq.{normalized_user_id}',
+            'product_id': f'eq.{normalized_product_id}',
+            'type': 'eq.subscription',
+            'status': 'eq.success',
+            'order': 'subscribe_expire.desc',
+            'limit': '1',
+        },
+        timeout=20,
+    )
+    response.raise_for_status()
+    payload = response.json()
+    return _extract_single_supabase_row(payload)
+
+
+def parse_iso_datetime(value: str | None) -> datetime | None:
+    raw_value = str(value or '').strip()
+    if not raw_value:
+        return None
+    try:
+        return datetime.fromisoformat(raw_value.replace('Z', '+00:00'))
+    except ValueError:
+        return None
+
+
+def compute_subscription_period(user_id: str, product_id: str) -> tuple[datetime, datetime, int]:
+    subscription_days = get_subscription_days(product_id)
+    now = datetime.now(timezone.utc)
+    latest_row = fetch_latest_active_subscription(user_id, product_id)
+    latest_expire = parse_iso_datetime((latest_row or {}).get('subscribe_expire'))
+    subscribe_start = latest_expire if latest_expire and latest_expire > now else now
+    subscribe_expire = subscribe_start + timedelta(days=subscription_days)
+    return subscribe_start, subscribe_expire, subscription_days
+
+
+def build_zpay_sign(params: dict) -> str:
+    if not ZPAY_KEY:
+        raise RuntimeError('ZPAY_KEY 未配置')
+    sign_segments: list[str] = []
+    for key in sorted(params.keys()):
+        if key in {'sign', 'sign_type'}:
+            continue
+        value = params.get(key)
+        if value is None:
+            continue
+        value_str = str(value).strip()
+        if not value_str:
+            continue
+        sign_segments.append(f'{key}={value_str}')
+    sign_source = '&'.join(sign_segments) + ZPAY_KEY
+    return hashlib.md5(sign_source.encode('utf-8')).hexdigest()
+
+
+def build_zpay_payment_url(*, out_trade_no: str, product_id: str, amount: Decimal, pay_type: str, user_id: str) -> str:
+    if not ZPAY_PID:
+        raise RuntimeError('ZPAY_PID 未配置')
+    if not ZPAY_NOTIFY_URL:
+        raise RuntimeError('ZPAY_NOTIFY_URL 未配置')
+    if not ZPAY_RETURN_URL:
+        raise RuntimeError('ZPAY_RETURN_URL 未配置')
+    payment_params = {
+        'pid': ZPAY_PID,
+        'type': ZPAY_DEFAULT_CHANNEL or 'alipay',
+        'out_trade_no': out_trade_no,
+        'notify_url': ZPAY_NOTIFY_URL,
+        'return_url': ZPAY_RETURN_URL,
+        'name': f'{product_id}支付订单',
+        'money': f'{amount:.2f}',
+        'param': json.dumps({
+            'user_id': user_id,
+            'product_id': product_id,
+            'pay_type': pay_type,
+            'out_trade_no': out_trade_no,
+        }, ensure_ascii=False, separators=(',', ':')),
+        'sign_type': 'MD5',
+    }
+    payment_params['sign'] = build_zpay_sign(payment_params)
+    return f"{ZPAY_GATEWAY}?{urlencode(payment_params)}"
+
+
+def create_payment_order_record(order_payload: dict) -> dict:
+    if not SUPABASE_URL or not SUPABASE_SERVICE_ROLE_KEY:
+        raise RuntimeError('Supabase 服务配置缺失')
+    response = requests.post(
+        build_supabase_request_url(f'/rest/v1/{SUPABASE_PAYMENTS_TABLE}'),
+        headers={
+            **_build_supabase_service_headers(),
+            'Prefer': 'return=representation',
+        },
+        json=order_payload,
+        timeout=20,
+    )
+    response.raise_for_status()
+    payload = response.json()
+    row = _extract_single_supabase_row(payload)
+    if not row:
+        raise RuntimeError('订单写入失败')
+    return row
+
+
+def fetch_payment_order_by_out_trade_no(out_trade_no: str) -> dict | None:
+    normalized_order_no = str(out_trade_no or '').strip()
+    if not normalized_order_no:
+        return None
+    response = requests.get(
+        build_supabase_request_url(f'/rest/v1/{SUPABASE_PAYMENTS_TABLE}'),
+        headers=_build_supabase_service_headers(),
+        params={
+            'select': '*',
+            'out_trade_no': f'eq.{normalized_order_no}',
+            'limit': '1',
+        },
+        timeout=20,
+    )
+    response.raise_for_status()
+    payload = response.json()
+    return _extract_single_supabase_row(payload)
+
+
+def fetch_user_profile_by_user_id(user_id: str) -> dict | None:
+    normalized_user_id = str(user_id or '').strip()
+    if not normalized_user_id:
+        return None
+    response = requests.get(
+        build_supabase_request_url(f'/rest/v1/{SUPABASE_USER_PROFILES_TABLE}'),
+        headers=_build_supabase_service_headers(),
+        params={
+            'select': '*',
+            'user_id': f'eq.{normalized_user_id}',
+            'limit': '1',
+        },
+        timeout=20,
+    )
+    response.raise_for_status()
+    payload = response.json()
+    return _extract_single_supabase_row(payload, allow_empty=True)
+
+
+def update_payment_order(out_trade_no: str, patch_payload: dict) -> dict:
+    normalized_order_no = str(out_trade_no or '').strip()
+    if not normalized_order_no:
+        raise ValueError('缺少 out_trade_no')
+    response = requests.patch(
+        build_supabase_request_url(f'/rest/v1/{SUPABASE_PAYMENTS_TABLE}'),
+        headers={
+            **_build_supabase_service_headers(),
+            'Prefer': 'return=minimal',
+        },
+        params={
+            'out_trade_no': f'eq.{normalized_order_no}',
+        },
+        json=patch_payload,
+        timeout=20,
+    )
+    if response.status_code >= 400:
+        app.logger.warning('Failed to patch payment order %s: status=%s body=%s', normalized_order_no, response.status_code, response.text)
+        response.raise_for_status()
+    row = fetch_payment_order_by_out_trade_no(normalized_order_no)
+    if not row:
+        raise RuntimeError('更新支付订单失败')
+    return row
+
+
+def upsert_user_subscription_profile(user_id: str, subscribe_expire: str | None) -> dict:
+    normalized_user_id = str(user_id or '').strip()
+    normalized_expire = str(subscribe_expire or '').strip()
+    if not normalized_user_id:
+        raise ValueError('缺少 user_id')
+    existing_row = fetch_user_profile_by_user_id(normalized_user_id)
+    if existing_row:
+        response = requests.patch(
+            build_supabase_request_url(f'/rest/v1/{SUPABASE_USER_PROFILES_TABLE}'),
+            headers={
+                **_build_supabase_service_headers(),
+                'Prefer': 'return=minimal',
+            },
+            params={'user_id': f'eq.{normalized_user_id}'},
+            json={
+                'subscribe_expire': normalized_expire or None,
+            },
+            timeout=20,
+        )
+        if response.status_code >= 400:
+            app.logger.warning('Failed to patch user subscription profile for %s: %s', normalized_user_id, response.text)
+            response.raise_for_status()
+        refreshed_row = fetch_user_profile_by_user_id(normalized_user_id)
+        return refreshed_row or {}
+    response = requests.post(
+        build_supabase_request_url(f'/rest/v1/{SUPABASE_USER_PROFILES_TABLE}'),
+        headers={
+            **_build_supabase_service_headers(),
+            'Prefer': 'return=representation',
+        },
+        json={
+            'user_id': normalized_user_id,
+            'subscribe_expire': normalized_expire or None,
+        },
+        timeout=20,
+    )
+    if response.status_code >= 400:
+        app.logger.warning('Failed to create user subscription profile for %s: %s', normalized_user_id, response.text)
+        response.raise_for_status()
+    payload = response.json()
+    row = _extract_single_supabase_row(payload, allow_empty=True)
+    return row or {}
+
+
+def verify_zpay_callback_signature(params: dict) -> bool:
+    provided_sign = str((params or {}).get('sign') or '').strip().lower()
+    if not provided_sign:
+        return False
+    return provided_sign == build_zpay_sign(params)
+
+
+def normalize_callback_payload() -> dict:
+    payload = request.values.to_dict(flat=True) if request.values else {}
+    normalized_payload = {str(key): value for key, value in payload.items()}
+    if 'trade_status' not in normalized_payload:
+        status_value = normalized_payload.get('status') or normalized_payload.get('trade_state') or normalized_payload.get('state')
+        if status_value is not None:
+            normalized_payload['trade_status'] = status_value
+    if 'money' not in normalized_payload:
+        money_value = normalized_payload.get('total_amount') or normalized_payload.get('amount') or normalized_payload.get('realmoney')
+        if money_value is not None:
+            normalized_payload['money'] = money_value
+    if 'out_trade_no' not in normalized_payload:
+        order_no = normalized_payload.get('out_order_no') or normalized_payload.get('merchant_order_no')
+        if order_no is not None:
+            normalized_payload['out_trade_no'] = order_no
+    if 'trade_no' not in normalized_payload:
+        trade_no = normalized_payload.get('oid') or normalized_payload.get('pay_no') or normalized_payload.get('transaction_id')
+        if trade_no is not None:
+            normalized_payload['trade_no'] = trade_no
+    return normalized_payload
+
+
+def is_order_success(order_row: dict | None) -> bool:
+    return str((order_row or {}).get('status') or '').strip().lower() == 'success'
+
+
+def validate_callback_amount(order_row: dict, callback_money: str) -> None:
+    order_amount = parse_money_amount((order_row or {}).get('amount'))
+    paid_amount = parse_money_amount(callback_money)
+    if order_amount != paid_amount:
+        raise ValueError('订单金额不匹配')
+
+
+def process_success_payment(order_row: dict, callback_trade_no: str) -> dict:
+    out_trade_no = str((order_row or {}).get('out_trade_no') or '').strip()
+    if not out_trade_no:
+        raise ValueError('订单号缺失')
+    patch_payload = {
+        'status': 'success',
+        'trade_no': str(callback_trade_no or '').strip() or None,
+    }
+    updated_row = update_payment_order(out_trade_no, patch_payload)
+
+    if str((updated_row or {}).get('type') or '').strip().lower() == 'subscription':
+        user_id = str((updated_row or {}).get('user_id') or '').strip()
+        subscribe_expire = str((updated_row or {}).get('subscribe_expire') or '').strip()
+        if user_id and subscribe_expire:
+            try:
+                upsert_user_subscription_profile(user_id, subscribe_expire)
+            except requests.RequestException:
+                app.logger.exception('Failed to sync subscription profile after payment success: out_trade_no=%s user_id=%s', out_trade_no, user_id)
+    return updated_row
+
+
+def serialize_payment_order(order_row: dict, *, pay_type: str, subscription_days: int | None = None) -> dict:
+    return {
+        'id': order_row.get('id'),
+        'out_trade_no': order_row.get('out_trade_no'),
+        'user_id': order_row.get('user_id'),
+        'product_id': order_row.get('product_id'),
+        'amount': str(order_row.get('amount') or ''),
+        'status': str(order_row.get('status') or ''),
+        'type': pay_type,
+        'db_type': str(order_row.get('type') or ''),
+        'trade_no': order_row.get('trade_no'),
+        'subscribe_start': order_row.get('subscribe_start'),
+        'subscribe_expire': order_row.get('subscribe_expire'),
+        'created_at': order_row.get('created_at'),
+        'updated_at': order_row.get('updated_at'),
+        'subscription_days': subscription_days,
+    }
 
 
 def get_env_csv(name: str) -> set[str]:
@@ -3722,6 +4089,131 @@ def auth_session_api():
     return jsonify({'success': True, 'authenticated': True, 'user': session_data.get('user'), 'session': session_data})
 
 
+@app.post('/api/pay/create')
+def create_pay_order_api():
+    session_data = g.get('supabase_session') or get_supabase_session()
+    user = session_data.get('user') if isinstance(session_data, dict) else None
+    user_id = str((user or {}).get('id') or '').strip()
+    if not user_id:
+        return jsonify({'error': 'UNAUTHORIZED', 'message': '未登录或登录状态已失效'}), 401
+
+    try:
+        payload = request.get_json(silent=True) or {}
+        request_user_id = str(payload.get('user_id') or '').strip()
+        product_id = str(payload.get('product_id') or '').strip()
+        pay_type = str(payload.get('pay_type') or '').strip()
+        amount = parse_money_amount(payload.get('amount'))
+
+        if not request_user_id:
+            return jsonify({'error': 'MISSING_USER_ID', 'message': '缺少 user_id'}), 400
+        if request_user_id != user_id:
+            return jsonify({'error': 'USER_MISMATCH', 'message': 'user_id 与当前登录用户不匹配'}), 403
+        if not product_id:
+            return jsonify({'error': 'MISSING_PRODUCT_ID', 'message': '缺少 product_id'}), 400
+        if pay_type not in {'one_time', 'subscribe'}:
+            return jsonify({'error': 'INVALID_PAY_TYPE', 'message': 'pay_type 只能是 one_time 或 subscribe'}), 400
+
+        out_trade_no = generate_payment_order_no()
+        db_type = 'one_time'
+        subscribe_start = None
+        subscribe_expire = None
+        subscription_days = None
+
+        if pay_type == 'subscribe':
+            db_type = 'subscription'
+            subscribe_start_dt, subscribe_expire_dt, subscription_days = compute_subscription_period(user_id, product_id)
+            subscribe_start = subscribe_start_dt.astimezone(timezone.utc).isoformat()
+            subscribe_expire = subscribe_expire_dt.astimezone(timezone.utc).isoformat()
+
+        order_payload = {
+            'out_trade_no': out_trade_no,
+            'user_id': user_id,
+            'amount': f'{amount:.2f}',
+            'status': 'pending',
+            'type': db_type,
+            'product_id': product_id,
+            'trade_no': None,
+            'subscribe_start': subscribe_start,
+            'subscribe_expire': subscribe_expire,
+        }
+        order_row = create_payment_order_record(order_payload)
+        payment_url = build_zpay_payment_url(
+            out_trade_no=out_trade_no,
+            product_id=product_id,
+            amount=amount,
+            pay_type=pay_type,
+            user_id=user_id,
+        )
+        return jsonify({
+            'success': True,
+            'message': '支付订单创建成功',
+            'data': {
+                'payment_url': payment_url,
+                'order': serialize_payment_order(
+                    order_row,
+                    pay_type=pay_type,
+                    subscription_days=subscription_days,
+                ),
+            },
+        })
+    except ValueError as exc:
+        return jsonify({'error': 'VALIDATION_ERROR', 'message': str(exc)}), 400
+    except requests.RequestException as exc:
+        app.logger.exception('Failed to create payment order')
+        return jsonify({'error': 'SUPABASE_REQUEST_FAILED', 'message': f'支付订单创建失败：{exc}'}), 502
+    except RuntimeError as exc:
+        return jsonify({'error': 'PAYMENT_CONFIG_ERROR', 'message': str(exc)}), 500
+    except Exception as exc:
+        app.logger.exception('Unexpected error while creating payment order')
+        return jsonify({'error': 'CREATE_PAY_ORDER_FAILED', 'message': f'创建支付订单失败：{exc}'}), 500
+
+
+@app.route('/api/pay/notify', methods=['GET', 'POST'])
+def pay_notify_api():
+    try:
+        payload = normalize_callback_payload()
+        out_trade_no = str(payload.get('out_trade_no') or '').strip()
+        callback_trade_no = str(payload.get('trade_no') or '').strip()
+        callback_money = str(payload.get('money') or '').strip()
+        trade_status = str(payload.get('trade_status') or '').strip().upper()
+
+        app.logger.warning('ZPAY notify received: method=%s out_trade_no=%s trade_no=%s trade_status=%s payload=%s', request.method, out_trade_no, callback_trade_no, trade_status, payload)
+
+        if not verify_zpay_callback_signature(payload):
+            app.logger.warning('ZPAY notify invalid sign: out_trade_no=%s payload=%s', out_trade_no, payload)
+            return 'fail', 400
+        if not out_trade_no:
+            app.logger.warning('ZPAY notify missing out_trade_no: payload=%s', payload)
+            return 'fail', 400
+        if trade_status not in ZPAY_SUCCESS_STATUSES:
+            app.logger.warning('ZPAY notify invalid trade_status: out_trade_no=%s trade_status=%s payload=%s', out_trade_no, trade_status, payload)
+            return 'fail', 400
+
+        order_row = fetch_payment_order_by_out_trade_no(out_trade_no)
+        if not order_row:
+            app.logger.warning('ZPAY notify order not found: out_trade_no=%s payload=%s', out_trade_no, payload)
+            return 'fail', 404
+        if is_order_success(order_row):
+            return 'success', 200
+
+        validate_callback_amount(order_row, callback_money)
+        process_success_payment(order_row, callback_trade_no)
+        app.logger.warning('ZPAY notify processed success: out_trade_no=%s trade_no=%s', out_trade_no, callback_trade_no)
+        return 'success', 200
+    except ValueError as exc:
+        app.logger.warning('ZPAY notify validation error: %s; payload=%s', exc, request.values.to_dict(flat=True) if request.values else {})
+        return 'fail', 400
+    except requests.RequestException as exc:
+        app.logger.exception('Failed to process payment callback')
+        return 'fail', 502
+    except RuntimeError as exc:
+        app.logger.warning('ZPAY notify config error: %s', exc)
+        return 'fail', 500
+    except Exception as exc:
+        app.logger.exception('Unexpected error while processing payment callback')
+        return 'fail', 500
+
+
 @app.post('/api/auth/login')
 def auth_login():
     try:
@@ -3909,11 +4401,12 @@ def points_balance_api():
         if not user_id:
             return jsonify({'success': False, 'error': '请先登录'}), 401
         points_row = ensure_user_points_balance(user_id) or get_user_points_balance(user_id) or {}
+        user_profile_row = fetch_user_profile_by_user_id(user_id) or {}
         return jsonify({
             'success': True,
             'points': {
                 'user_id': user_id,
-                **serialize_points_payload(points_row),
+                **serialize_points_payload(points_row, user_profile_row),
             },
         })
     except requests.RequestException as exc:

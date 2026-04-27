@@ -1,0 +1,12 @@
+serverAddr = "8.163.52.51"
+serverPort = 7000
+
+auth.method = "token"
+auth.token = "60d8a83c544e6168db"
+
+[[proxies]]
+name = "aiimagenew-pay"
+type = "tcp"
+localIP = "127.0.0.1"
+localPort = 5078
+remotePort = 60009

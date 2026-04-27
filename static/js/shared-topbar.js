@@ -94,6 +94,10 @@
     vipPlans: [],
     vipPlansLoaded: false,
     vipPlansPromise: null,
+    vipPayBusy: false,
+    vipCheckoutPending: false,
+    vipCheckoutTrigger: null,
+    vipCheckoutMessage: '',
     loading: false,
     session: null,
     points: null,
@@ -930,29 +934,111 @@
 
       .shared-account-panel__membership {
         overflow: hidden;
-        background: linear-gradient(180deg, #fde7d4 0%, #fdebdc 76%, #fff3e8 100%);
-        border: 1px solid rgba(251, 146, 60, 0.14);
-        border-radius: 7px;
+        position: relative;
+        background:
+          radial-gradient(circle at 86% 18%, rgba(255, 255, 255, 0.58), transparent 22%),
+          linear-gradient(135deg, #fff7ef 0%, #f7edf8 58%, #eef2ff 100%);
+        border: 1px solid rgba(216, 180, 144, 0.28);
+        border-radius: 14px;
+        box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.56);
+      }
+
+      .shared-account-panel__membership::after {
+        content: '';
+        position: absolute;
+        right: -18px;
+        top: -14px;
+        width: 112px;
+        height: 112px;
+        border-radius: 28px;
+        background: radial-gradient(circle at 32% 30%, rgba(255, 255, 255, 0.82), rgba(207, 222, 255, 0.2) 58%, rgba(207, 222, 255, 0) 72%);
+        opacity: 0.8;
+        pointer-events: none;
+        transform: rotate(-18deg);
       }
 
       .shared-account-panel__membership-head {
-        padding: 16px 12px 14px;
-        text-align: center;
+        position: relative;
+        z-index: 1;
+        padding: 14px 14px 12px;
+        text-align: left;
         display: grid;
-        gap: 5px;
+        gap: 7px;
+        justify-items: start;
+        min-height: 122px;
+        box-sizing: border-box;
+        align-content: center;
+      }
+
+      .shared-account-panel__membership-badge {
+        display: inline-flex;
+        align-items: center;
+        min-height: 24px;
+        padding: 0 10px;
+        border-radius: 999px;
+        background: rgba(91, 52, 30, 0.08);
+        color: rgba(91, 52, 30, 0.84);
+        font-size: 11px;
+        font-weight: 600;
+        letter-spacing: 0.08em;
+        text-transform: uppercase;
+        max-width: 100%;
       }
 
       .shared-account-panel__membership-title {
         margin: 0;
-        color: #5b341e;
+        color: #2f1e15;
         font-family: var(--font-display);
-        font-size: 14px;
-        line-height: 1.1;
-        letter-spacing: -0.02em;
+        font-size: 16px;
+        line-height: 1.18;
+        letter-spacing: -0.03em;
+        max-width: min(160px, 100%);
+        word-break: break-word;
       }
 
       .shared-account-panel__membership-desc {
-        color: rgba(91, 52, 30, 0.65);
+        color: rgba(70, 46, 32, 0.78);
+        font-size: 12px;
+        line-height: 1.45;
+        max-width: min(156px, 100%);
+        word-break: break-word;
+        overflow-wrap: anywhere;
+      }
+
+      .shared-account-panel__membership-meta {
+        display: none;
+        align-items: center;
+        min-height: 24px;
+        padding: 0 10px;
+        border-radius: 999px;
+        background: rgba(43, 38, 34, 0.08);
+        color: #3f342b;
+        font-size: 11px;
+        font-weight: 600;
+        line-height: 1;
+        max-width: 100%;
+        white-space: nowrap;
+        overflow: hidden;
+        text-overflow: ellipsis;
+      }
+
+      .shared-account-panel__membership.is-active .shared-account-panel__membership-badge {
+        background: rgba(25, 120, 86, 0.12);
+        color: #0f7a56;
+      }
+
+      .shared-account-panel__membership.is-active .shared-account-panel__membership-title {
+        font-size: 20px;
+        color: #20110b;
+      }
+
+      .shared-account-panel__membership.is-active .shared-account-panel__membership-desc {
+        font-size: 13px;
+        color: rgba(47, 30, 21, 0.84);
+      }
+
+      .shared-account-panel__membership.is-active .shared-account-panel__membership-meta {
+        display: inline-flex;
       }
 
       .shared-account-panel__membership-row {
@@ -961,10 +1047,10 @@
       }
 
       .shared-account-panel__membership .btn.primary {
-        margin: 3px 16px 14px;
+        margin: 0 14px 14px;
         min-height: 34px;
         border: 0;
-        border-radius: 6px;
+        border-radius: 999px;
         background: #2b2622;
         color: #ffe5cd;
         font-family: var(--font-display);
@@ -1670,66 +1756,28 @@
       .shared-vip-preview-modal__paybox {
         position: relative;
         display: grid;
-        grid-template-columns: 128px minmax(0, 1fr);
-        align-items: center;
-        gap: 18px;
+        justify-items: center;
+        gap: 16px;
         min-height: 172px;
-        padding: 18px 22px;
+        padding: 24px 22px;
         border-radius: 22px;
         background: linear-gradient(180deg, rgba(24, 24, 24, 0.98), rgba(18, 18, 18, 0.99));
         border: 1px solid rgba(255, 255, 255, 0.06);
         box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.04);
         overflow: hidden;
+        text-align: center;
       }
 
       .shared-vip-preview-modal__paybox::before {
         content: none;
       }
 
-      .shared-vip-preview-modal__qr {
-        position: relative;
-        left: -25px;
-        width: 155px;
-        height: 155px;
-        border-radius: 14px;
-        background:
-          linear-gradient(90deg, rgba(255, 255, 255, 0.96) 8%, transparent 8% 12%, rgba(255, 255, 255, 0.96) 12% 20%, transparent 20% 24%, rgba(255, 255, 255, 0.96) 24% 32%, transparent 32% 36%, rgba(255, 255, 255, 0.96) 36% 44%, transparent 44% 48%, rgba(255, 255, 255, 0.96) 48% 56%, transparent 56% 60%, rgba(255, 255, 255, 0.96) 60% 68%, transparent 68% 72%, rgba(255, 255, 255, 0.96) 72% 80%, transparent 80% 84%, rgba(255, 255, 255, 0.96) 84% 92%, transparent 92%),
-          linear-gradient(rgba(255, 255, 255, 0.98) 8%, transparent 8% 12%, rgba(255, 255, 255, 0.98) 12% 20%, transparent 20% 24%, rgba(255, 255, 255, 0.98) 24% 32%, transparent 32% 36%, rgba(255, 255, 255, 0.98) 36% 44%, transparent 44% 48%, rgba(255, 255, 255, 0.98) 48% 56%, transparent 56% 60%, rgba(255, 255, 255, 0.98) 60% 68%, transparent 68% 72%, rgba(255, 255, 255, 0.98) 72% 80%, transparent 80% 84%, rgba(255, 255, 255, 0.98) 84% 92%, transparent 92%),
-          #fff;
-        box-shadow: inset 0 0 0 8px rgba(255, 255, 255, 0.98);
-        flex: 0 0 auto;
-      }
-
-      .shared-vip-preview-modal__qr::before,
-      .shared-vip-preview-modal__qr::after {
-        content: '';
-        position: absolute;
-        width: 25px;
-        height: 25px;
-        border: 5px solid #111;
-        border-radius: 6px;
-        background: #fff;
-      }
-
-      .shared-vip-preview-modal__qr::before {
-        top: 10px;
-        left: 10px;
-      }
-
-      .shared-vip-preview-modal__qr::after {
-        right: 10px;
-        bottom: 10px;
-      }
-
-      .shared-vip-preview-modal__qr::marker {
-        content: '';
-      }
-
       .shared-vip-preview-modal__payinfo {
         display: grid;
-        align-content: center;
-        gap: 8px;
+        justify-items: center;
+        gap: 10px;
         min-width: 0;
+        width: 100%;
       }
 
       .shared-vip-preview-modal__plan-points {
@@ -1741,6 +1789,8 @@
       .shared-vip-preview-modal__paylabel {
         display: flex;
         align-items: baseline;
+        justify-content: center;
+        flex-wrap: wrap;
         gap: 4px;
         color: #ffffff;
         font-size: 17px;
@@ -1762,16 +1812,10 @@
         color: #ffffff;
       }
 
-      .shared-vip-preview-modal__paylabel-trial {
-        margin-left: 8px;
-        color: rgba(255, 232, 204, 0.8);
-        font-size: 12px;
-        font-weight: 600;
-      }
-
       .shared-vip-preview-modal__paymethod {
         display: inline-flex;
         align-items: center;
+        justify-content: center;
         gap: 9px;
         min-height: 22px;
         color: #f7f7f7;
@@ -1803,6 +1847,7 @@
         color: rgba(255, 255, 255, 0.72);
         font-size: 12px;
         line-height: 1.45;
+        text-align: center;
       }
 
       .shared-vip-preview-modal__agreement-link {
@@ -1812,6 +1857,7 @@
       .shared-vip-preview-modal__payextras {
         display: flex;
         align-items: center;
+        justify-content: center;
         gap: 10px;
         margin-top: 6px;
         color: rgba(216, 185, 148, 0.96);
@@ -1842,14 +1888,15 @@
 
       .shared-vip-preview-modal__footer {
         display: grid;
-        grid-template-columns: auto 1fr;
-        align-items: center;
-        gap: 14px;
+        justify-items: center;
+        gap: 12px;
         margin-top: 8px;
+        width: 100%;
       }
 
       .shared-vip-preview-modal__action {
         min-height: 46px;
+        min-width: min(100%, 220px);
         border-radius: 14px;
         padding: 0 18px;
         background: linear-gradient(135deg, #ffe6c8, #f6bb75 56%, #efaa60);
@@ -1859,6 +1906,32 @@
         box-shadow:
           inset 0 1px 0 rgba(255, 255, 255, 0.22),
           0 8px 18px rgba(164, 103, 43, 0.18);
+      }
+
+      .shared-vip-preview-modal__action:disabled {
+        cursor: not-allowed;
+        opacity: 0.72;
+        transform: none;
+      }
+
+      .shared-vip-preview-modal__action.is-loading {
+        opacity: 0.82;
+      }
+
+      .shared-vip-preview-modal__action-status {
+        min-height: 18px;
+        color: rgba(255, 255, 255, 0.72);
+        font-size: 12px;
+        line-height: 1.5;
+        text-align: center;
+      }
+
+      .shared-vip-preview-modal__action-status.is-error {
+        color: #fca5a5;
+      }
+
+      .shared-vip-preview-modal__action-status.is-success {
+        color: #86efac;
       }
 
       .shared-vip-preview-modal__close {
@@ -1897,15 +1970,10 @@
         }
 
         .shared-vip-preview-modal__paybox {
-          grid-template-columns: 112px minmax(0, 1fr);
-          gap: 16px;
+          justify-items: center;
+          gap: 14px;
           min-height: 156px;
           padding: 16px 18px;
-        }
-
-        .shared-vip-preview-modal__qr {
-          width: 104px;
-          height: 104px;
         }
       }
 
@@ -1927,9 +1995,8 @@
         }
 
         .shared-vip-preview-modal__paybox {
-          grid-template-columns: 1fr;
           justify-items: center;
-          text-align: left;
+          text-align: center;
         }
 
         .shared-vip-preview-modal__payinfo {
@@ -1937,7 +2004,7 @@
         }
 
         .shared-vip-preview-modal__footer {
-          grid-template-columns: 1fr;
+          justify-items: center;
         }
       }
 
@@ -2011,8 +2078,10 @@
 
             <section class="shared-account-panel__membership">
               <div class="shared-account-panel__membership-head">
-                <h3 class="shared-account-panel__membership-title">会员套餐和价格</h3>
-                <div class="shared-account-panel__membership-desc">登录后即可查看账号权益、同步会话和积分余额。</div>
+                <span class="shared-account-panel__membership-badge" id="shared-account-panel-membership-badge">会员中心</span>
+                <h3 class="shared-account-panel__membership-title" id="shared-account-panel-membership-title">会员套餐和价格</h3>
+                <div class="shared-account-panel__membership-desc" id="shared-account-panel-membership-desc">登录后即可查看账号权益、同步会话和积分余额。</div>
+                <div class="shared-account-panel__membership-meta" id="shared-account-panel-membership-meta"></div>
               </div>
               <div class="shared-account-panel__membership-row">
                 <button class="btn primary" type="button" data-account-panel-login id="shared-account-panel-login-link">开通VIP</button>
@@ -2148,9 +2217,8 @@
           <div class="shared-vip-preview-modal__pricing"></div>
           <div class="shared-vip-preview-modal__detail-card">
             <div class="shared-vip-preview-modal__paybox">
-              <div class="shared-vip-preview-modal__qr"></div>
               <div class="shared-vip-preview-modal__payinfo">
-                <div class="shared-vip-preview-modal__paylabel">支付：<span class="shared-vip-preview-modal__paycurrency">¥</span><strong>1.1</strong><span class="shared-vip-preview-modal__paylabel-trial">试用 7 天</span></div>
+                <div class="shared-vip-preview-modal__paylabel">支付：<span class="shared-vip-preview-modal__paycurrency">¥</span><strong>1.1</strong></div>
                 <div class="shared-vip-preview-modal__paymethod">
                   <span class="shared-vip-preview-modal__paymethod-icon"></span>
                   <span>支付宝扫码开通</span>
@@ -2158,6 +2226,7 @@
                 <div class="shared-vip-preview-modal__agreement">支付即视为您已同意<span class="shared-vip-preview-modal__agreement-link">《会员服务协议》</span></div>
                 <div class="shared-vip-preview-modal__footer">
                   <button class="shared-vip-preview-modal__action" type="button" data-vip-preview-open-login>立即开通</button>
+                  <div class="shared-vip-preview-modal__action-status" data-vip-preview-status aria-live="polite"></div>
                 </div>
               </div>
             </div>
@@ -2201,12 +2270,7 @@
 
     modal.querySelector('[data-vip-preview-open-login]')?.addEventListener('click', (event) => {
       event.preventDefault();
-      if (accountState.session) {
-        closeVipPreviewModal();
-        return;
-      }
-      closeVipPreviewModal({ restoreFocus: false });
-      openLoginModal(event.currentTarget);
+      submitVipCheckout(event.currentTarget);
     });
 
     return modal;
@@ -2275,10 +2339,147 @@
       payStrong.textContent = selectedPlan.price;
     }
 
-    const trialText = modal.querySelector('.shared-vip-preview-modal__paylabel-trial');
-    if (trialText) {
-      trialText.textContent = selectedPlan.trial || '';
-      trialText.hidden = !selectedPlan.trial;
+    renderVipCheckoutAction();
+  }
+
+  function getSelectedVipPlan() {
+    const plans = getVipPlanList();
+    return plans.find((item) => item.key === accountState.vipSelectedPlan) || plans[0] || null;
+  }
+
+  function getVipPlanPayType(plan) {
+    const normalizedKey = String(plan?.key || '').trim().toLowerCase();
+    return normalizedKey === 'plan_1' ? 'one_time' : 'subscribe';
+  }
+
+  function setVipCheckoutStatus(message, type = '') {
+    accountState.vipCheckoutMessage = message || '';
+    const statusEl = accountState.vipModal?.querySelector('[data-vip-preview-status]');
+    if (!statusEl) {
+      return;
+    }
+    statusEl.textContent = accountState.vipCheckoutMessage;
+    statusEl.className = `shared-vip-preview-modal__action-status${type ? ` is-${type}` : ''}`;
+  }
+
+  function renderVipCheckoutAction() {
+    const modal = accountState.vipModal;
+    if (!modal) {
+      return;
+    }
+    const button = modal.querySelector('[data-vip-preview-open-login]');
+    if (!(button instanceof HTMLButtonElement)) {
+      return;
+    }
+    const plan = getSelectedVipPlan();
+    const payType = getVipPlanPayType(plan);
+    const idleText = payType === 'subscribe' ? '立即订阅' : '立即购买';
+    button.disabled = Boolean(accountState.vipPayBusy);
+    button.classList.toggle('is-loading', Boolean(accountState.vipPayBusy));
+    button.textContent = accountState.vipPayBusy ? '跳转支付中...' : idleText;
+    const statusEl = modal.querySelector('[data-vip-preview-status]');
+    if (statusEl) {
+      statusEl.textContent = accountState.vipCheckoutMessage || '';
+    }
+  }
+
+  async function ensureVipCheckoutSession() {
+    if (accountState.session) {
+      return accountState.session;
+    }
+    const syncedSession = await syncServerSessionFromBrowser();
+    return syncedSession || null;
+  }
+
+  async function submitVipCheckout(trigger) {
+    if (accountState.vipPayBusy) {
+      return;
+    }
+    accountState.vipCheckoutTrigger = trigger || document.activeElement || null;
+    const session = await ensureVipCheckoutSession();
+    if (!session) {
+      accountState.vipCheckoutPending = true;
+      setVipCheckoutStatus('请先登录后再继续开通会员', 'error');
+      closeVipPreviewModal({ restoreFocus: false });
+      openLoginModal(accountState.vipCheckoutTrigger);
+      return;
+    }
+    const plan = getSelectedVipPlan();
+    if (!plan) {
+      setVipCheckoutStatus('未找到可用套餐，请刷新后重试', 'error');
+      return;
+    }
+    const userId = getSessionUserUid(session);
+    if (!userId) {
+      accountState.vipCheckoutPending = true;
+      setVipCheckoutStatus('登录状态已失效，请重新登录后重试', 'error');
+      closeVipPreviewModal({ restoreFocus: false });
+      openLoginModal(accountState.vipCheckoutTrigger);
+      return;
+    }
+
+    accountState.vipPayBusy = true;
+    setVipCheckoutStatus('正在创建支付订单，请稍候...');
+    renderVipCheckoutAction();
+
+    try {
+      let response = await fetch('/api/pay/create', {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          Accept: 'application/json',
+        },
+        credentials: 'same-origin',
+        body: JSON.stringify({
+          user_id: userId,
+          product_id: String(plan.key || '').trim(),
+          amount: String(plan.price || '').trim(),
+          pay_type: getVipPlanPayType(plan),
+        }),
+      });
+      let result = await response.json().catch(() => ({}));
+
+      if (response.status === 401) {
+        const refreshedSession = await syncServerSessionFromBrowser();
+        if (!refreshedSession || !getSessionUserUid(refreshedSession)) {
+          throw new Error(result?.message || '登录状态已失效，请重新登录');
+        }
+        response = await fetch('/api/pay/create', {
+          method: 'POST',
+          headers: {
+            'Content-Type': 'application/json',
+            Accept: 'application/json',
+          },
+          credentials: 'same-origin',
+          body: JSON.stringify({
+            user_id: getSessionUserUid(refreshedSession),
+            product_id: String(plan.key || '').trim(),
+            amount: String(plan.price || '').trim(),
+            pay_type: getVipPlanPayType(plan),
+          }),
+        });
+        result = await response.json().catch(() => ({}));
+      }
+
+      if (!response.ok || !result?.success) {
+        throw new Error(result?.message || result?.error || '创建支付订单失败，请稍后重试');
+      }
+
+      const paymentUrl = String(result?.data?.payment_url || '').trim();
+      if (!paymentUrl) {
+        throw new Error('支付链接为空，请稍后重试');
+      }
+
+      accountState.vipCheckoutPending = false;
+      setVipCheckoutStatus('订单创建成功，正在跳转支付...', 'success');
+      renderVipCheckoutAction();
+      window.location.href = paymentUrl;
+    } catch (error) {
+      setVipCheckoutStatus(error?.message || '创建支付订单失败，请稍后重试', 'error');
+      renderVipCheckoutAction();
+    } finally {
+      accountState.vipPayBusy = false;
+      renderVipCheckoutAction();
     }
   }
 
@@ -2707,9 +2908,16 @@
     renderAccountPanel();
     closeLoginModal();
     closeAccountPanel();
+    if (accountState.vipCheckoutPending) {
+      accountState.vipCheckoutPending = false;
+      window.alert(message);
+      await openVipPreviewModal(accountState.vipCheckoutTrigger || null);
+      await submitVipCheckout(accountState.vipCheckoutTrigger || null);
+      return;
+    }
     window.alert(message);
     const next = new URLSearchParams(window.location.search).get('next');
-    const target = next && next.startsWith('/') && !next.startsWith('//') && !next.startsWith('/api/') ? next : '/suite';
+    const target = next && next.startsWith('/') && !next.startsWith('//') && !next.startsWith('/api/') ? next : '/';
     window.location.href = target;
   }
 
@@ -3218,6 +3426,84 @@
     }
   }
 
+  function formatMembershipExpiryLabel(value) {
+    const rawValue = String(value || '').trim();
+    if (!rawValue) {
+      return '';
+    }
+    const expireDate = new Date(rawValue);
+    if (Number.isNaN(expireDate.getTime())) {
+      return '';
+    }
+    const now = new Date();
+    const diffMs = expireDate.getTime() - now.getTime();
+    const diffDays = Math.max(0, Math.ceil(diffMs / 86400000));
+    if (diffDays <= 0) {
+      return '会员已到期，可重新开通';
+    }
+    return `会员已开通，剩余 ${diffDays} 天`;
+  }
+
+  function getMembershipPlanLabel(points) {
+    if (!points?.membership_active) {
+      return '会员套餐和价格';
+    }
+    return '个人版';
+  }
+
+  function getMembershipMetaLabel(points) {
+    if (!points?.membership_active) {
+      return '支持高清生成 · 积分加速';
+    }
+    const rawValue = String(points?.subscribe_expire || '').trim();
+    if (!rawValue) {
+      return '会员权益已生效';
+    }
+    const expireDate = new Date(rawValue);
+    if (Number.isNaN(expireDate.getTime())) {
+      return '会员权益已生效';
+    }
+    const month = String(expireDate.getMonth() + 1).padStart(2, '0');
+    const day = String(expireDate.getDate()).padStart(2, '0');
+    return `有效期至 ${month}-${day}`;
+  }
+
+  function renderMembershipCard() {
+    if (!accountState.panel) {
+      return;
+    }
+    const membershipCard = accountState.panel.querySelector('.shared-account-panel__membership');
+    const badgeEl = document.getElementById('shared-account-panel-membership-badge');
+    const titleEl = document.getElementById('shared-account-panel-membership-title');
+    const descEl = document.getElementById('shared-account-panel-membership-desc');
+    const metaEl = document.getElementById('shared-account-panel-membership-meta');
+    const actionEl = document.getElementById('shared-account-panel-login-link');
+    const isLoggedIn = Boolean(accountState.session);
+    const membershipActive = Boolean(isLoggedIn && accountState.points?.membership_active && accountState.points?.subscribe_expire);
+
+    membershipCard?.classList.toggle('is-active', membershipActive);
+
+    if (badgeEl) {
+      badgeEl.textContent = membershipActive ? '已开通会员' : '会员中心';
+    }
+    if (titleEl) {
+      titleEl.textContent = membershipActive ? getMembershipPlanLabel(accountState.points) : '会员套餐和价格';
+    }
+    if (descEl) {
+      descEl.textContent = membershipActive
+        ? (formatMembershipExpiryLabel(accountState.points?.subscribe_expire) || '会员权益已生效')
+        : (isLoggedIn ? '开通后即可查看套餐版本、权益时长和积分余额。' : '登录后即可查看账号权益、同步会话和积分余额。');
+    }
+    if (metaEl) {
+      metaEl.textContent = getMembershipMetaLabel(accountState.points);
+      metaEl.hidden = !membershipActive;
+    }
+    if (actionEl) {
+      actionEl.hidden = membershipActive;
+      actionEl.textContent = isLoggedIn ? '立即开通' : '登录后开通';
+    }
+  }
+
   function renderAccountPanel() {
     if (!accountState.panel) {
       return;
@@ -3236,6 +3522,7 @@
     accountState.meta?.classList.toggle('is-primary', !isLoggedIn);
     setText(accountState.note, isLoggedIn ? `用户UID：${userUid || '暂无 UID'}` : '您还未开通会员');
     setText(accountState.pointsValue, String(Number.isFinite(pointsBalance) ? pointsBalance : 0));
+    renderMembershipCard();
 
     if (!accountState.claimBusy) {
       if (!isLoggedIn) {
