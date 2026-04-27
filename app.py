@@ -40,13 +40,6 @@ def disable_static_file_cache(response):
     return response
 
 
-# 执行SQL脚本的路由
-@app.route('/api/execute-sql', methods=['GET'])
-def execute_sql():
-    # 直接返回成功消息，因为我们将在Supabase控制台手动执行SQL
-    return jsonify({'success': True, 'message': '请在Supabase控制台手动执行SQL脚本创建表'})
-
-
 def get_first_env(names: list[str]) -> str:
     for name in names:
         value = os.getenv(name, '').strip()
@@ -3626,6 +3619,19 @@ def call_mode2_image_edit(client: OpenAI, prompt: str, image_payloads, ratio: st
     return pick_generated_image_item(response), model
 
 
+def call_mode2_text2image(client: OpenAI, prompt: str, ratio: str, resolution: str):
+    model = get_supabase_setting('MODE2_TEXT2IMAGE_MODEL', get_optional_env('MODE2_TEXT2IMAGE_MODEL', 'doubao-seedream-5-0-260128'))
+    request_payload = {
+        'model': model,
+        'prompt': prompt,
+        'size': resolve_mode2_image_size(ratio, resolution),
+        'response_format': 'b64_json',
+    }
+    app.logger.warning('Mode2 text2image request size=%s model=%s', request_payload['size'], model)
+    response = client.images.generate(**request_payload)
+    return pick_generated_image_item(response), model
+
+
 def call_app_mode_image_generation(client: OpenAI, prompt: str, image_payloads, image_size_ratio: str, text_type: str, country: str, product_json=None, image_type: str = '', plan_item=None, all_plan_types=None, max_images: int = 1):
     if get_app_mode() == 'mode2':
         mode2_client = get_mode2_client()
@@ -4300,6 +4306,15 @@ def index():
 
 def render_html_page(filename: str):
     html = (BASE_DIR / filename).read_text(encoding='utf-8')
+    runtime_config = {
+        'supabaseUrl': SUPABASE_URL,
+        'supabaseAnonKey': SUPABASE_ANON_KEY,
+    }
+    config_script = f'<script>window.AI_IMAGE_CONFIG = {json.dumps(runtime_config, ensure_ascii=False)};</script>'
+    if '</head>' in html:
+        html = html.replace('</head>', f'{config_script}\n</head>', 1)
+    else:
+        html = f'{config_script}\n{html}'
     if g.get('auth_required'):
         html = re.sub(r'<body([^>]*)>', r'<body\1 data-auth-required="true">', html, count=1)
     response = make_response(html)

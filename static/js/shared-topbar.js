@@ -81,8 +81,9 @@
     },
   ];
 
-  const SUPABASE_URL = 'https://spb-kemqk3h0a423q1q5.supabase.opentrust.net';
-  const SUPABASE_ANON_KEY = 'eyJ0eXAiOiJKV1QiLCJhbGciOiJIUzI1NiJ9.eyJyb2xlIjoiYW5vbiIsInJlZiI6InNwYi1rZW1xazNoMGE0MjNxMXE1IiwiaXNzIjoic3VwYWJhc2UiLCJpYXQiOjE3NzYyNjcxMjUsImV4cCI6MjA5MTg0MzEyNX0.hKFA4d_dQwbecO8t0na0DptshXQNHTSEQ5E2VAd3o18';
+  const runtimeConfig = window.AI_IMAGE_CONFIG || {};
+  const SUPABASE_URL = String(runtimeConfig.supabaseUrl || '').trim();
+  const SUPABASE_ANON_KEY = String(runtimeConfig.supabaseAnonKey || '').trim();
   const LOGIN_COUNTDOWN_SECONDS = 60;
 
   const accountState = {
@@ -2743,7 +2744,6 @@
       return false;
     }
     return normalizedKey === 'supabase.auth.token'
-      || normalizedKey.includes('spb-kemqk3h0a423q1q5')
       || (normalizedKey.startsWith('sb-') && normalizedKey.includes('-auth-token'))
       || (normalizedKey.includes('supabase') && normalizedKey.includes('auth'));
   }
@@ -2811,6 +2811,9 @@
       return Promise.resolve(accountState.supabaseClient);
     }
     if (!accountState.supabaseClientPromise) {
+      if (!SUPABASE_URL || !SUPABASE_ANON_KEY) {
+        return Promise.reject(new Error('Supabase 前端配置缺失'));
+      }
       accountState.supabaseClientPromise = import('https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2/+esm').then(({ createClient }) => {
         accountState.supabaseClient = createClient(SUPABASE_URL, SUPABASE_ANON_KEY, {
           auth: {
