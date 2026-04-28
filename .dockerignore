@@ -1,0 +1,12 @@
+.env
+.env.*
+node_modules
+.git
+.gitignore
+.github
+.trae
+supabase
+test-tools
+README.md
+supabase_readme.md
+NEXT_SESSION.md

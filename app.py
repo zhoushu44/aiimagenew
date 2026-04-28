@@ -4316,6 +4316,26 @@ def call_mode3_images_parallel_with_partial_retry(prompt: str, image_payloads, m
     if target_count == 1:
         return [call_mode3_single_image(get_mode3_client(), enriched_prompt, image_payloads)]
 
+    sequential_mode = get_supabase_setting('MODE3_SEQUENTIAL_GENERATION', get_optional_env('MODE3_SEQUENTIAL_GENERATION', 'auto'))
+    if sequential_mode != 'off':
+        generated_items = []
+        retry_attempts = get_mode3_retry_attempts()
+        retry_delay_seconds = get_mode3_retry_delay_seconds()
+        for index in range(target_count):
+            last_exc = None
+            for attempt in range(retry_attempts + 1):
+                try:
+                    item = call_mode3_single_image(get_mode3_client(), enriched_prompt, image_payloads)
+                    generated_items.append(item)
+                    break
+                except Exception as exc:
+                    last_exc = exc
+                    if attempt < retry_attempts:
+                        time.sleep(retry_delay_seconds * (attempt + 1))
+            if last_exc and len(generated_items) <= index:
+                raise last_exc
+        return generated_items[:target_count]
+
     workers = min(target_count, get_mode3_parallel_workers())
     partial_retry_attempts = get_mode3_partial_retry_attempts()
     retry_delay_seconds = get_mode3_retry_delay_seconds()
