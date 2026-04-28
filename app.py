@@ -1,5 +1,6 @@
 import base64
 import binascii
+import concurrent.futures
 import hashlib
 import hmac
 import io
@@ -479,6 +480,16 @@ def spend_user_points(user_id: str, amount: int, transaction_type: str = 'consum
     normalized_transaction_type = str(transaction_type or 'consume').strip() or 'consume'
     normalized_reason = str(reason or '').strip()
     normalized_metadata = metadata if isinstance(metadata, dict) else {}
+
+    def build_spend_failure(error_message: str = '') -> dict:
+        balance_row = get_user_points_balance(normalized_user_id) or ensure_user_points_balance(normalized_user_id) or {}
+        return {
+            'success': False,
+            'spent': False,
+            'error': str(error_message or '扣减积分失败').strip() or '扣减积分失败',
+            'balance_row': balance_row,
+        }
+
     rpc_payloads = [
         {
             'p_user_id': normalized_user_id,
@@ -504,6 +515,17 @@ def spend_user_points(user_id: str, amount: int, transaction_type: str = 'consum
     for rpc_payload in rpc_payloads:
         try:
             payload = _post_supabase_rpc('spend_user_points', rpc_payload)
+            if isinstance(payload, dict):
+                if payload.get('spent') is True:
+                    return payload
+                if payload.get('success') is True and payload.get('spent') is False:
+                    return payload
+                if 'balance' in payload and 'user_id' in payload:
+                    return {
+                        'success': True,
+                        'spent': True,
+                        'balance_row': _normalize_points_row(payload, normalized_user_id),
+                    }
             return payload if isinstance(payload, dict) else None
         except requests.HTTPError as exc:
             last_exception = exc
@@ -531,7 +553,7 @@ def spend_user_points(user_id: str, amount: int, transaction_type: str = 'consum
                         return fallback_result
                 except requests.RequestException as fallback_exc:
                     app.logger.warning('Direct spend user points fallback failed for %s: %s', normalized_user_id, fallback_exc)
-                    return None
+                    return build_spend_failure(str(fallback_exc))
                 balance_row = get_user_points_balance(normalized_user_id) or ensure_user_points_balance(normalized_user_id) or {}
                 return {
                     'success': False,
@@ -546,21 +568,21 @@ def spend_user_points(user_id: str, amount: int, transaction_type: str = 'consum
                     return _spend_user_points_direct(normalized_user_id, normalized_amount, normalized_transaction_type, normalized_reason, normalized_metadata)
                 except requests.RequestException as fallback_exc:
                     app.logger.warning('Direct spend user points fallback failed for %s: %s', normalized_user_id, fallback_exc)
-                    return None
+                    return build_spend_failure(str(fallback_exc))
             app.logger.warning('Failed to spend user points for %s: %s', normalized_user_id, exc)
-            return None
+            return build_spend_failure(error_text or str(exc))
         except requests.RequestException as exc:
             app.logger.warning('Failed to spend user points for %s: %s', normalized_user_id, exc)
-            return None
+            return build_spend_failure(str(exc))
         except RuntimeError as exc:
             last_exception = exc
             last_error_text = str(exc)
             if '返回了无效响应' in last_error_text:
                 continue
             app.logger.warning('Failed to spend user points for %s: %s', normalized_user_id, exc)
-            return None
+            return build_spend_failure(last_error_text)
     app.logger.warning('Failed to spend user points for %s after trying compatible RPC payloads: %s', normalized_user_id, last_exception or last_error_text)
-    return None
+    return build_spend_failure(last_error_text or str(last_exception or '扣减积分失败'))
 
 
 def add_user_points_direct(user_id: str, amount: int, transaction_type: str = 'refund', reason: str = '', metadata: dict | None = None) -> dict | None:
@@ -1248,7 +1270,7 @@ def verify_admin_credentials(identifier: str, password: str) -> bool:
 
 def normalize_app_mode(value: str | None) -> str:
     normalized_mode = str(value or '').strip().lower()
-    return normalized_mode if normalized_mode in {'mode1', 'mode2'} else 'mode1'
+    return normalized_mode if normalized_mode in {'mode1', 'mode2', 'mode3'} else 'mode1'
 
 
 def get_app_mode() -> str:
@@ -1416,7 +1438,25 @@ def update_supabase_setting(scope: str, setting_key: str, setting_value: str) ->
     response.raise_for_status()
     payload = response.json()
     if not isinstance(payload, list) or not payload:
-        raise RuntimeError('未找到可更新的 Supabase 设置')
+        response = requests.post(
+            build_supabase_request_url(f'/rest/v1/{SUPABASE_SETTINGS_TABLE}'),
+            headers={
+                'apikey': SUPABASE_SERVICE_ROLE_KEY,
+                'Authorization': f'Bearer {SUPABASE_SERVICE_ROLE_KEY}',
+                'Content-Type': 'application/json',
+                'Prefer': 'return=representation',
+            },
+            json={
+                'scope': normalized_scope,
+                'setting_key': normalized_key,
+                'setting_value': setting_value,
+            },
+            timeout=20,
+        )
+        response.raise_for_status()
+        payload = response.json()
+        if not isinstance(payload, list) or not payload:
+            raise RuntimeError('未找到可更新的 Supabase 设置')
 
     reload_supabase_settings_cache()
     return payload[0]
@@ -4045,6 +4085,26 @@ def get_mode2_retry_delay_seconds() -> float:
         return 1.5
 
 
+def get_mode3_retry_attempts() -> int:
+    return max(get_supabase_setting_int('MODE3_RETRY_ATTEMPTS', get_optional_int_env('MODE3_RETRY_ATTEMPTS', 2)), 0)
+
+
+def get_mode3_retry_delay_seconds() -> float:
+    raw_value = get_supabase_setting('MODE3_RETRY_DELAY_SECONDS', get_optional_env('MODE3_RETRY_DELAY_SECONDS', '1.5'))
+    try:
+        return max(float(raw_value), 0.0)
+    except ValueError:
+        return 1.5
+
+
+def get_mode3_parallel_workers() -> int:
+    return max(get_supabase_setting_int('MODE3_PARALLEL_WORKERS', get_optional_int_env('MODE3_PARALLEL_WORKERS', 3)), 1)
+
+
+def get_mode3_partial_retry_attempts() -> int:
+    return max(get_supabase_setting_int('MODE3_PARTIAL_RETRY_ATTEMPTS', get_optional_int_env('MODE3_PARTIAL_RETRY_ATTEMPTS', 2)), 0)
+
+
 def is_retryable_mode2_error(exc: Exception) -> bool:
     message = str(exc or '')
     retryable_fragments = (
@@ -4129,7 +4189,7 @@ def is_private_ip_address(hostname: str) -> bool:
             ip = ipaddress.ip_address(sockaddr[0])
         else:
             continue
-        if ip.is_private or ip.is_loopback or ip.is_link_local or ip.is_multicast or ip.is_reserved or ip.is_unspecified:
+        if ip.is_private or ip.is_loopback or ip.is_link_local or ip.is_multicast or ip.is_unspecified:
             return True
     return False
 
@@ -4152,8 +4212,6 @@ def validate_mode2_remote_image_url(image_url: str) -> str:
     hostname = parsed_url.hostname.lower()
     if hostname not in allowed_hosts:
         raise ValueError('参考图片链接域名未被允许')
-    if is_private_ip_address(hostname):
-        raise ValueError('参考图片链接不能指向内网地址')
 
     return normalized_url
 
@@ -4189,6 +4247,7 @@ def build_remote_image_payload(image_url: str):
         'bytes': content,
         'base64': encoded,
         'data_url': f'data:{mime_type};base64,{encoded}',
+        'source_url': normalized_url,
     }
 
 
@@ -4221,6 +4280,74 @@ def pick_generated_image_item(response):
             raise ValueError(f'图像生成接口返回错误码：{error_code}')
         raise ValueError('图像生成接口未返回图片数据')
     return normalize_generated_image_item(data[0])
+
+
+def pick_generated_image_items(response, max_images: int = 1):
+    data = getattr(response, 'data', None)
+    if data is None and isinstance(response, dict):
+        data = response.get('data')
+    if not isinstance(data, list) or not data:
+        return [pick_generated_image_item(response)]
+    limit = max(1, int(max_images or 1))
+    items = []
+    for item in data[:limit]:
+        try:
+            normalized_item = normalize_generated_image_item(item)
+            if normalized_item.get('b64_json') or normalized_item.get('url'):
+                items.append(normalized_item)
+        except ValueError:
+            continue
+    if not items:
+        return [pick_generated_image_item(response)]
+    return items
+
+
+def call_mode3_single_image(client: OpenAI, prompt: str, image_payloads):
+    if image_payloads:
+        generated_item, _model = call_mode3_image_edit(client, prompt, image_payloads)
+    else:
+        generated_item, _model = call_mode3_text2image(client, prompt)
+    return generated_item
+
+
+def call_mode3_images_parallel_with_partial_retry(prompt: str, image_payloads, max_images: int, image_size_ratio: str = '', text_type: str = '', country: str = '', product_json=None, image_type: str = '', plan_item=None, all_plan_types=None):
+    target_count = max(1, int(max_images or 1))
+    enriched_prompt = build_enriched_image_prompt(prompt, image_size_ratio, text_type, country, product_json, image_type, plan_item, all_plan_types)
+    if target_count == 1:
+        return [call_mode3_single_image(get_mode3_client(), enriched_prompt, image_payloads)]
+
+    workers = min(target_count, get_mode3_parallel_workers())
+    partial_retry_attempts = get_mode3_partial_retry_attempts()
+    retry_delay_seconds = get_mode3_retry_delay_seconds()
+    generated_items = []
+    failures = []
+
+    def run_one(global_index: int):
+        client = get_mode3_client()
+        return call_mode3_single_image(client, enriched_prompt, image_payloads)
+
+    for attempt_index in range(partial_retry_attempts + 1):
+        missing_count = target_count - len(generated_items)
+        if missing_count <= 0:
+            break
+        failures = []
+        batch_workers = min(missing_count, workers)
+        with concurrent.futures.ThreadPoolExecutor(max_workers=batch_workers) as executor:
+            futures = [executor.submit(run_one, len(generated_items) + index + 1) for index in range(missing_count)]
+            for future in concurrent.futures.as_completed(futures):
+                try:
+                    generated_items.append(future.result())
+                except Exception as exc:
+                    failures.append(exc)
+        missing_count = target_count - len(generated_items)
+        if missing_count > 0 and attempt_index < partial_retry_attempts:
+            app.logger.warning('Mode3 partial generation missing %s/%s images, retrying failed parts in %.2fs (%s/%s): %s', missing_count, target_count, retry_delay_seconds * (attempt_index + 1), attempt_index + 1, partial_retry_attempts, '; '.join(str(exc) for exc in failures[:3]))
+            time.sleep(retry_delay_seconds * (attempt_index + 1))
+
+    if len(generated_items) < target_count:
+        error_text = '; '.join(str(exc) for exc in failures[:3]) or '部分图片生成失败'
+        raise ValueError(f'mode3 部分图片生成失败，已成功 {len(generated_items)}/{target_count}：{error_text}')
+    return generated_items[:target_count]
 
 
 def call_mode2_image_edit(client: OpenAI, prompt: str, image_payloads, ratio: str, resolution: str, sample_strength: str):
@@ -4259,8 +4386,77 @@ def call_mode2_text2image(client: OpenAI, prompt: str, ratio: str, resolution: s
     return pick_generated_image_item(response), model
 
 
+def get_mode3_client() -> OpenAI:
+    return OpenAI(
+        api_key=get_supabase_setting('MODE3_OPENAI_API_KEY', get_optional_env('MODE3_OPENAI_API_KEY', '')),
+        base_url=get_supabase_setting('MODE3_OPENAI_BASE_URL', get_optional_env('MODE3_OPENAI_BASE_URL', 'https://code.ciyuanapi.xyz/v1')).rstrip('/'),
+    )
+
+
+def call_mode3_chat_completions_with_retry(client: OpenAI, request_payload: dict):
+    retry_attempts = get_mode3_retry_attempts()
+    retry_delay_seconds = get_mode3_retry_delay_seconds()
+    total_attempts = retry_attempts + 1
+    last_exc = None
+    for attempt_index in range(total_attempts):
+        try:
+            return client.chat.completions.create(**request_payload)
+        except Exception as exc:
+            last_exc = exc
+            should_retry = attempt_index < retry_attempts and is_retryable_mode2_error(exc)
+            if not should_retry:
+                raise
+            wait_seconds = retry_delay_seconds * (attempt_index + 1)
+            app.logger.warning('Mode3 image generation failed, retrying in %.2fs (%s/%s): %s', wait_seconds, attempt_index + 1, retry_attempts, exc)
+            time.sleep(wait_seconds)
+    raise last_exc
+
+
+def call_mode3_text2image(client: OpenAI, prompt: str):
+    model = get_supabase_setting('MODE3_IMAGE_MODEL', get_optional_env('MODE3_IMAGE_MODEL', 'gpt-image-2'))
+    response = call_mode3_chat_completions_with_retry(client, {
+        'model': model,
+        'messages': [
+            {
+                'role': 'user',
+                'content': prompt,
+            },
+        ],
+    })
+    return pick_generated_image_item(response), model
+
+
+def call_mode3_image_edit(client: OpenAI, prompt: str, image_payloads):
+    model = get_supabase_setting('MODE3_IMAGE_MODEL', get_optional_env('MODE3_IMAGE_MODEL', 'gpt-image-2'))
+    content = [
+        {
+            'type': 'text',
+            'text': prompt,
+        },
+    ]
+    for image_payload in image_payloads:
+        image_url = image_payload.get('source_url') or image_payload['data_url']
+        content.append({
+            'type': 'image_url',
+            'image_url': {
+                'url': image_url,
+            },
+        })
+    response = call_mode3_chat_completions_with_retry(client, {
+        'model': model,
+        'messages': [
+            {
+                'role': 'user',
+                'content': content,
+            },
+        ],
+    })
+    return pick_generated_image_item(response), model
+
+
 def call_app_mode_image_generation(client: OpenAI, prompt: str, image_payloads, image_size_ratio: str, text_type: str, country: str, product_json=None, image_type: str = '', plan_item=None, all_plan_types=None, max_images: int = 1):
-    if get_app_mode() == 'mode2':
+    app_mode = get_app_mode()
+    if app_mode == 'mode2':
         mode2_client = get_mode2_client()
         if image_payloads:
             generated_item, _model = call_mode2_image_edit(
@@ -4279,6 +4475,20 @@ def call_app_mode_image_generation(client: OpenAI, prompt: str, image_payloads, 
                 '',
             )
         return [generated_item]
+
+    if app_mode == 'mode3':
+        return call_mode3_images_parallel_with_partial_retry(
+            prompt,
+            image_payloads,
+            max_images,
+            image_size_ratio,
+            text_type,
+            country,
+            product_json,
+            image_type,
+            plan_item,
+            all_plan_types,
+        )
 
     return call_image_generation(
         client,
@@ -4444,13 +4654,7 @@ def build_plan_control_prompt(item: dict, all_types) -> str:
 
 
 
-def call_image_generation(client: OpenAI, prompt: str, image_payloads, image_size_ratio: str, text_type: str, country: str, product_json=None, image_type: str = '', plan_item=None, all_plan_types=None, max_images: int = 1):
-    model = get_supabase_setting('ARK_IMAGE_MODEL', get_optional_env('ARK_IMAGE_MODEL', 'doubao-seedream-5-0-260128'))
-    size = resolve_image_size(image_size_ratio)
-    quality = get_supabase_setting('ARK_IMAGE_QUALITY', get_optional_env('ARK_IMAGE_QUALITY', ''))
-    watermark = get_supabase_setting_bool('ARK_IMAGE_WATERMARK', get_optional_bool_env('ARK_IMAGE_WATERMARK', False))
-    sequential_mode = get_supabase_setting('ARK_SEQUENTIAL_IMAGE_GENERATION', get_optional_env('ARK_SEQUENTIAL_IMAGE_GENERATION', 'auto'))
-    sequential_max_images = get_supabase_setting_int('ARK_SEQUENTIAL_MAX_IMAGES', get_optional_int_env('ARK_SEQUENTIAL_MAX_IMAGES', 1))
+def build_enriched_image_prompt(prompt: str, image_size_ratio: str, text_type: str, country: str, product_json=None, image_type: str = '', plan_item=None, all_plan_types=None) -> str:
     normalized_product_json = normalize_product_json(product_json) if product_json else None
     product_json_text = build_product_json_prompt_text(normalized_product_json)
     must_keep = '；'.join((normalized_product_json or {}).get('must_keep') or []) or '未单独提取'
@@ -4484,7 +4688,7 @@ def call_image_generation(client: OpenAI, prompt: str, image_payloads, image_siz
             '- 该图是服饰最终成图，不允许生成任何新增可见文字元素：标题、卖点文案、说明字、logo 文案、水印、字幕、角标、标签字样、吊牌字样、排版字、海报字都禁止出现。\n'
             '- 若商品本体原始设计自带品牌标识、logo、印花文字或标签细节，只能按商品图原样保留，不得新增、改写、放大或替换。\n'
         )
-    enriched_prompt = (
+    return (
         f'{prompt}\n\n'
         f'当前图类型：{image_type or "未指定"}\n\n'
         f'不可变商品特征：\n{product_json_text}\n\n'
@@ -4510,6 +4714,16 @@ def call_image_generation(client: OpenAI, prompt: str, image_payloads, image_siz
         f'{type_specific_rules}'
         f'- 若卖点、生活方式、消费场景、节日氛围或合规表达与地区有关，优先按国家参考进行画面设计与文案表达。'
     )
+
+
+def call_image_generation(client: OpenAI, prompt: str, image_payloads, image_size_ratio: str, text_type: str, country: str, product_json=None, image_type: str = '', plan_item=None, all_plan_types=None, max_images: int = 1):
+    model = get_supabase_setting('ARK_IMAGE_MODEL', get_optional_env('ARK_IMAGE_MODEL', 'doubao-seedream-5-0-260128'))
+    size = resolve_image_size(image_size_ratio)
+    quality = get_supabase_setting('ARK_IMAGE_QUALITY', get_optional_env('ARK_IMAGE_QUALITY', ''))
+    watermark = get_supabase_setting_bool('ARK_IMAGE_WATERMARK', get_optional_bool_env('ARK_IMAGE_WATERMARK', False))
+    sequential_mode = get_supabase_setting('ARK_SEQUENTIAL_IMAGE_GENERATION', get_optional_env('ARK_SEQUENTIAL_IMAGE_GENERATION', 'auto'))
+    sequential_max_images = get_supabase_setting_int('ARK_SEQUENTIAL_MAX_IMAGES', get_optional_int_env('ARK_SEQUENTIAL_MAX_IMAGES', 1))
+    enriched_prompt = build_enriched_image_prompt(prompt, image_size_ratio, text_type, country, product_json, image_type, plan_item, all_plan_types)
     request_payload = {
         'model': model,
         'prompt': enriched_prompt,
@@ -5206,6 +5420,17 @@ def points_spend_api():
                 },
                 'consume': consume_payload,
             }), 409
+        if not spend_result.get('spent'):
+            return jsonify({
+                'success': False,
+                'spent': False,
+                'error': str(spend_result.get('error') or '扣减积分失败').strip() or '扣减积分失败',
+                'points': {
+                    'user_id': user_id,
+                    **serialize_points_payload(balance_row),
+                },
+                'consume': consume_payload,
+            }), 502
 
         return jsonify({
             'success': True,
@@ -5546,6 +5771,87 @@ def generate_mode2_text2image():
             resolution,
         )
         return jsonify(build_mode2_success_response(task_id, 'mode2-text2image', prompt, model, generated_item))
+    except RequestEntityTooLarge as exc:
+        return handle_request_entity_too_large(exc)
+    except ValueError as exc:
+        return jsonify({'success': False, 'error': str(exc)}), 400
+    except RuntimeError as exc:
+        payload, status_code = parse_runtime_error(exc)
+        return jsonify(payload), status_code
+    except (APIError, APIStatusError) as exc:
+        payload, status_code = parse_ark_exception(exc)
+        return jsonify(payload), status_code
+    except requests.Timeout:
+        return jsonify({'success': False, 'error': '请求超时，请稍后重试'}), 504
+    except requests.RequestException as exc:
+        return jsonify({'success': False, 'error': f'请求失败：{exc}'}), 502
+    except Exception as exc:
+        return jsonify({'success': False, 'error': f'服务端异常：{exc}'}), 500
+
+
+@app.post('/api/generate-mode3-image-edit')
+def generate_mode3_image_edit():
+    try:
+        if get_app_mode() != 'mode3':
+            return jsonify({'success': False, 'error': '当前模式未开启 mode3'}), 404
+
+        payload = request.get_json(silent=True) if request.is_json else {}
+        if not isinstance(payload, dict):
+            payload = {}
+
+        prompt = get_request_value(payload, request.form, 'prompt', '')
+        image_url = get_request_value(payload, request.form, 'image_url', '')
+        uploaded_payloads = get_image_payloads_from_request('images')
+
+        if not prompt:
+            return jsonify({'success': False, 'error': 'prompt 不能为空'}), 400
+        if uploaded_payloads and image_url:
+            return jsonify({'success': False, 'error': '上传图片与 image_url 二选一'}), 400
+        if uploaded_payloads:
+            image_payloads = uploaded_payloads
+        elif image_url:
+            image_payloads = [build_remote_image_payload(image_url)]
+        else:
+            return jsonify({'success': False, 'error': '请上传 1 张或多张参考图片，或提供 image_url'}), 400
+
+        task_id = uuid.uuid4().hex
+        generated_item, model = call_mode3_image_edit(get_mode3_client(), prompt, image_payloads)
+        return jsonify(build_mode2_success_response(task_id, 'mode3-image-edit', prompt, model, generated_item))
+    except RequestEntityTooLarge as exc:
+        return handle_request_entity_too_large(exc)
+    except ValueError as exc:
+        return jsonify({'success': False, 'error': str(exc)}), 400
+    except RuntimeError as exc:
+        payload, status_code = parse_runtime_error(exc)
+        return jsonify(payload), status_code
+    except (APIError, APIStatusError) as exc:
+        payload, status_code = parse_ark_exception(exc)
+        return jsonify(payload), status_code
+    except requests.Timeout:
+        return jsonify({'success': False, 'error': '请求超时，请稍后重试'}), 504
+    except requests.RequestException as exc:
+        return jsonify({'success': False, 'error': f'请求失败：{exc}'}), 502
+    except Exception as exc:
+        return jsonify({'success': False, 'error': f'服务端异常：{exc}'}), 500
+
+
+@app.post('/api/generate-mode3-text2image')
+def generate_mode3_text2image():
+    try:
+        if get_app_mode() != 'mode3':
+            return jsonify({'success': False, 'error': '当前模式未开启 mode3'}), 404
+
+        payload = request.get_json(silent=True) if request.is_json else {}
+        if not isinstance(payload, dict):
+            payload = {}
+
+        prompt = get_request_value(payload, request.form, 'prompt', '')
+        if not prompt:
+            return jsonify({'success': False, 'error': 'prompt 不能为空'}), 400
+
+        task_id = uuid.uuid4().hex
+        generated_item, model = call_mode3_text2image(get_mode3_client(), prompt)
+        return jsonify(build_mode2_success_response(task_id, 'mode3-text2image', prompt, model, generated_item))
     except RequestEntityTooLarge as exc:
         return handle_request_entity_too_large(exc)
     except ValueError as exc:

@@ -373,6 +373,7 @@
             <select class="setting-input" id="appModeSelect" autocomplete="off">
               <option value="mode1">mode1</option>
               <option value="mode2">mode2</option>
+              <option value="mode3">mode3</option>
             </select>
           </label>
           <button class="btn primary is-idle" id="appModeSaveBtn" type="button">当前已生效</button>
@@ -397,8 +398,12 @@
         note: '稳定模式，适合日常生产使用。',
       },
       mode2: {
-        description: 'mode2 会启用新的图像生成链路，可根据是否上传参考图自动切换文生图与图生图能力。',
-        note: '实验与增强模式，适合验证新模型与新流程。',
+        description: 'mode2 会启用即梦 Router 图像生成链路，可根据是否上传参考图自动切换文生图与图生图能力。',
+        note: '即梦增强模式，适合验证 jimeng-4.6 与 session 轮换流程。',
+      },
+      mode3: {
+        description: 'mode3 会启用 Ciyuan gpt-image-2 的 chat/completions 图像生成链路，文生图与图生图都走同一接口。',
+        note: '备用稳定模式，适合在即梦权益不足时切换使用。',
       },
     };
 
@@ -466,7 +471,7 @@
     }
 
     function normalizeAppMode(value) {
-      return ['mode1', 'mode2'].includes(String(value || '').trim().toLowerCase()) ? String(value).trim().toLowerCase() : 'mode1';
+      return ['mode1', 'mode2', 'mode3'].includes(String(value || '').trim().toLowerCase()) ? String(value).trim().toLowerCase() : 'mode1';
     }
 
     function updateAppModeHero(mode) {

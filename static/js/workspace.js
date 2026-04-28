@@ -1633,7 +1633,8 @@ document.addEventListener('DOMContentLoaded', () => {
         saveStateToLocalStorage();
       } catch (error) {
         let refundFailed = false;
-        if (spendRecord && !currentResultItems.length) {
+        const didSpendPoints = Boolean(spendRecord && !spendRecord.skipped && Number(spendRecord.amount) > 0);
+        if (didSpendPoints && !currentResultItems.length) {
           try {
             const refundedPoints = await requestPointsRefund(spendRecord, error.message || config.errorFallback);
             syncSharedPointsState(refundedPoints);
@@ -1644,11 +1645,17 @@ document.addEventListener('DOMContentLoaded', () => {
         resetResultState();
         syncFashionState({ fashionFlowStep: 'scene' });
         if (resultMeta) {
-          resultMeta.textContent = refundFailed
-            ? '生成失败，且自动返还积分失败，请联系客服核查。'
-            : '生成失败后已自动返还本次扣减积分，可修改商品图、模特或场景设置后重试。';
+          if (!didSpendPoints) {
+            resultMeta.textContent = '生成前积分校验未通过，本次未发生实际扣分，可调整商品图、模特或场景设置后重试。';
+          } else {
+            resultMeta.textContent = refundFailed
+              ? '生成失败，且自动返还积分失败，请联系客服核查。'
+              : '生成失败后已自动返还本次扣减积分，可修改商品图、模特或场景设置后重试。';
+          }
         }
-        setResultStatus(refundFailed ? `${error.message || config.errorFallback}；本次积分自动返还失败，请联系客服核查。` : `${error.message || config.errorFallback}；本次扣减积分已自动返还。`, 'error');
+        setResultStatus(!didSpendPoints
+          ? (error.message || config.errorFallback)
+          : (refundFailed ? `${error.message || config.errorFallback}；本次积分自动返还失败，请联系客服核查。` : `${error.message || config.errorFallback}；本次扣减积分已自动返还。`), 'error');
         persistState();
       } finally {
         applyFashionGenerateButtonState();
@@ -2785,7 +2792,8 @@ document.addEventListener('DOMContentLoaded', () => {
           saveStateToLocalStorage();
         } catch (error) {
           let refundFailed = false;
-          if (spendRecord && !currentResultItems.length) {
+          const didSpendPoints = Boolean(spendRecord && !spendRecord.skipped && Number(spendRecord.amount) > 0);
+          if (didSpendPoints && !currentResultItems.length) {
             try {
               const refundedPoints = await requestPointsRefund(spendRecord, error.message || config.errorFallback);
               syncSharedPointsState(refundedPoints);
@@ -2795,11 +2803,17 @@ document.addEventListener('DOMContentLoaded', () => {
           }
           resetResultState();
           if (resultMeta) {
-            resultMeta.textContent = refundFailed
-              ? '生成失败，且自动返还积分失败，请联系客服核查。'
-              : '生成失败后已自动返还本次扣减积分，可修改卖点、平台或素材后重试。';
+            if (!didSpendPoints) {
+              resultMeta.textContent = '生成前积分校验未通过，本次未发生实际扣分，可调整参数后重试。';
+            } else {
+              resultMeta.textContent = refundFailed
+                ? '生成失败，且自动返还积分失败，请联系客服核查。'
+                : '生成失败后已自动返还本次扣减积分，可修改卖点、平台或素材后重试。';
+            }
           }
-          setResultStatus(refundFailed ? `${error.message || config.errorFallback}；本次积分自动返还失败，请联系客服核查。` : `${error.message || config.errorFallback}；本次扣减积分已自动返还。`, 'error');
+          setResultStatus(!didSpendPoints
+            ? (error.message || config.errorFallback)
+            : (refundFailed ? `${error.message || config.errorFallback}；本次积分自动返还失败，请联系客服核查。` : `${error.message || config.errorFallback}；本次扣减积分已自动返还。`), 'error');
           persistState();
         } finally {
           generateBtn.disabled = false;
