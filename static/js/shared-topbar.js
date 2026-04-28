@@ -2899,6 +2899,26 @@
     }
   }
 
+  async function verifySmsOtpByHttp(phone, code) {
+    const response = await fetch(`${SUPABASE_URL.replace(/\/$/, '')}/auth/v1/verify`, {
+      method: 'POST',
+      headers: {
+        apikey: SUPABASE_ANON_KEY,
+        'Content-Type': 'application/json',
+      },
+      body: JSON.stringify({
+        phone: `+86${phone}`,
+        token: code,
+        type: 'sms',
+      }),
+    });
+    const payload = await response.json().catch(() => ({}));
+    if (!response.ok) {
+      throw new Error(payload?.msg || payload?.message || payload?.error_description || payload?.error || '验证码过期 / 错误，请重新获取');
+    }
+    return payload;
+  }
+
   async function completeLoginModalAuth(session, message) {
     if (!session) {
       throw new Error('认证成功，但未获取到登录会话');

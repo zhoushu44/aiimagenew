@@ -42,6 +42,17 @@ def disable_static_file_cache(response):
     return response
 
 
+@app.errorhandler(RequestEntityTooLarge)
+def handle_request_entity_too_large(exc):
+    limit_bytes = (app.config.get('MAX_CONTENT_LENGTH') or 0) if 'UPLOAD_MAX_BYTES' not in globals() else (app.config.get('MAX_CONTENT_LENGTH') or UPLOAD_MAX_BYTES)
+    if limit_bytes:
+        limit_text = f'{max(int(limit_bytes) / 1024 / 1024, 0):.1f}MB'
+        message = f'上传内容过大，请压缩图片后重试，当前最大允许 {limit_text}'
+    else:
+        message = '上传内容过大，请压缩图片后重试'
+    return jsonify({'success': False, 'error': message}), 413
+
+
 def get_first_env(names: list[str]) -> str:
     for name in names:
         value = os.getenv(name, '').strip()
@@ -381,51 +392,229 @@ def claim_daily_free_points(user_id: str, amount: int) -> dict | None:
         }
 
 
+def _spend_user_points_direct(user_id: str, amount: int, transaction_type: str = 'consume', reason: str = '', metadata: dict | None = None) -> dict | None:
+    normalized_user_id = str(user_id or '').strip()
+    normalized_amount = int(amount)
+    if not normalized_user_id or normalized_amount <= 0:
+        return None
+    points_row = _ensure_points_balance_row_direct(normalized_user_id)
+    if not points_row:
+        return None
+    previous_balance = int(points_row.get('balance') or 0)
+    if previous_balance < normalized_amount:
+        return {
+            'success': False,
+            'spent': False,
+            'error': 'INSUFFICIENT_POINTS',
+            'balance_row': points_row,
+        }
+    updated_row = {
+        'balance': previous_balance - normalized_amount,
+        'total_spent': int(points_row.get('total_spent') or 0) + normalized_amount,
+        'updated_at': datetime.now(timezone.utc).isoformat(),
+    }
+    response = requests.patch(
+        build_supabase_request_url(f'/rest/v1/{SUPABASE_POINTS_TABLE}'),
+        headers={
+            **_build_supabase_service_headers(),
+            'Prefer': 'return=representation',
+        },
+        params={
+            'user_id': f'eq.{normalized_user_id}',
+            'balance': f'gte.{normalized_amount}',
+        },
+        json=updated_row,
+        timeout=20,
+    )
+    response.raise_for_status()
+    payload = response.json()
+    if not isinstance(payload, list) or not payload:
+        balance_row = get_user_points_balance(normalized_user_id) or points_row
+        return {
+            'success': False,
+            'spent': False,
+            'error': 'INSUFFICIENT_POINTS',
+            'balance_row': balance_row,
+        }
+    balance_row = _normalize_points_row(payload[0], normalized_user_id)
+    transaction_row = None
+    try:
+        transaction_response = requests.post(
+            build_supabase_request_url('/rest/v1/user_points_transactions'),
+            headers={
+                **_build_supabase_service_headers(),
+                'Prefer': 'return=representation',
+            },
+            json={
+                'user_id': normalized_user_id,
+                'change_amount': -normalized_amount,
+                'balance_after': int(balance_row.get('balance') or 0),
+                'transaction_type': str(transaction_type or 'consume').strip() or 'consume',
+                'reason': str(reason or '').strip(),
+                'metadata': metadata if isinstance(metadata, dict) else {},
+            },
+            timeout=20,
+        )
+        transaction_response.raise_for_status()
+        transaction_payload = transaction_response.json()
+        if isinstance(transaction_payload, list) and transaction_payload:
+            transaction_row = transaction_payload[0]
+        elif isinstance(transaction_payload, dict):
+            transaction_row = transaction_payload
+    except requests.RequestException as exc:
+        app.logger.warning('Failed to insert direct spend transaction for %s: %s', normalized_user_id, exc)
+    return {
+        'success': True,
+        'spent': True,
+        'balance_row': balance_row,
+        'transaction_row': transaction_row,
+    }
+
+
 def spend_user_points(user_id: str, amount: int, transaction_type: str = 'consume', reason: str = '', metadata: dict | None = None) -> dict | None:
     normalized_user_id = str(user_id or '').strip()
     if not normalized_user_id:
         return None
+    normalized_amount = int(amount)
+    normalized_transaction_type = str(transaction_type or 'consume').strip() or 'consume'
+    normalized_reason = str(reason or '').strip()
     normalized_metadata = metadata if isinstance(metadata, dict) else {}
-    try:
-        payload = _post_supabase_rpc('spend_user_points', {
+    rpc_payloads = [
+        {
             'p_user_id': normalized_user_id,
-            'p_amount': int(amount),
-            'p_transaction_type': str(transaction_type or 'consume').strip() or 'consume',
-            'p_reason': str(reason or '').strip(),
+            'p_amount': normalized_amount,
+            'p_transaction_type': normalized_transaction_type,
+            'p_reason': normalized_reason,
             'p_metadata': normalized_metadata,
-        })
-    except requests.HTTPError as exc:
-        response = getattr(exc, 'response', None)
-        error_text = ''
-        if response is not None:
-            try:
-                error_payload = response.json()
-                if isinstance(error_payload, dict):
-                    error_text = str(
-                        error_payload.get('message')
-                        or error_payload.get('error')
-                        or error_payload.get('error_description')
-                        or ''
-                    )
-            except ValueError:
-                error_text = response.text or ''
-        if response is not None and response.status_code >= 400 and '积分余额不足' in error_text:
-            balance_row = get_user_points_balance(normalized_user_id) or ensure_user_points_balance(normalized_user_id) or {}
-            return {
-                'success': False,
-                'spent': False,
-                'error': 'INSUFFICIENT_POINTS',
-                'balance_row': balance_row,
-            }
-        app.logger.warning('Failed to spend user points for %s: %s', normalized_user_id, exc)
+        },
+        {
+            'target_user_id': normalized_user_id,
+            'spend_points': normalized_amount,
+            'target_type': normalized_transaction_type,
+            'target_reason': normalized_reason,
+            'target_metadata': normalized_metadata,
+        },
+        {
+            'p_user_id': normalized_user_id,
+            'p_amount': normalized_amount,
+        },
+    ]
+    last_error_text = ''
+    last_exception = None
+    for rpc_payload in rpc_payloads:
+        try:
+            payload = _post_supabase_rpc('spend_user_points', rpc_payload)
+            return payload if isinstance(payload, dict) else None
+        except requests.HTTPError as exc:
+            last_exception = exc
+            response = getattr(exc, 'response', None)
+            error_text = ''
+            if response is not None:
+                try:
+                    error_payload = response.json()
+                    if isinstance(error_payload, dict):
+                        error_text = str(
+                            error_payload.get('message')
+                            or error_payload.get('error')
+                            or error_payload.get('error_description')
+                            or ''
+                        )
+                except ValueError:
+                    error_text = response.text or ''
+            last_error_text = error_text
+            if response is not None and response.status_code >= 400 and (
+                '积分余额不足' in error_text or 'INSUFFICIENT_POINTS' in error_text
+            ):
+                try:
+                    fallback_result = _spend_user_points_direct(normalized_user_id, normalized_amount, normalized_transaction_type, normalized_reason, normalized_metadata)
+                    if isinstance(fallback_result, dict) and fallback_result.get('spent'):
+                        return fallback_result
+                except requests.RequestException as fallback_exc:
+                    app.logger.warning('Direct spend user points fallback failed for %s: %s', normalized_user_id, fallback_exc)
+                    return None
+                balance_row = get_user_points_balance(normalized_user_id) or ensure_user_points_balance(normalized_user_id) or {}
+                return {
+                    'success': False,
+                    'spent': False,
+                    'error': 'INSUFFICIENT_POINTS',
+                    'balance_row': balance_row,
+                }
+            if response is not None and response.status_code == 404 and 'Could not find the function' in error_text:
+                continue
+            if response is not None and response.status_code == 400 and 'INSUFFICIENT_POINTS' in error_text:
+                try:
+                    return _spend_user_points_direct(normalized_user_id, normalized_amount, normalized_transaction_type, normalized_reason, normalized_metadata)
+                except requests.RequestException as fallback_exc:
+                    app.logger.warning('Direct spend user points fallback failed for %s: %s', normalized_user_id, fallback_exc)
+                    return None
+            app.logger.warning('Failed to spend user points for %s: %s', normalized_user_id, exc)
+            return None
+        except requests.RequestException as exc:
+            app.logger.warning('Failed to spend user points for %s: %s', normalized_user_id, exc)
+            return None
+        except RuntimeError as exc:
+            last_exception = exc
+            last_error_text = str(exc)
+            if '返回了无效响应' in last_error_text:
+                continue
+            app.logger.warning('Failed to spend user points for %s: %s', normalized_user_id, exc)
+            return None
+    app.logger.warning('Failed to spend user points for %s after trying compatible RPC payloads: %s', normalized_user_id, last_exception or last_error_text)
+    return None
+
+
+def add_user_points_direct(user_id: str, amount: int, transaction_type: str = 'refund', reason: str = '', metadata: dict | None = None) -> dict | None:
+    normalized_user_id = str(user_id or '').strip()
+    normalized_amount = max(int(amount), 0)
+    if not normalized_user_id or normalized_amount <= 0:
         return None
+    points_row = _ensure_points_balance_row_direct(normalized_user_id)
+    if not points_row:
+        return None
+    previous_balance = int(points_row.get('balance') or 0)
+    updated_row = {
+        'balance': previous_balance + normalized_amount,
+        'total_earned': int(points_row.get('total_earned') or 0) + normalized_amount,
+        'updated_at': datetime.now(timezone.utc).isoformat(),
+    }
+    response = requests.patch(
+        build_supabase_request_url(f'/rest/v1/{SUPABASE_POINTS_TABLE}'),
+        headers={
+            **_build_supabase_service_headers(),
+            'Prefer': 'return=representation',
+        },
+        params={
+            'user_id': f'eq.{normalized_user_id}',
+        },
+        json=updated_row,
+        timeout=20,
+    )
+    response.raise_for_status()
+    payload = response.json()
+    if not isinstance(payload, list) or not payload:
+        return get_user_points_balance(normalized_user_id) or points_row
+    balance_row = _normalize_points_row(payload[0], normalized_user_id)
+    try:
+        transaction_response = requests.post(
+            build_supabase_request_url('/rest/v1/user_points_transactions'),
+            headers={
+                **_build_supabase_service_headers(),
+                'Prefer': 'return=representation',
+            },
+            json={
+                'user_id': normalized_user_id,
+                'change_amount': normalized_amount,
+                'balance_after': int(balance_row.get('balance') or 0),
+                'transaction_type': str(transaction_type or 'refund').strip() or 'refund',
+                'reason': str(reason or '').strip(),
+                'metadata': metadata if isinstance(metadata, dict) else {},
+            },
+            timeout=20,
+        )
+        transaction_response.raise_for_status()
     except requests.RequestException as exc:
-        app.logger.warning('Failed to spend user points for %s: %s', normalized_user_id, exc)
-        return None
-    except RuntimeError as exc:
-        app.logger.warning('Failed to spend user points for %s: %s', normalized_user_id, exc)
-        return None
-    return payload if isinstance(payload, dict) else None
+        app.logger.warning('Failed to insert direct add transaction for %s: %s', normalized_user_id, exc)
+    return balance_row
 
 
 def add_user_points(user_id: str, amount: int, transaction_type: str = 'refund', reason: str = '', metadata: dict | None = None) -> dict | None:
@@ -446,10 +635,18 @@ def add_user_points(user_id: str, amount: int, transaction_type: str = 'refund',
         })
     except requests.RequestException as exc:
         app.logger.warning('Failed to add user points for %s: %s', normalized_user_id, exc)
-        return None
+        try:
+            return add_user_points_direct(normalized_user_id, normalized_amount, transaction_type, reason, normalized_metadata)
+        except requests.RequestException as fallback_exc:
+            app.logger.warning('Direct add user points fallback failed for %s: %s', normalized_user_id, fallback_exc)
+            return None
     except RuntimeError as exc:
         app.logger.warning('Failed to add user points for %s: %s', normalized_user_id, exc)
-        return None
+        try:
+            return add_user_points_direct(normalized_user_id, normalized_amount, transaction_type, reason, normalized_metadata)
+        except requests.RequestException as fallback_exc:
+            app.logger.warning('Direct add user points fallback failed for %s: %s', normalized_user_id, fallback_exc)
+            return None
     return payload if isinstance(payload, dict) else None
 
 
@@ -2237,6 +2434,14 @@ def guess_extension(mime_type: str, fallback: str = '.png') -> str:
     return extension or fallback
 
 
+def sanitize_filename_part(value: str, fallback: str = 'file') -> str:
+    text = str(value or '').strip()
+    text = re.sub(r'[\\/:*?"<>|\x00-\x1f]+', '-', text)
+    text = re.sub(r'\s+', '-', text)
+    text = re.sub(r'-{2,}', '-', text).strip('-. _')
+    return (text or fallback)[:80]
+
+
 def sniff_image_mime_type(content: bytes):
     if content.startswith(b'RIFF') and content[8:12] == b'WEBP':
         return 'image/webp'
@@ -3794,19 +3999,113 @@ def get_ark_client() -> OpenAI:
 
 def get_mode2_client() -> OpenAI:
     return OpenAI(
-        api_key=get_supabase_setting('MODE2_OPENAI_API_KEY'),
+        api_key=get_supabase_setting('MODE2_OPENAI_API_KEY', get_optional_env('MODE2_OPENAI_API_KEY', 'any-value')),
         base_url=get_supabase_setting('MODE2_OPENAI_BASE_URL', get_optional_env('MODE2_OPENAI_BASE_URL', 'https://ark.cn-beijing.volces.com/api/v3')).rstrip('/'),
     )
 
 
-def resolve_mode2_image_size(ratio: str, resolution: str) -> str:
+def resolve_mode2_image_resolution(resolution: str) -> str:
+    normalized_resolution = (resolution or '').strip() or get_supabase_setting('MODE2_DEFAULT_RESOLUTION', get_optional_env('MODE2_DEFAULT_RESOLUTION', '2k'))
+    compact_resolution = normalized_resolution.lower().replace(' ', '')
+    if compact_resolution in {'1k', '2k', '4k'}:
+        return compact_resolution
+    if compact_resolution in {'1024x1024', '1328x1328'}:
+        return '1k'
+    if compact_resolution in {'2048x2048', '2304x2304'}:
+        return '2k'
+    if compact_resolution in {'4096x4096'}:
+        return '4k'
+    return compact_resolution
+
+
+def resolve_mode2_image_ratio(ratio: str) -> str:
     normalized_ratio = (ratio or '').strip() or get_supabase_setting('MODE2_DEFAULT_RATIO', get_optional_env('MODE2_DEFAULT_RATIO', '1:1'))
+    return normalized_ratio or '1:1'
+
+
+def resolve_mode2_image_size(ratio: str, resolution: str) -> str:
     normalized_resolution = (resolution or '').strip()
     if normalized_resolution:
         return normalized_resolution
+    normalized_ratio = resolve_mode2_image_ratio(ratio)
     if normalized_ratio in IMAGE_SIZE_RATIO_MAP:
         return IMAGE_SIZE_RATIO_MAP[normalized_ratio]
     return get_supabase_setting('MODE2_DEFAULT_RESOLUTION', get_optional_env('MODE2_DEFAULT_RESOLUTION', '2048x2048'))
+
+
+def get_mode2_retry_attempts() -> int:
+    return max(get_supabase_setting_int('MODE2_RETRY_ATTEMPTS', get_optional_int_env('MODE2_RETRY_ATTEMPTS', 2)), 0)
+
+
+def get_mode2_retry_delay_seconds() -> float:
+    raw_value = get_supabase_setting('MODE2_RETRY_DELAY_SECONDS', get_optional_env('MODE2_RETRY_DELAY_SECONDS', '1.5'))
+    try:
+        return max(float(raw_value), 0.0)
+    except ValueError:
+        return 1.5
+
+
+def is_retryable_mode2_error(exc: Exception) -> bool:
+    message = str(exc or '')
+    retryable_fragments = (
+        'Unexpected end of JSON input',
+        'sessions.json',
+        'JSONDecodeError',
+        'Expecting value',
+        'Read timed out',
+        'Connection aborted',
+        'Connection reset',
+        'temporarily unavailable',
+        '积分不足或没有相关权益',
+        '没有相关权益',
+        '请求jimeng失败',
+    )
+    if any(fragment.lower() in message.lower() for fragment in retryable_fragments):
+        return True
+    status_code = getattr(exc, 'status_code', None)
+    return status_code in {408, 409, 425, 429, 500, 502, 503, 504}
+
+
+def get_mode2_response_error(response) -> str:
+    if response is None:
+        return ''
+    error_code = getattr(response, 'code', None)
+    error_message = getattr(response, 'message', None)
+    if isinstance(response, dict):
+        error_code = response.get('code', error_code)
+        error_message = response.get('message') or response.get('error') or error_message
+    if error_message:
+        return str(error_message)
+    if error_code not in (None, 0):
+        return f'错误码：{error_code}'
+    return ''
+
+
+class RetryableMode2ResponseError(RuntimeError):
+    pass
+
+
+def call_mode2_images_generate_with_retry(client: OpenAI, request_payload: dict):
+    retry_attempts = get_mode2_retry_attempts()
+    retry_delay_seconds = get_mode2_retry_delay_seconds()
+    total_attempts = retry_attempts + 1
+    last_exc = None
+    for attempt_index in range(total_attempts):
+        try:
+            response = client.images.generate(**request_payload)
+            response_error = get_mode2_response_error(response)
+            if response_error and is_retryable_mode2_error(Exception(response_error)):
+                raise RetryableMode2ResponseError(response_error)
+            return response
+        except Exception as exc:
+            last_exc = exc
+            should_retry = attempt_index < retry_attempts and is_retryable_mode2_error(exc)
+            if not should_retry:
+                raise
+            wait_seconds = retry_delay_seconds * (attempt_index + 1)
+            app.logger.warning('Mode2 image generation failed, retrying in %.2fs (%s/%s): %s', wait_seconds, attempt_index + 1, retry_attempts, exc)
+            time.sleep(wait_seconds)
+    raise last_exc
 
 
 def get_mode2_sample_strength(sample_strength: str) -> float:
@@ -3911,6 +4210,15 @@ def pick_generated_image_item(response):
     if data is None and isinstance(response, dict):
         data = response.get('data')
     if not isinstance(data, list) or not data:
+        error_code = getattr(response, 'code', None)
+        error_message = getattr(response, 'message', None)
+        if isinstance(response, dict):
+            error_code = response.get('code', error_code)
+            error_message = response.get('message') or response.get('error') or error_message
+        if error_message:
+            raise ValueError(f'图像生成接口返回错误：{error_message}')
+        if error_code not in (None, 0):
+            raise ValueError(f'图像生成接口返回错误码：{error_code}')
         raise ValueError('图像生成接口未返回图片数据')
     return normalize_generated_image_item(data[0])
 
@@ -3920,18 +4228,18 @@ def call_mode2_image_edit(client: OpenAI, prompt: str, image_payloads, ratio: st
     request_payload = {
         'model': model,
         'prompt': prompt,
-        'size': resolve_mode2_image_size(ratio, resolution),
-        'response_format': 'b64_json',
+        'response_format': 'url',
         'extra_body': {
-            'images': [image_payload['data_url'] for image_payload in image_payloads],
+            'image': [image_payload['data_url'] for image_payload in image_payloads],
             'sample_strength': get_mode2_sample_strength(sample_strength),
+            'ratio': resolve_mode2_image_ratio(ratio),
+            'resolution': resolve_mode2_image_resolution(resolution),
         },
     }
     request_extra_body = dict(request_payload['extra_body'])
-    request_extra_body['images'] = [image_payload['data_url'] for image_payload in image_payloads]
     request_extra_body['image_count'] = len(image_payloads)
-    app.logger.warning('Mode2 image edit request extra_body image_count=%s', request_extra_body['image_count'])
-    response = client.images.generate(**request_payload)
+    app.logger.warning('Mode2 image edit request extra_body image_count=%s ratio=%s resolution=%s', request_extra_body['image_count'], request_extra_body['ratio'], request_extra_body['resolution'])
+    response = call_mode2_images_generate_with_retry(client, request_payload)
     return pick_generated_image_item(response), model
 
 
@@ -3940,11 +4248,14 @@ def call_mode2_text2image(client: OpenAI, prompt: str, ratio: str, resolution: s
     request_payload = {
         'model': model,
         'prompt': prompt,
-        'size': resolve_mode2_image_size(ratio, resolution),
-        'response_format': 'b64_json',
+        'response_format': 'url',
+        'extra_body': {
+            'ratio': resolve_mode2_image_ratio(ratio),
+            'resolution': resolve_mode2_image_resolution(resolution),
+        },
     }
-    app.logger.warning('Mode2 text2image request size=%s model=%s', request_payload['size'], model)
-    response = client.images.generate(**request_payload)
+    app.logger.warning('Mode2 text2image request ratio=%s resolution=%s model=%s', request_payload['extra_body']['ratio'], request_payload['extra_body']['resolution'], model)
+    response = call_mode2_images_generate_with_retry(client, request_payload)
     return pick_generated_image_item(response), model
 
 
@@ -4026,33 +4337,13 @@ def decode_generated_image(item: dict):
 
 
 
-def collect_streamed_generated_images(events):
-    generated_images = []
-    usage = None
-
-    for event in events:
-        if event is None:
-            continue
-
-        event_type = getattr(event, 'type', '') or ''
-        if event_type == 'image_generation.partial_succeeded':
-            b64_json = getattr(event, 'b64_json', None)
-            image_url = getattr(event, 'url', None)
-            if b64_json:
-                generated_images.append({'b64_json': b64_json})
-            elif image_url:
-                generated_images.append({'url': image_url})
-        elif event_type == 'image_generation.completed':
-            usage = getattr(event, 'usage', None)
-
-    if not generated_images:
-        raise ValueError('流式图像生成未返回可用图片内容')
-
-    if usage is not None:
-        for item in generated_images:
-            item['usage'] = usage
-
-    return generated_images
+def collect_generated_images(response):
+    data = getattr(response, 'data', None)
+    if data is None and isinstance(response, dict):
+        data = response.get('data')
+    if not isinstance(data, list) or not data:
+        raise ValueError('图像生成接口未返回图片数据')
+    return [normalize_generated_image_item(item) for item in data]
 
 
 def save_generated_image(task_id: str, sort: int, image_type: str, image_bytes: bytes, mime_type: str):
@@ -4224,7 +4515,6 @@ def call_image_generation(client: OpenAI, prompt: str, image_payloads, image_siz
         'prompt': enriched_prompt,
         'size': size,
         'response_format': 'b64_json',
-        'stream': True,
     }
 
     extra_body = {
@@ -4242,7 +4532,7 @@ def call_image_generation(client: OpenAI, prompt: str, image_payloads, image_siz
     app.logger.warning('ARK image request extra_body: %s', json.dumps(extra_body, ensure_ascii=False))
 
     response = client.images.generate(**request_payload)
-    return collect_streamed_generated_images(response)
+    return collect_generated_images(response)
 
 
 def generate_suite_images(plan: dict, image_payloads, task_id: str, image_size_ratio: str, text_type: str, country: str, product_json=None):

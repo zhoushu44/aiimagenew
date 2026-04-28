@@ -1264,9 +1264,21 @@ document.addEventListener('DOMContentLoaded', () => {
       }
     };
 
+    const buildPointsRequestId = () => {
+      if (window.crypto?.randomUUID) {
+        return window.crypto.randomUUID();
+      }
+      return `${Date.now()}-${Math.random().toString(16).slice(2)}`;
+    };
+
     const requestPointsSpend = async ({ mode, outputCount = 0, selectedModulesCount = 0, selectedSceneCount = 0, type, reason, metadata }) => {
       const normalizedMode = String(mode || 'suite').trim() || 'suite';
       const normalizedMetadata = metadata && typeof metadata === 'object' ? metadata : {};
+      const requestId = normalizedMetadata.request_id || buildPointsRequestId();
+      const requestMetadata = {
+        ...normalizedMetadata,
+        request_id: requestId,
+      };
       const response = await fetch('/api/points/spend', {
         method: 'POST',
         headers: {
@@ -1281,7 +1293,7 @@ document.addEventListener('DOMContentLoaded', () => {
           selected_scene_count: Math.max(Number(selectedSceneCount) || 0, 0),
           type,
           reason,
-          metadata: normalizedMetadata,
+          metadata: requestMetadata,
         }),
       });
       const result = await response.json().catch(() => ({}));
@@ -1297,8 +1309,9 @@ document.addEventListener('DOMContentLoaded', () => {
         }
         throw new Error(baseMessage);
       }
+      const spendMetadata = consume?.metadata && typeof consume.metadata === 'object' ? consume.metadata : requestMetadata;
       if (consumeAmount <= 0) {
-        return { skipped: true, points: result.points || null, consume };
+        return { skipped: true, points: result.points || null, consume, requestId, metadata: spendMetadata };
       }
       return {
         skipped: false,
@@ -1306,7 +1319,9 @@ document.addEventListener('DOMContentLoaded', () => {
         mode: consume?.mode || normalizedMode,
         type: consume?.type || type,
         reason: consume?.reason || reason,
-        metadata: consume?.metadata && typeof consume.metadata === 'object' ? consume.metadata : normalizedMetadata,
+        metadata: spendMetadata,
+        requestId,
+        refunded: false,
         rule: consume?.rule || null,
         consume,
         points: result.points || null,
@@ -1339,10 +1354,17 @@ document.addEventListener('DOMContentLoaded', () => {
       return result.quote;
     };
 
-    const requestPointsRefund = async (spendRecord) => {
-      if (!spendRecord || spendRecord.skipped || !(Number(spendRecord.amount) > 0)) {
+    const requestPointsRefund = async (spendRecord, failureMessage = '') => {
+      if (!spendRecord || spendRecord.skipped || spendRecord.refunded || !(Number(spendRecord.amount) > 0)) {
         return null;
       }
+      const refundMetadata = {
+        ...(spendRecord.metadata && typeof spendRecord.metadata === 'object' ? spendRecord.metadata : {}),
+        request_id: spendRecord.requestId || spendRecord.metadata?.request_id || '',
+        refunded: true,
+        refund_reason: 'generation_failed',
+        failure_message: String(failureMessage || '').slice(0, 300),
+      };
       const response = await fetch('/api/points/refund', {
         method: 'POST',
         headers: {
@@ -1352,18 +1374,16 @@ document.addEventListener('DOMContentLoaded', () => {
         credentials: 'same-origin',
         body: JSON.stringify({
           amount: Number(spendRecord.amount),
-          type: `${spendRecord.type || 'refund'}_refund`,
-          reason: spendRecord.reason || '生成失败返还积分',
-          metadata: {
-            ...(spendRecord.metadata && typeof spendRecord.metadata === 'object' ? spendRecord.metadata : {}),
-            refunded: true,
-          },
+          type: `${spendRecord.type || 'consume'}_refund`,
+          reason: `${spendRecord.reason || '生成消耗'}失败返还`,
+          metadata: refundMetadata,
         }),
       });
       const result = await response.json().catch(() => ({}));
       if (!response.ok || !result?.success) {
         throw new Error(result?.error || '积分返还失败');
       }
+      spendRecord.refunded = true;
       return result.points || null;
     };
 
@@ -1612,19 +1632,23 @@ document.addEventListener('DOMContentLoaded', () => {
         syncFashionState({ fashionFlowStep: 'result' });
         saveStateToLocalStorage();
       } catch (error) {
+        let refundFailed = false;
         if (spendRecord && !currentResultItems.length) {
           try {
-            const refundedPoints = await requestPointsRefund(spendRecord);
+            const refundedPoints = await requestPointsRefund(spendRecord, error.message || config.errorFallback);
             syncSharedPointsState(refundedPoints);
           } catch (refundError) {
+            refundFailed = true;
           }
         }
         resetResultState();
         syncFashionState({ fashionFlowStep: 'scene' });
         if (resultMeta) {
-          resultMeta.textContent = '生成失败后可修改商品图、模特或场景设置后重试。';
+          resultMeta.textContent = refundFailed
+            ? '生成失败，且自动返还积分失败，请联系客服核查。'
+            : '生成失败后已自动返还本次扣减积分，可修改商品图、模特或场景设置后重试。';
         }
-        setResultStatus(error.message || config.errorFallback, 'error');
+        setResultStatus(refundFailed ? `${error.message || config.errorFallback}；本次积分自动返还失败，请联系客服核查。` : `${error.message || config.errorFallback}；本次扣减积分已自动返还。`, 'error');
         persistState();
       } finally {
         applyFashionGenerateButtonState();
@@ -2760,18 +2784,22 @@ document.addEventListener('DOMContentLoaded', () => {
           setResultStatus(`${result.plan?.summary || config.successFallback.replace('{count}', String(getCurrentOutputMetric(result)))}，已消耗 ${pointsCost} 积分`, 'success');
           saveStateToLocalStorage();
         } catch (error) {
+          let refundFailed = false;
           if (spendRecord && !currentResultItems.length) {
             try {
-              const refundedPoints = await requestPointsRefund(spendRecord);
+              const refundedPoints = await requestPointsRefund(spendRecord, error.message || config.errorFallback);
               syncSharedPointsState(refundedPoints);
             } catch (refundError) {
+              refundFailed = true;
             }
           }
           resetResultState();
           if (resultMeta) {
-            resultMeta.textContent = '生成失败后可修改卖点、平台或素材后重试。';
+            resultMeta.textContent = refundFailed
+              ? '生成失败，且自动返还积分失败，请联系客服核查。'
+              : '生成失败后已自动返还本次扣减积分，可修改卖点、平台或素材后重试。';
           }
-          setResultStatus(error.message || config.errorFallback, 'error');
+          setResultStatus(refundFailed ? `${error.message || config.errorFallback}；本次积分自动返还失败，请联系客服核查。` : `${error.message || config.errorFallback}；本次扣减积分已自动返还。`, 'error');
           persistState();
         } finally {
           generateBtn.disabled = false;
