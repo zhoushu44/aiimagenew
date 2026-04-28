@@ -4302,11 +4302,23 @@ def pick_generated_image_items(response, max_images: int = 1):
     return items
 
 
-def call_mode3_single_image(client: OpenAI, prompt: str, image_payloads):
+def call_mode3_single_image(prompt: str, image_payloads, image_size_ratio: str = '', text_type: str = '', country: str = '', product_json=None, image_type: str = '', plan_item=None, all_plan_types=None):
     if image_payloads:
-        generated_item, _model = call_mode3_image_edit(client, prompt, image_payloads)
-    else:
-        generated_item, _model = call_mode3_text2image(client, prompt)
+        generated_items = call_image_generation(
+            get_ark_client(),
+            prompt,
+            image_payloads,
+            image_size_ratio,
+            text_type,
+            country,
+            product_json,
+            image_type,
+            plan_item,
+            all_plan_types,
+            max_images=1,
+        )
+        return generated_items[0]
+    generated_item, _model = call_mode3_text2image(get_mode3_client(), prompt)
     return generated_item
 
 
@@ -4314,7 +4326,7 @@ def call_mode3_images_parallel_with_partial_retry(prompt: str, image_payloads, m
     target_count = max(1, int(max_images or 1))
     enriched_prompt = build_enriched_image_prompt(prompt, image_size_ratio, text_type, country, product_json, image_type, plan_item, all_plan_types)
     if target_count == 1:
-        return [call_mode3_single_image(get_mode3_client(), enriched_prompt, image_payloads)]
+        return [call_mode3_single_image(enriched_prompt, image_payloads, image_size_ratio, text_type, country, product_json, image_type, plan_item, all_plan_types)]
 
     sequential_mode = get_supabase_setting('MODE3_SEQUENTIAL_GENERATION', get_optional_env('MODE3_SEQUENTIAL_GENERATION', 'auto'))
     if sequential_mode != 'off':
@@ -4325,7 +4337,7 @@ def call_mode3_images_parallel_with_partial_retry(prompt: str, image_payloads, m
             last_exc = None
             for attempt in range(retry_attempts + 1):
                 try:
-                    item = call_mode3_single_image(get_mode3_client(), enriched_prompt, image_payloads)
+                    item = call_mode3_single_image(enriched_prompt, image_payloads, image_size_ratio, text_type, country, product_json, image_type, plan_item, all_plan_types)
                     generated_items.append(item)
                     break
                 except Exception as exc:
@@ -4343,8 +4355,7 @@ def call_mode3_images_parallel_with_partial_retry(prompt: str, image_payloads, m
     failures = []
 
     def run_one(global_index: int):
-        client = get_mode3_client()
-        return call_mode3_single_image(client, enriched_prompt, image_payloads)
+        return call_mode3_single_image(enriched_prompt, image_payloads, image_size_ratio, text_type, country, product_json, image_type, plan_item, all_plan_types)
 
     for attempt_index in range(partial_retry_attempts + 1):
         missing_count = target_count - len(generated_items)
@@ -4448,10 +4459,18 @@ def call_mode3_text2image(client: OpenAI, prompt: str):
 
 def call_mode3_image_edit(client: OpenAI, prompt: str, image_payloads):
     model = get_supabase_setting('MODE3_IMAGE_MODEL', get_optional_env('MODE3_IMAGE_MODEL', 'gpt-image-2'))
+    reference_instruction = (
+        '参考图指令：你必须仔细分析提供的参考图片，提取商品的关键特征，包括：\n'
+        '- 商品的形状、轮廓和结构\n'
+        '- 商品的颜色和材质\n'
+        '- 商品的关键部件和细节\n'
+        '- 商品的品牌标识和logo\n'
+        '生成的图片必须与参考图片中的商品保持高度一致，禁止生成与参考图无关的商品。\n\n'
+    )
     content = [
         {
             'type': 'text',
-            'text': prompt,
+            'text': reference_instruction + prompt,
         },
     ]
     for image_payload in image_payloads:
