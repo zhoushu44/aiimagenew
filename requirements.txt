@@ -4,3 +4,4 @@ requests
 openai>=1.0
 httpx<0.28
 psycopg2-binary
+Pillow
