@@ -24,6 +24,7 @@ import requests
 from dotenv import load_dotenv
 from flask import Flask, g, jsonify, make_response, redirect, request, send_file, send_from_directory, url_for
 from openai import APIError, APIStatusError, OpenAI
+from PIL import Image
 from requests.adapters import HTTPAdapter
 from urllib3.util.retry import Retry
 from werkzeug.exceptions import RequestEntityTooLarge
@@ -101,6 +102,14 @@ ZPAY_RETURN_URL = (os.getenv('ZPAY_RETURN_URL') or '').strip()
 ZPAY_DEFAULT_CHANNEL = (os.getenv('ZPAY_DEFAULT_CHANNEL') or 'alipay').strip()
 ZPAY_SUBSCRIPTION_PRODUCT_DAYS = (os.getenv('SUBSCRIPTION_PRODUCT_DAYS_JSON') or '{}').strip()
 ZPAY_SUCCESS_STATUSES = {'TRADE_SUCCESS', 'TRADE_FINISHED', 'SUCCESS'}
+PAYMENT_POINTS_PACKAGE_MAP = {
+    'plan_1': 100,
+    'plan_2': 300,
+    'plan_3': 1000,
+    'month': 100,
+    'quarter': 300,
+    'year': 1000,
+}
 
 
 def build_supabase_request_url(path: str) -> str:
@@ -712,6 +721,50 @@ def parse_money_amount(value) -> Decimal:
     return amount
 
 
+def get_payment_points_amount(package_id: str) -> int:
+    normalized_package_id = str(package_id or '').strip()
+    if not normalized_package_id:
+        return 0
+    return max(int(PAYMENT_POINTS_PACKAGE_MAP.get(normalized_package_id, 0) or 0), 0)
+
+
+def grant_payment_points_once(order_row: dict) -> dict | None:
+    user_id = str((order_row or {}).get('user_id') or '').strip()
+    order_no = str((order_row or {}).get('order_no') or '').strip()
+    package_id = str((order_row or {}).get('package_id') or '').strip()
+    points_amount = get_payment_points_amount(package_id)
+    if not user_id or not order_no or points_amount <= 0:
+        return None
+    existing_response = requests.get(
+        build_supabase_request_url('/rest/v1/user_points_transactions'),
+        headers=_build_supabase_service_headers(),
+        params={
+            'select': 'id',
+            'user_id': f'eq.{user_id}',
+            'transaction_type': 'eq.purchase',
+            'metadata->>order_no': f'eq.{order_no}',
+            'limit': '1',
+        },
+        timeout=20,
+    )
+    existing_response.raise_for_status()
+    existing_payload = existing_response.json()
+    if isinstance(existing_payload, list) and existing_payload:
+        return get_user_points_balance(user_id)
+    return add_user_points(
+        user_id,
+        points_amount,
+        'purchase',
+        '购买积分套餐入账',
+        {
+            'order_no': order_no,
+            'package_id': package_id,
+            'amount': str((order_row or {}).get('amount') or ''),
+            'zpay_trade_no': str((order_row or {}).get('zpay_trade_no') or ''),
+        },
+    )
+
+
 def load_subscription_days_config() -> dict[str, int]:
     try:
         payload = json.loads(ZPAY_SUBSCRIPTION_PRODUCT_DAYS or '{}')
@@ -765,12 +818,12 @@ def fetch_latest_active_subscription(user_id: str, product_id: str) -> dict | No
         build_supabase_request_url(f'/rest/v1/{SUPABASE_PAYMENTS_TABLE}'),
         headers=_build_supabase_service_headers(),
         params={
-            'select': 'subscribe_expire',
+            'select': 'subscribe_expire_at',
             'user_id': f'eq.{normalized_user_id}',
-            'product_id': f'eq.{normalized_product_id}',
-            'type': 'eq.subscription',
-            'status': 'eq.success',
-            'order': 'subscribe_expire.desc',
+            'package_id': f'eq.{normalized_product_id}',
+            'pay_type': 'eq.subscription',
+            'status': 'eq.paid',
+            'order': 'subscribe_expire_at.desc',
             'limit': '1',
         },
         timeout=20,
@@ -794,7 +847,7 @@ def compute_subscription_period(user_id: str, product_id: str) -> tuple[datetime
     subscription_days = get_subscription_days(product_id)
     now = datetime.now(timezone.utc)
     latest_row = fetch_latest_active_subscription(user_id, product_id)
-    latest_expire = parse_iso_datetime((latest_row or {}).get('subscribe_expire'))
+    latest_expire = parse_iso_datetime((latest_row or {}).get('subscribe_expire_at'))
     subscribe_start = latest_expire if latest_expire and latest_expire > now else now
     subscribe_expire = subscribe_start + timedelta(days=subscription_days)
     return subscribe_start, subscribe_expire, subscription_days
@@ -874,7 +927,7 @@ def fetch_payment_order_by_out_trade_no(out_trade_no: str) -> dict | None:
         headers=_build_supabase_service_headers(),
         params={
             'select': '*',
-            'out_trade_no': f'eq.{normalized_order_no}',
+            'order_no': f'eq.{normalized_order_no}',
             'limit': '1',
         },
         timeout=20,
@@ -914,7 +967,7 @@ def update_payment_order(out_trade_no: str, patch_payload: dict) -> dict:
             'Prefer': 'return=minimal',
         },
         params={
-            'out_trade_no': f'eq.{normalized_order_no}',
+            'order_no': f'eq.{normalized_order_no}',
         },
         json=patch_payload,
         timeout=20,
@@ -1002,7 +1055,7 @@ def normalize_callback_payload() -> dict:
 
 
 def is_order_success(order_row: dict | None) -> bool:
-    return str((order_row or {}).get('status') or '').strip().lower() == 'success'
+    return str((order_row or {}).get('status') or '').strip().lower() == 'paid'
 
 
 def validate_callback_amount(order_row: dict, callback_money: str) -> None:
@@ -1013,18 +1066,26 @@ def validate_callback_amount(order_row: dict, callback_money: str) -> None:
 
 
 def process_success_payment(order_row: dict, callback_trade_no: str) -> dict:
-    out_trade_no = str((order_row or {}).get('out_trade_no') or '').strip()
+    out_trade_no = str((order_row or {}).get('order_no') or '').strip()
     if not out_trade_no:
         raise ValueError('订单号缺失')
     patch_payload = {
-        'status': 'success',
-        'trade_no': str(callback_trade_no or '').strip() or None,
+        'status': 'paid',
+        'zpay_trade_no': str(callback_trade_no or '').strip() or None,
+        'paid_at': datetime.now(timezone.utc).isoformat(),
+        'payment_method': str(((order_row or {}).get('callback_payload') or {}).get('type') or '').strip() or str((order_row or {}).get('payment_method') or '').strip() or None,
+        'callback_payload': normalize_callback_payload(),
     }
     updated_row = update_payment_order(out_trade_no, patch_payload)
 
-    if str((updated_row or {}).get('type') or '').strip().lower() == 'subscription':
+    try:
+        grant_payment_points_once(updated_row)
+    except requests.RequestException:
+        app.logger.exception('Failed to grant payment points after payment success: out_trade_no=%s', out_trade_no)
+
+    if str((updated_row or {}).get('pay_type') or '').strip().lower() == 'subscription':
         user_id = str((updated_row or {}).get('user_id') or '').strip()
-        subscribe_expire = str((updated_row or {}).get('subscribe_expire') or '').strip()
+        subscribe_expire = str((updated_row or {}).get('subscribe_expire_at') or '').strip()
         if user_id and subscribe_expire:
             try:
                 upsert_user_subscription_profile(user_id, subscribe_expire)
@@ -1036,16 +1097,16 @@ def process_success_payment(order_row: dict, callback_trade_no: str) -> dict:
 def serialize_payment_order(order_row: dict, *, pay_type: str, subscription_days: int | None = None) -> dict:
     return {
         'id': order_row.get('id'),
-        'out_trade_no': order_row.get('out_trade_no'),
+        'out_trade_no': order_row.get('order_no'),
         'user_id': order_row.get('user_id'),
-        'product_id': order_row.get('product_id'),
+        'product_id': order_row.get('package_id'),
         'amount': str(order_row.get('amount') or ''),
         'status': str(order_row.get('status') or ''),
         'type': pay_type,
-        'db_type': str(order_row.get('type') or ''),
-        'trade_no': order_row.get('trade_no'),
-        'subscribe_start': order_row.get('subscribe_start'),
-        'subscribe_expire': order_row.get('subscribe_expire'),
+        'db_type': str(order_row.get('pay_type') or ''),
+        'trade_no': order_row.get('zpay_trade_no'),
+        'subscribe_start': order_row.get('subscribe_start_at'),
+        'subscribe_expire': order_row.get('subscribe_expire_at'),
         'created_at': order_row.get('created_at'),
         'updated_at': order_row.get('updated_at'),
         'subscription_days': subscription_days,
@@ -2734,6 +2795,18 @@ def build_multimodal_content(prompt_text: str, image_files):
 
 
 CHAT_COMPLETION_RETRYABLE_STATUS_CODES = {429, 502, 503, 504}
+CHAT_COMPLETION_FALLBACK_ERROR_TOKENS = (
+    'Your request was blocked',
+    'AccountOverdueError',
+    'overdue balance',
+    'usage limit',
+    'usage_limit_reached',
+    'HTTPSConnectionPool',
+    'SSLError',
+    'SSLEOFError',
+    'EOF occurred in violation of protocol',
+    'Max retries exceeded',
+)
 
 
 def create_chat_completion_session():
@@ -2755,7 +2828,8 @@ def create_chat_completion_session():
 
 
 def _create_chat_client(api_key: str, base_url: str) -> OpenAI:
-    return OpenAI(api_key=api_key, base_url=base_url.rstrip('/'))
+    normalized_base_url = str(base_url or '').strip().rstrip('/') + '/'
+    return OpenAI(api_key=api_key, base_url=normalized_base_url)
 
 
 def _run_chat_completion(client: OpenAI, model: str, system_prompt: str, user_content, temperature: float, timeout_seconds: int):
@@ -2770,14 +2844,55 @@ def _run_chat_completion(client: OpenAI, model: str, system_prompt: str, user_co
     )
 
 
+def _run_chat_completion_http(api_key: str, base_url: str, model: str, system_prompt: str, user_content, temperature: float, timeout_seconds: int):
+    normalized_base_url = str(base_url or '').strip().rstrip('/') + '/'
+    session = create_chat_completion_session()
+    try:
+        response = session.post(
+            f'{normalized_base_url}chat/completions',
+            headers={
+                'Authorization': f'Bearer {api_key}',
+                'Content-Type': 'application/json',
+            },
+            json={
+                'model': model,
+                'messages': [
+                    {'role': 'system', 'content': system_prompt},
+                    {'role': 'user', 'content': user_content},
+                ],
+                'temperature': temperature,
+            },
+            timeout=timeout_seconds,
+        )
+    finally:
+        session.close()
+    if response.status_code >= 400:
+        raise RuntimeError(f'Error code: {response.status_code} - {response.text}')
+    return response.json()
+
+
+def should_enable_chat_fallback_to_ark() -> bool:
+    fallback_mode = str(get_supabase_setting('CHAT_FALLBACK_TO_ARK', get_optional_env('CHAT_FALLBACK_TO_ARK', 'auto')) or 'auto').strip().lower()
+    if fallback_mode in {'on', 'true', '1', 'yes'}:
+        return True
+    if fallback_mode in {'off', 'false', '0', 'no'}:
+        return False
+    return get_app_mode() != 'mode3'
+
+
+def get_suite_plan_timeout_seconds() -> int:
+    return max(get_supabase_setting_int('SUITE_PLAN_TIMEOUT_SECONDS', get_optional_int_env('SUITE_PLAN_TIMEOUT_SECONDS', 180)), 60)
+
+
 def call_chat_completion(system_prompt: str, user_content, temperature: float = 0.7, timeout_seconds: int = 60):
     primary_api_key = get_supabase_setting('OPENAI_API_KEY', get_env('OPENAI_API_KEY'))
     primary_base_url = get_supabase_setting('OPENAI_BASE_URL', get_env('OPENAI_BASE_URL'))
     primary_model = get_supabase_setting('OPENAI_MODEL', get_env('OPENAI_MODEL'))
 
     try:
-        response = _run_chat_completion(
-            _create_chat_client(primary_api_key, primary_base_url),
+        response = _run_chat_completion_http(
+            primary_api_key,
+            primary_base_url,
             primary_model,
             system_prompt,
             user_content,
@@ -2787,7 +2902,7 @@ def call_chat_completion(system_prompt: str, user_content, temperature: float = 
         model = primary_model
     except Exception as exc:
         error_text = str(exc)
-        should_fallback_to_ark = 'Your request was blocked' in error_text
+        should_fallback_to_ark = should_enable_chat_fallback_to_ark() and any(token in error_text for token in CHAT_COMPLETION_FALLBACK_ERROR_TOKENS)
         if not should_fallback_to_ark:
             raise
 
@@ -2798,23 +2913,26 @@ def call_chat_completion(system_prompt: str, user_content, temperature: float = 
             raise
 
         app.logger.warning(
-            'Primary chat completion blocked, fallback to Ark chat model=%s base_url=%s original_error=%s',
+            'Primary chat completion failed with fallbackable error, fallback to Ark chat model=%s base_url=%s original_error=%s',
             fallback_model,
             fallback_base_url,
             error_text,
         )
-        response = _run_chat_completion(
-            _create_chat_client(fallback_api_key, fallback_base_url),
-            fallback_model,
-            system_prompt,
-            user_content,
-            temperature,
-            timeout_seconds,
-        )
+        try:
+            response = _run_chat_completion(
+                _create_chat_client(fallback_api_key, fallback_base_url),
+                fallback_model,
+                system_prompt,
+                user_content,
+                temperature,
+                timeout_seconds,
+            )
+        except Exception as fallback_exc:
+            raise RuntimeError(f'主AI接口失败且备用AI接口也失败。主接口错误：{error_text}；备用接口错误：{fallback_exc}') from fallback_exc
         model = fallback_model
 
     try:
-        raw_response_text = response.model_dump_json(indent=2)
+        raw_response_text = json.dumps(response, ensure_ascii=False, indent=2) if isinstance(response, dict) else response.model_dump_json(indent=2)
     except Exception:
         raw_response_text = str(response)
     app.logger.warning(
@@ -2823,8 +2941,13 @@ def call_chat_completion(system_prompt: str, user_content, temperature: float = 
         raw_response_text,
     )
 
-    message = ((getattr(response, 'choices', None) or [None])[0] or {}).message
-    text = getattr(message, 'content', '') if message else ''
+    if isinstance(response, dict):
+        choice = ((response.get('choices') or [None])[0] or {})
+        message = choice.get('message') or {}
+        text = message.get('content') or ''
+    else:
+        message = ((getattr(response, 'choices', None) or [None])[0] or {}).message
+        text = getattr(message, 'content', '') if message else ''
     if isinstance(text, list):
         text = ''.join(part.text for part in text if getattr(part, 'text', None))
     elif text is None:
@@ -2834,7 +2957,7 @@ def call_chat_completion(system_prompt: str, user_content, temperature: float = 
     if not text:
         fallback_fields = ['reasoning_content']
         for field in fallback_fields:
-            fallback_text = getattr(message, field, '') if message else ''
+            fallback_text = message.get(field, '') if isinstance(message, dict) else (getattr(message, field, '') if message else '')
             if isinstance(fallback_text, list):
                 fallback_text = ''.join(part.text for part in fallback_text if getattr(part, 'text', None))
             elif fallback_text is None:
@@ -3189,8 +3312,10 @@ def parse_product_json(text: str):
     cleaned = strip_code_fences(text)
     try:
         payload = json.loads(cleaned)
-    except json.JSONDecodeError as exc:
-        raise ValueError(f'商品结构化信息格式异常：{exc}') from exc
+    except json.JSONDecodeError:
+        payload = extract_json_object_from_text(cleaned)
+        if payload is None:
+            raise ValueError('商品结构化信息格式异常：无法解析为 JSON 对象')
     if not isinstance(payload, dict):
         raise ValueError('商品结构化信息格式异常：顶层必须为对象')
     return normalize_product_json(payload)
@@ -3203,11 +3328,52 @@ def parse_product_json_payload(raw_value: str):
         return None
     try:
         payload = json.loads(normalized_raw)
-    except json.JSONDecodeError as exc:
-        raise ValueError('商品结构化信息参数格式异常') from exc
+    except json.JSONDecodeError:
+        payload = extract_json_object_from_text(normalized_raw)
+        if payload is None:
+            raise ValueError('商品结构化信息参数格式异常')
     if not isinstance(payload, dict):
         raise ValueError('商品结构化信息参数格式异常：顶层必须为对象')
     return normalize_product_json(payload)
+
+
+
+def extract_json_object_from_text(text: str):
+    if not text:
+        return None
+    candidate_patterns = [
+        r'\{[\s\S]*\}',
+    ]
+    for pattern in candidate_patterns:
+        match = re.search(pattern, text)
+        if not match:
+            continue
+        candidate = match.group(0).strip()
+        try:
+            return json.loads(candidate)
+        except json.JSONDecodeError:
+            continue
+    return None
+
+
+
+def extract_product_json_from_image_payloads(selling_text: str, image_payloads):
+    if not image_payloads:
+        return None
+    product_json_text = call_chat_completion(
+        PRODUCT_JSON_SYSTEM_PROMPT,
+        build_multimodal_content(
+            PRODUCT_JSON_USER_PROMPT_TEMPLATE.format(selling_text=selling_text or '（未填写）'),
+            image_payloads,
+        ),
+        temperature=0.2,
+        timeout_seconds=get_suite_plan_timeout_seconds(),
+    )
+    try:
+        return parse_product_json(product_json_text)
+    except ValueError as exc:
+        app.logger.warning('商品结构化信息解析失败，已降级为空结构：%s', exc)
+        return normalize_product_json(PRODUCT_JSON_FALLBACK)
 
 
 
@@ -3394,6 +3560,7 @@ def build_suite_plan(platform: str, selling_text: str, output_count: int, image_
             image_payloads,
         ),
         temperature=0.8,
+        timeout_seconds=get_suite_plan_timeout_seconds(),
     )
     return parse_suite_plan(response_text, output_count, type_rules)
 
@@ -4236,6 +4403,23 @@ def get_mode3_partial_retry_attempts() -> int:
     return max(get_supabase_setting_int('MODE3_PARTIAL_RETRY_ATTEMPTS', get_optional_int_env('MODE3_PARTIAL_RETRY_ATTEMPTS', 2)), 0)
 
 
+def get_mode3_timeout_seconds() -> int:
+    return max(get_supabase_setting_int('MODE3_TIMEOUT_SECONDS', get_optional_int_env('MODE3_TIMEOUT_SECONDS', 180)), 30)
+
+
+def get_mode3_suite_batch_size() -> int:
+    return max(get_supabase_setting_int('MODE3_SUITE_BATCH_SIZE', get_optional_int_env('MODE3_SUITE_BATCH_SIZE', 1)), 1)
+
+
+def should_mode3_use_sequential_generation(target_count: int, image_payloads) -> bool:
+    mode = str(get_supabase_setting('MODE3_SEQUENTIAL_GENERATION', get_optional_env('MODE3_SEQUENTIAL_GENERATION', 'auto')) or 'auto').strip().lower()
+    if mode in {'on', 'true', '1', 'yes'}:
+        return True
+    if mode in {'off', 'false', '0', 'no'}:
+        return False
+    return int(target_count or 0) <= 1
+
+
 def is_retryable_mode2_error(exc: Exception) -> bool:
     message = str(exc or '')
     retryable_fragments = (
@@ -4433,23 +4617,74 @@ def pick_generated_image_items(response, max_images: int = 1):
     return items
 
 
+def extract_generated_image_from_content(content):
+    if isinstance(content, str):
+        data_url_match = re.search(r'data:image/[^;]+;base64,[A-Za-z0-9+/=\s]+', content)
+        if data_url_match:
+            data_url = re.sub(r'\s+', '', data_url_match.group(0))
+            return {'b64_json': data_url.split(',', 1)[1]}
+        base64_match = re.search(r'(?<![A-Za-z0-9+/=])([A-Za-z0-9+/]{800,}={0,2})(?![A-Za-z0-9+/=])', content)
+        if base64_match:
+            return {'b64_json': base64_match.group(1)}
+        image_url_match = re.search(r'https?://[^\s\]})"\']+\.(?:png|jpe?g|webp|gif)(?:\?[^\s\]})"\']*)?', content, re.IGNORECASE)
+        if image_url_match:
+            return {'url': image_url_match.group(0)}
+        return None
+
+    if isinstance(content, list):
+        for part in content:
+            if hasattr(part, 'model_dump'):
+                part = part.model_dump()
+            elif hasattr(part, 'dict'):
+                part = part.dict()
+            if not isinstance(part, dict):
+                continue
+            if part.get('type') in {'image_url', 'input_image'}:
+                image_url = part.get('image_url') or part.get('url')
+                if isinstance(image_url, dict):
+                    image_url = image_url.get('url')
+                if isinstance(image_url, str) and image_url.startswith('data:image/') and ',' in image_url:
+                    return {'b64_json': image_url.split(',', 1)[1]}
+                if isinstance(image_url, str) and image_url:
+                    return {'url': image_url}
+            if part.get('type') in {'image', 'output_image'}:
+                image_data = part.get('image') or part.get('data') or part.get('b64_json')
+                if isinstance(image_data, dict):
+                    image_data = image_data.get('b64_json') or image_data.get('data') or image_data.get('url')
+                if isinstance(image_data, str) and image_data.startswith('data:image/') and ',' in image_data:
+                    return {'b64_json': image_data.split(',', 1)[1]}
+                if isinstance(image_data, str) and image_data.startswith(('http://', 'https://')):
+                    return {'url': image_data}
+                if isinstance(image_data, str) and image_data:
+                    return {'b64_json': image_data}
+            nested = extract_generated_image_from_content(part.get('text') or part.get('content'))
+            if nested:
+                return nested
+    return None
+
+
+def normalize_chat_completion_image_response(response):
+    if hasattr(response, 'model_dump'):
+        response_dict = response.model_dump()
+    elif hasattr(response, 'dict'):
+        response_dict = response.dict()
+    elif isinstance(response, dict):
+        response_dict = response
+    else:
+        return response
+
+    choices = response_dict.get('choices') if isinstance(response_dict, dict) else None
+    if not isinstance(choices, list) or not choices:
+        return response
+    message = (choices[0] or {}).get('message') or {}
+    generated_item = extract_generated_image_from_content(message.get('content'))
+    if generated_item:
+        return {'data': [generated_item]}
+    return response
+
+
 def call_mode3_single_image(prompt: str, image_payloads, image_size_ratio: str = '', text_type: str = '', country: str = '', product_json=None, image_type: str = '', plan_item=None, all_plan_types=None):
-    if image_payloads:
-        generated_items = call_image_generation(
-            get_ark_client(),
-            prompt,
-            image_payloads,
-            image_size_ratio,
-            text_type,
-            country,
-            product_json,
-            image_type,
-            plan_item,
-            all_plan_types,
-            max_images=1,
-        )
-        return generated_items[0]
-    generated_item, _model = call_mode3_text2image(get_mode3_client(), prompt)
+    generated_item, _model = call_mode3_image_edit(get_mode3_client(), prompt, image_payloads or [create_mode3_blank_canvas_payload(image_size_ratio)], image_size_ratio)
     return generated_item
 
 
@@ -4459,8 +4694,7 @@ def call_mode3_images_parallel_with_partial_retry(prompt: str, image_payloads, m
     if target_count == 1:
         return [call_mode3_single_image(enriched_prompt, image_payloads, image_size_ratio, text_type, country, product_json, image_type, plan_item, all_plan_types)]
 
-    sequential_mode = get_supabase_setting('MODE3_SEQUENTIAL_GENERATION', get_optional_env('MODE3_SEQUENTIAL_GENERATION', 'auto'))
-    if sequential_mode != 'off':
+    if should_mode3_use_sequential_generation(target_count, image_payloads):
         generated_items = []
         retry_attempts = get_mode3_retry_attempts()
         retry_delay_seconds = get_mode3_retry_delay_seconds()
@@ -4548,80 +4782,125 @@ def call_mode2_text2image(client: OpenAI, prompt: str, ratio: str, resolution: s
     return pick_generated_image_item(response), model
 
 
+def get_mode3_api_key() -> str:
+    api_key = get_supabase_setting('MODE3_OPENAI_API_KEY', get_optional_env('MODE3_OPENAI_API_KEY', ''))
+    if not api_key:
+        api_key = get_supabase_setting('OPENAI_API_KEY', get_optional_env('OPENAI_API_KEY', ''))
+    return api_key
+
+
+def get_mode3_base_url() -> str:
+    return get_supabase_setting('MODE3_OPENAI_BASE_URL', get_optional_env('MODE3_OPENAI_BASE_URL', 'https://code.ciyuanapi.xyz/v1')).rstrip('/')
+
+
+def get_mode3_image_edit_size(image_size_ratio: str = '') -> str:
+    configured_size = get_supabase_setting('MODE3_IMAGE_EDIT_SIZE', get_optional_env('MODE3_IMAGE_EDIT_SIZE', '2048x2048')).strip()
+    if configured_size:
+        return configured_size
+    return '2048x2048'
+
+
+def create_mode3_blank_canvas_payload(image_size_ratio: str = ''):
+    size = get_mode3_image_edit_size(image_size_ratio)
+    width, height = 2048, 2048
+    match = re.fullmatch(r'(\d+)x(\d+)', size)
+    if match:
+        width, height = int(match.group(1)), int(match.group(2))
+    image = Image.new('RGB', (width, height), (255, 255, 255))
+    buffer = io.BytesIO()
+    image.save(buffer, format='PNG')
+    image_bytes = buffer.getvalue()
+    return {
+        'filename': f'mode3-blank-{width}x{height}.png',
+        'mime_type': 'image/png',
+        'bytes': image_bytes,
+        'data_url': f'data:image/png;base64,{base64.b64encode(image_bytes).decode("ascii")}',
+    }
+
+
 def get_mode3_client() -> OpenAI:
     return OpenAI(
-        api_key=get_supabase_setting('MODE3_OPENAI_API_KEY', get_optional_env('MODE3_OPENAI_API_KEY', '')),
-        base_url=get_supabase_setting('MODE3_OPENAI_BASE_URL', get_optional_env('MODE3_OPENAI_BASE_URL', 'https://code.ciyuanapi.xyz/v1')).rstrip('/'),
+        api_key=get_mode3_api_key(),
+        base_url=get_mode3_base_url(),
     )
 
 
-def call_mode3_chat_completions_with_retry(client: OpenAI, request_payload: dict):
-    retry_attempts = get_mode3_retry_attempts()
-    retry_delay_seconds = get_mode3_retry_delay_seconds()
-    total_attempts = retry_attempts + 1
-    last_exc = None
-    for attempt_index in range(total_attempts):
-        try:
-            return client.chat.completions.create(**request_payload)
-        except Exception as exc:
-            last_exc = exc
-            should_retry = attempt_index < retry_attempts and is_retryable_mode2_error(exc)
-            if not should_retry:
-                raise
-            wait_seconds = retry_delay_seconds * (attempt_index + 1)
-            app.logger.warning('Mode3 image generation failed, retrying in %.2fs (%s/%s): %s', wait_seconds, attempt_index + 1, retry_attempts, exc)
-            time.sleep(wait_seconds)
-    raise last_exc
 
 
 def call_mode3_text2image(client: OpenAI, prompt: str):
     model = get_supabase_setting('MODE3_IMAGE_MODEL', get_optional_env('MODE3_IMAGE_MODEL', 'gpt-image-2'))
-    response = call_mode3_chat_completions_with_retry(client, {
-        'model': model,
-        'messages': [
-            {
-                'role': 'user',
-                'content': prompt,
-            },
-        ],
-    })
-    return pick_generated_image_item(response), model
+    blank_payload = create_mode3_blank_canvas_payload()
+    generated_item, _model = call_mode3_image_edit(client, prompt, [blank_payload], get_mode3_image_edit_size())
+    return generated_item, model
 
 
-def call_mode3_image_edit(client: OpenAI, prompt: str, image_payloads):
-    model = get_supabase_setting('MODE3_IMAGE_MODEL', get_optional_env('MODE3_IMAGE_MODEL', 'gpt-image-2'))
-    reference_instruction = (
-        '参考图指令：你必须仔细分析提供的参考图片，提取商品的关键特征，包括：\n'
-        '- 商品的形状、轮廓和结构\n'
-        '- 商品的颜色和材质\n'
-        '- 商品的关键部件和细节\n'
-        '- 商品的品牌标识和logo\n'
-        '生成的图片必须与参考图片中的商品保持高度一致，禁止生成与参考图无关的商品。\n\n'
+def build_mode1_reference_anchor_prompt(reference_count: int) -> str:
+    return (
+        f'参考图执行约束（按 mode1 当前图生图模板执行，已接收 {max(reference_count or 0, 0)} 张参考图）：\n'
+        '- 以下 multipart image 文件中的图片必须作为商品主体唯一锚点，不是风格灵感图，也不是可替换示例图。\n'
+        '- 若提供了参考商品图，必须把参考图视为主体锚点，优先复用其主体外观、颜色关系、材质质感、结构比例、边缘轮廓、关键部件、logo/品牌位与稳定细节。\n'
+        '- 产品一致性是最高优先级，高于场景变化、版式变化、卖点表达和同套图差异；如果差异化要求与产品一致性冲突，必须优先保持商品主体一致。\n'
+        '- 若提供了不可变商品特征，必须将其中的主体品类、核心主体、颜色体系、材质、轮廓、结构、关键部件、品牌标识、logo位置、稳定细节、must_keep、must_not_change、forbidden_changes 与 consistency_rules 视为最高优先级约束。\n'
+        '- 生成时只能改变背景、道具、光线、构图、文字版式、人物动作和非主体装饰；不得重新设计商品，不得替换商品品类，不得改变商品颜色体系、材质质感、结构比例、关键部件组合、logo/品牌位置或包装识别。\n'
+        '- selling_points 只能用于补充文案重点、信息层级与卖点表达，不得推动商品变成其他颜色、其他材质、其他结构、其他部件方案或其他品牌观感。\n'
+        '- 允许变化的仅限背景、道具、光线、构图、文案排版与非主体装饰；禁止把商品改成另一种外观、另一种材质表现、另一种结构、另一种颜色体系、另一种关键部件组合或另一种品牌识别。\n'
+        '- 不要把场景氛围、背景纯度、人物气质或镜头语言误当作商品主体特征；它们只能作为从属变化，不能覆盖主体锁定要求。\n'
+        '- 如果参考图商品带有文字、logo、印花、包装标识或品牌图案，这些内容属于商品主体外观，必须尽量保持位置、大小关系、颜色关系、朝向和识别感；不要新增、替换、重写或随机改造商品本身已有标识。\n'
+        '- 当前任务必须基于参考图做图生图延展，而不是根据场景 prompt 重新想象一个新商品。\n\n'
     )
-    content = [
-        {
-            'type': 'text',
-            'text': reference_instruction + prompt,
-        },
-    ]
-    for image_payload in image_payloads:
-        image_url = image_payload.get('source_url') or image_payload['data_url']
-        content.append({
-            'type': 'image_url',
-            'image_url': {
-                'url': image_url,
-            },
-        })
-    response = call_mode3_chat_completions_with_retry(client, {
+
+
+
+def call_mode3_image_edit(client: OpenAI, prompt: str, image_payloads, image_size_ratio: str = ''):
+    model = get_supabase_setting('MODE3_IMAGE_MODEL', get_optional_env('MODE3_IMAGE_MODEL', 'gpt-image-2'))
+    size = get_mode3_image_edit_size(image_size_ratio)
+    watermark = get_supabase_setting_bool('MODE3_IMAGE_WATERMARK', get_optional_bool_env('MODE3_IMAGE_WATERMARK', False))
+    reference_instruction = build_mode1_reference_anchor_prompt(len(image_payloads or []))
+    base_url = get_mode3_base_url()
+    api_key = get_mode3_api_key()
+    if not api_key:
+        raise ValueError('mode3 图生图缺少 MODE3_OPENAI_API_KEY')
+    request_url = f'{base_url}/images/edits'
+    data = {
         'model': model,
-        'messages': [
-            {
-                'role': 'user',
-                'content': content,
-            },
-        ],
-    })
-    return pick_generated_image_item(response), model
+        'prompt': reference_instruction + prompt,
+        'size': size,
+        'response_format': 'url',
+    }
+    quality = get_supabase_setting('MODE3_IMAGE_QUALITY', get_optional_env('MODE3_IMAGE_QUALITY', '')).strip()
+    if quality:
+        data['quality'] = quality
+    if watermark:
+        data['watermark'] = 'true'
+    files = []
+    for index, payload in enumerate(image_payloads or [], start=1):
+        filename = str(payload.get('filename') or f'image-{index}.png')
+        mime_type = str(payload.get('mime_type') or 'image/png')
+        image_bytes = payload.get('bytes')
+        if not isinstance(image_bytes, (bytes, bytearray)) or not image_bytes:
+            raise ValueError(f'mode3 图生图参考图 {filename} 内容为空')
+        files.append(('image', (filename, bytes(image_bytes), mime_type)))
+    app.logger.warning(
+        'Mode3 image edit request via images/edits multipart model=%s size=%s reference_count=%s base_url=%s template=mode1_reference_anchor',
+        model,
+        size,
+        len(files),
+        base_url,
+    )
+    response = requests.post(
+        request_url,
+        headers={'Authorization': f'Bearer {api_key}'},
+        data=data,
+        files=files,
+        timeout=get_mode3_timeout_seconds(),
+    )
+    if response.status_code >= 400:
+        raise ValueError(f'mode3 图生图接口错误 {response.status_code}：{response.text[:500]}')
+    try:
+        payload = response.json()
+    except ValueError as exc:
+        raise ValueError('mode3 图生图接口返回了无效 JSON') from exc
+    return pick_generated_image_item(payload), model
 
 
 def call_app_mode_image_generation(client: OpenAI, prompt: str, image_payloads, image_size_ratio: str, text_type: str, country: str, product_json=None, image_type: str = '', plan_item=None, all_plan_types=None, max_images: int = 1):
@@ -4700,11 +4979,6 @@ def pick_image_data_entry(data):
 
 
 def decode_generated_image(item: dict):
-    if item.get('b64_json'):
-        image_bytes = base64.b64decode(item['b64_json'])
-        detected_mime_type = sniff_image_mime_type(image_bytes)
-        return image_bytes, detected_mime_type or 'image/png'
-
     if item.get('url'):
         response = requests.get(item['url'], timeout=120)
         response.raise_for_status()
@@ -4712,6 +4986,11 @@ def decode_generated_image(item: dict):
         header_mime_type = response.headers.get('Content-Type', 'image/png').split(';', 1)[0].strip()
         detected_mime_type = sniff_image_mime_type(image_bytes)
         return image_bytes, detected_mime_type or header_mime_type or 'image/png'
+
+    if item.get('b64_json'):
+        image_bytes = base64.b64decode(item['b64_json'])
+        detected_mime_type = sniff_image_mime_type(image_bytes)
+        return image_bytes, detected_mime_type or 'image/png'
 
     raise ValueError('图像生成接口未返回可用图片内容')
 
@@ -4756,6 +5035,7 @@ def build_reference_images(task_id: str, image_payloads, source: str = 'product'
     reference_images = []
     source_meta = {
         'product': {'type': '商品原图', 'type_tag': 'Prod', 'reference_source': 'product'},
+        'reference': {'type': '参考图', 'type_tag': 'Ref', 'reference_source': 'reference'},
         'fashion_reference': {'type': '穿搭参考图', 'type_tag': 'Look', 'reference_source': 'fashion_reference'},
     }
     meta = source_meta.get(source, source_meta['product'])
@@ -4922,8 +5202,10 @@ def build_enriched_image_prompt(prompt: str, image_size_ratio: str, text_type: s
         f'- 绝对不可改变（must_not_change）：{must_not_change}\n'
         f'- 明确禁止出现（forbidden_changes）：{forbidden_changes}\n'
         f'- 可表达卖点（selling_points）：{selling_points}\n'
+        f'- 产品一致性是最高优先级，高于场景变化、版式变化、卖点表达和同套图差异；如果差异化要求与产品一致性冲突，必须优先保持商品主体一致。\n'
         f'- 若提供了不可变商品特征，必须将其中的主体品类、核心主体、颜色体系、材质、轮廓、结构、关键部件、品牌标识、logo位置、稳定细节、must_keep、must_not_change、forbidden_changes 与 consistency_rules 视为最高优先级约束。\n'
         f'- 若提供了参考商品图，必须把参考图视为主体锚点，优先复用其主体外观、颜色关系、材质质感、结构比例、边缘轮廓、关键部件、logo/品牌位与稳定细节。\n'
+        f'- 生成时只能改变背景、道具、光线、构图、文字版式、人物动作和非主体装饰；不得重新设计商品，不得替换商品品类，不得改变商品颜色体系、材质质感、结构比例、关键部件组合、logo/品牌位置或包装识别。\n'
         f'- selling_points 只能用于补充文案重点、信息层级与卖点表达，不得推动商品变成其他颜色、其他材质、其他结构、其他部件方案或其他品牌观感。\n'
         f'- 允许变化的仅限背景、道具、光线、构图、文案排版与非主体装饰；禁止把商品改成另一种外观、另一种材质表现、另一种结构、另一种颜色体系、另一种关键部件组合或另一种品牌识别。\n'
         f'- 不要把场景氛围、背景纯度、人物气质或镜头语言误当作商品主体特征；它们只能作为从属变化，不能覆盖主体锁定要求。\n'
@@ -4975,7 +5257,8 @@ def generate_suite_images(plan: dict, image_payloads, task_id: str, image_size_r
     images = []
     all_plan_types = [str(item.get('type', '')).strip() for item in plan.get('items', []) if str(item.get('type', '')).strip()]
     plan_items = list(plan.get('items') or [])
-    sequential_max_images = max(get_supabase_setting_int('ARK_SEQUENTIAL_MAX_IMAGES', get_optional_int_env('ARK_SEQUENTIAL_MAX_IMAGES', 1)), 1)
+    app_mode = get_app_mode()
+    batch_limit = max(get_mode3_suite_batch_size(), 1) if app_mode == 'mode3' else max(get_supabase_setting_int('ARK_SEQUENTIAL_MAX_IMAGES', get_optional_int_env('ARK_SEQUENTIAL_MAX_IMAGES', 1)), 1)
     index = 0
 
     while index < len(plan_items):
@@ -4992,7 +5275,7 @@ def generate_suite_images(plan: dict, image_payloads, task_id: str, image_size_r
             item['type'],
             item,
             all_plan_types,
-            max_images=min(len(remaining_items), sequential_max_images),
+            max_images=min(len(remaining_items), batch_limit),
         )
 
         consumed_count = 0
@@ -5230,15 +5513,16 @@ def create_pay_order_api():
             subscribe_expire = subscribe_expire_dt.astimezone(timezone.utc).isoformat()
 
         order_payload = {
-            'out_trade_no': out_trade_no,
+            'order_no': out_trade_no,
             'user_id': user_id,
             'amount': f'{amount:.2f}',
             'status': 'pending',
-            'type': db_type,
-            'product_id': product_id,
-            'trade_no': None,
-            'subscribe_start': subscribe_start,
-            'subscribe_expire': subscribe_expire,
+            'pay_type': db_type,
+            'package_id': product_id,
+            'zpay_trade_no': None,
+            'subscribe_start_at': subscribe_start,
+            'subscribe_expire_at': subscribe_expire,
+            'payment_method': ZPAY_DEFAULT_CHANNEL or 'alipay',
         }
         order_row = create_payment_order_record(order_payload)
         payment_url = build_zpay_payment_url(
@@ -6052,8 +6336,11 @@ def generate_mode3_image_edit():
             return jsonify({'success': False, 'error': '请上传 1 张或多张参考图片，或提供 image_url'}), 400
 
         task_id = uuid.uuid4().hex
-        generated_item, model = call_mode3_image_edit(get_mode3_client(), prompt, image_payloads)
-        return jsonify(build_mode2_success_response(task_id, 'mode3-image-edit', prompt, model, generated_item))
+        image_size_ratio = request.form.get('image_size_ratio', '1:1')
+        product_json = extract_product_json_from_image_payloads(prompt, image_payloads)
+        enriched_prompt = build_enriched_image_prompt(prompt, image_size_ratio, '中文', '中国', product_json, 'mode3-image-edit')
+        generated_item, model = call_mode3_image_edit(get_mode3_client(), enriched_prompt, image_payloads, image_size_ratio)
+        return jsonify(build_mode2_success_response(task_id, 'mode3-image-edit', enriched_prompt, model, generated_item))
     except RequestEntityTooLarge as exc:
         return handle_request_entity_too_large(exc)
     except ValueError as exc:
@@ -6114,7 +6401,7 @@ def generate_suite():
         platform = normalize_platform_label(request.form.get('platform', '亚马逊'))
         mode = (request.form.get('mode', 'suite') or 'suite').strip() or 'suite'
         image_payloads = get_image_payloads_from_request('images')
-        fashion_reference_payloads = get_image_payloads_from_request('reference_images') if mode == 'fashion' else []
+        reference_payloads = get_image_payloads_from_request('reference_images')
         country = request.form.get('country', '中国').strip() or '中国'
         text_type = request.form.get('text_type', '中文').strip() or '中文'
         image_size_ratio = request.form.get('image_size_ratio', '1:1').strip() or '1:1'
@@ -6125,7 +6412,7 @@ def generate_suite():
             request.form.get('selected_style_colors', ''),
         )
 
-        if not selling_text and not image_payloads:
+        if not selling_text and not image_payloads and not reference_payloads:
             return jsonify({'success': False, 'error': '请至少提供核心卖点文案或上传 1 张图片'}), 400
 
         if mode == 'fashion':
@@ -6362,7 +6649,27 @@ def generate_suite():
         task_name = build_task_name(platform, 'suite', output_count)
         generated_at = build_generated_at()
         reference_images = build_reference_images(task_id, image_payloads, source='product')
-        planning_payloads = image_payloads + fashion_reference_payloads
+        if reference_payloads:
+            reference_images.extend(
+                build_reference_images(
+                    task_id,
+                    reference_payloads,
+                    source='reference',
+                    start_sort=len(reference_images) + 1,
+                )
+            )
+        planning_payloads = image_payloads + reference_payloads
+        if product_json is None and planning_payloads:
+            app.logger.warning('Suite generation extracting product_json from uploaded reference images: mode=%s image_count=%s', mode, len(planning_payloads))
+            product_json = extract_product_json_from_image_payloads(selling_text, planning_payloads)
+        app.logger.warning(
+            'Suite generation upload payloads: mode=%s product_count=%s reference_count=%s total_generation_count=%s product_json_ready=%s',
+            mode,
+            len(image_payloads),
+            len(reference_payloads),
+            len(planning_payloads),
+            bool(product_json),
+        )
         plan = build_suite_plan(
             platform,
             selling_text,
@@ -6414,6 +6721,7 @@ def generate_aplus():
         selling_text = request.form.get('selling_text', '').strip()
         platform = normalize_platform_label(request.form.get('platform', '亚马逊'))
         image_payloads = get_image_payloads_from_request()
+        reference_payloads = get_image_payloads_from_request('reference_images')
         country = request.form.get('country', '中国').strip() or '中国'
         text_type = request.form.get('text_type', '中文').strip() or '中文'
         image_size_ratio = request.form.get('image_size_ratio', '1:1').strip() or '1:1'
@@ -6425,15 +6733,35 @@ def generate_aplus():
             request.form.get('selected_style_colors', ''),
         )
 
-        if not selling_text and not image_payloads:
+        if not selling_text and not image_payloads and not reference_payloads:
             return jsonify({'success': False, 'error': '请至少提供核心卖点文案或上传 1 张图片'}), 400
 
         task_id = uuid.uuid4().hex
         task_name = build_task_name(platform, 'aplus', len(selected_modules))
         generated_at = build_generated_at()
-        reference_images = build_reference_images(task_id, image_payloads)
-        plan = build_aplus_plan(platform, selling_text, selected_modules, image_payloads, country, text_type, image_size_ratio, selected_style, product_json)
-        images = generate_aplus_images(plan, image_payloads, task_id, image_size_ratio, text_type, country, product_json)
+        reference_images = build_reference_images(task_id, image_payloads, source='product')
+        if reference_payloads:
+            reference_images.extend(
+                build_reference_images(
+                    task_id,
+                    reference_payloads,
+                    source='reference',
+                    start_sort=len(reference_images) + 1,
+                )
+            )
+        planning_payloads = image_payloads + reference_payloads
+        if product_json is None and planning_payloads:
+            app.logger.warning('A+ generation extracting product_json from uploaded reference images: product_count=%s reference_count=%s total_generation_count=%s', len(image_payloads), len(reference_payloads), len(planning_payloads))
+            product_json = extract_product_json_from_image_payloads(selling_text, planning_payloads)
+        app.logger.warning(
+            'A+ generation upload payloads: product_count=%s reference_count=%s total_generation_count=%s product_json_ready=%s',
+            len(image_payloads),
+            len(reference_payloads),
+            len(planning_payloads),
+            bool(product_json),
+        )
+        plan = build_aplus_plan(platform, selling_text, selected_modules, planning_payloads, country, text_type, image_size_ratio, selected_style, product_json)
+        images = generate_aplus_images(plan, planning_payloads, task_id, image_size_ratio, text_type, country, product_json)
 
         return jsonify(
             {

@@ -1213,9 +1213,7 @@ document.addEventListener('DOMContentLoaded', () => {
         formData.append('selected_style_colors', JSON.stringify(selectedStyle.colors));
       }
       appendFilesToFormData(formData, 'images', getProductFiles(), isFashionPage ? 5 : 3);
-      if (currentMode === 'fashion') {
-        appendFilesToFormData(formData, 'reference_images', getReferenceFiles());
-      }
+      appendFilesToFormData(formData, 'reference_images', getReferenceFiles());
       return { formData, selectedStyle };
     };
 
@@ -1667,7 +1665,7 @@ document.addEventListener('DOMContentLoaded', () => {
     let currentProductJson = null;
 
     const getProductFiles = () => currentFiles.slice(0, isFashionPage ? 5 : 3);
-    const getReferenceFiles = () => (isFashionPage ? currentReferenceFiles.slice(0, 3) : []);
+    const getReferenceFiles = () => currentReferenceFiles.slice(0, 3);
 
     const renderThumbList = (container, files, emptyMarkup, labelPrefix, uploadButton, uploadHint, isFashionUpload = false) => {
       if (!container) {
