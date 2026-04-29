@@ -308,6 +308,10 @@ document.addEventListener('DOMContentLoaded', () => {
       label: '请选择模特',
     };
     const STORAGE_KEY = `aiDesignState:${PAGE_MODE}`;
+    const PENDING_GENERATION_POLL_INTERVAL = 2500;
+    const PENDING_GENERATION_TIMEOUT = 30 * 60 * 1000;
+    let pendingGenerationTask = null;
+    let pendingGenerationPollTimer = null;
     let isRestoringState = false;
 
     const escapeHtml = (value = '') => String(value)
@@ -1225,7 +1229,113 @@ document.addEventListener('DOMContentLoaded', () => {
       return formData;
     };
 
-    const FASHION_SCENE_PLAN_REQUEST_TIMEOUT_MS = 125000;
+    const parseJsonResponse = async (response) => {
+      const responseText = await response.text();
+      if (!responseText) {
+        return {};
+      }
+      try {
+        return JSON.parse(responseText);
+      } catch (error) {
+        throw new Error(responseText.trim() || '服务端返回格式异常，请稍后重试');
+      }
+    };
+
+    const completePendingGenerationTask = (task) => {
+      const result = task?.result;
+      if (!result || !Array.isArray(result.images)) {
+        return false;
+      }
+      currentResult = result;
+      currentResultItems = normalizeResultItems(result);
+      selectedResultKeys = new Set();
+      updateTaskSummary(result);
+      renderResultCards(currentResultItems);
+      const spendAmount = Number(pendingGenerationTask?.spendRecord?.amount) || 0;
+      setResultStatus(`${getCurrentModeConfig().successFallback.replace('{count}', String(getCurrentOutputMetric(result)))}${spendAmount > 0 ? `，已消耗 ${spendAmount} 积分` : ''}`, 'success');
+      if (result.mode === 'fashion') {
+        syncFashionState({ fashionFlowStep: 'result' });
+      }
+      stopPendingGenerationPolling();
+      pendingGenerationTask = null;
+      applyFashionGenerateButtonState();
+      updateGenerateButtonLabel();
+      saveStateToLocalStorage();
+      return true;
+    };
+
+    const stopPendingGenerationPolling = () => {
+      if (pendingGenerationPollTimer) {
+        window.clearTimeout(pendingGenerationPollTimer);
+        pendingGenerationPollTimer = null;
+      }
+    };
+
+    const pollPendingGenerationTask = async ({ immediate = false } = {}) => {
+      stopPendingGenerationPolling();
+      if (!pendingGenerationTask?.taskId) {
+        return;
+      }
+      const startedAt = Number(pendingGenerationTask.startedAt) || Date.now();
+      if (Date.now() - startedAt > PENDING_GENERATION_TIMEOUT) {
+        const staleTask = pendingGenerationTask;
+        stopPendingGenerationPolling();
+        pendingGenerationTask = null;
+        setResultStatus('生成任务等待超时，请重新发起生成；如已扣分但没有结果，请联系客服核查。', 'error');
+        if (staleTask?.mode === 'fashion') {
+          syncFashionState({ fashionFlowStep: 'scene' });
+          applyFashionGenerateButtonState();
+        } else if (generateBtn) {
+          generateBtn.disabled = false;
+          updateGenerateButtonLabel();
+        }
+        saveStateToLocalStorage();
+        return;
+      }
+      try {
+        const response = await fetch(`/api/generation-tasks/${encodeURIComponent(pendingGenerationTask.taskId)}`);
+        const result = await parseJsonResponse(response);
+        if (!response.ok || !result.success) {
+          throw new Error(result.error || '生成任务状态查询失败');
+        }
+        const task = result.task || {};
+        if (task.status === 'succeeded') {
+          completePendingGenerationTask(task);
+          return;
+        }
+        if (task.status === 'failed') {
+          const refunded = Boolean(task.refunded);
+          stopPendingGenerationPolling();
+          pendingGenerationTask = null;
+          resetResultState();
+          if (task.mode === 'fashion') {
+            syncFashionState({ fashionFlowStep: 'scene' });
+            applyFashionGenerateButtonState();
+          } else if (generateBtn) {
+            generateBtn.disabled = false;
+            updateGenerateButtonLabel();
+          }
+          setResultStatus(refunded ? `${task.error || '生成失败'}；本次扣减积分已自动返还。` : `${task.error || '生成失败'}${task.refund_error ? `；${task.refund_error}` : ''}`, 'error');
+          saveStateToLocalStorage();
+          return;
+        }
+        setResultStatus(task.status === 'running' ? getCurrentModeConfig().imageProgress : '生成任务已提交，正在排队处理，请勿关闭页面。');
+      } catch (error) {
+        setResultStatus(`正在等待生成任务完成，状态查询暂时失败：${error.message || error}`);
+      }
+      pendingGenerationPollTimer = window.setTimeout(() => pollPendingGenerationTask(), immediate ? 500 : PENDING_GENERATION_POLL_INTERVAL);
+    };
+
+    const savePendingGenerationTask = (taskId, spendRecord, mode = PAGE_MODE) => {
+      pendingGenerationTask = {
+        taskId,
+        mode,
+        spendRecord,
+        startedAt: Date.now(),
+      };
+      saveStateToLocalStorage();
+      pollPendingGenerationTask({ immediate: true });
+    };
 
     const fetchJsonWithTimeout = async (url, options = {}, timeoutMs = 70000, timeoutMessage = '推荐场景生成超时，请稍后重试') => {
       const controller = typeof AbortController === 'function' ? new AbortController() : null;
@@ -1238,16 +1348,7 @@ document.addEventListener('DOMContentLoaded', () => {
           ...options,
           signal: controller ? controller.signal : options.signal,
         });
-        const responseText = await response.text();
-        let result = {};
-
-        if (responseText) {
-          try {
-            result = JSON.parse(responseText);
-          } catch (error) {
-            throw new Error(responseText.trim() || '服务端返回格式异常，请稍后重试');
-          }
-        }
+        const result = await parseJsonResponse(response);
 
         return { response, result };
       } catch (error) {
@@ -1599,40 +1700,34 @@ document.addEventListener('DOMContentLoaded', () => {
           },
         });
         syncSharedPointsState(spendRecord?.points);
+        formData.append('async_task', '1');
+        formData.append('points_request_id', spendRecord?.requestId || '');
+        formData.append('spend_record', JSON.stringify(spendRecord || {}));
 
-        const responsePromise = fetch('/api/generate-suite', {
+        const response = await fetch('/api/generate-suite', {
           method: 'POST',
           body: formData,
         });
+        const result = await parseJsonResponse(response);
 
-        window.setTimeout(() => {
-          if (generateBtn.disabled) {
-            updateGenerateButtonLabel(config.imageLoadingLabel);
-            setResultStatus(config.imageProgress);
-          }
-        }, 1200);
-
-        const response = await responsePromise;
-        const result = await response.json();
-
-        if (!response.ok || !result.success || !Array.isArray(result.images)) {
+        if (!response.ok || !result.success || !result.task_id) {
           const detailMessage = typeof result.details === 'string' ? result.details.trim() : '';
           const baseMessage = result.error || config.errorFallback;
           throw new Error(detailMessage ? `${baseMessage}｜${detailMessage}` : baseMessage);
         }
 
-        currentResult = result;
-        currentResultItems = normalizeResultItems(result);
-        selectedResultKeys = new Set();
-        updateTaskSummary(result);
-        renderResultCards(currentResultItems);
-        setResultStatus(`${config.successFallback.replace('{count}', String(getCurrentOutputMetric(result)))}，已消耗 ${pointsCost} 积分`, 'success');
-        syncFashionState({ fashionFlowStep: 'result' });
-        saveStateToLocalStorage();
+        savePendingGenerationTask(result.task_id, spendRecord, 'fashion');
+
+        window.setTimeout(() => {
+          if (generateBtn.disabled && pendingGenerationTask?.taskId === result.task_id) {
+            updateGenerateButtonLabel(config.imageLoadingLabel);
+            setResultStatus(config.imageProgress);
+          }
+        }, 1200);
       } catch (error) {
         let refundFailed = false;
         const didSpendPoints = Boolean(spendRecord && !spendRecord.skipped && Number(spendRecord.amount) > 0);
-        if (didSpendPoints && !currentResultItems.length) {
+        if (didSpendPoints && !currentResultItems.length && !pendingGenerationTask?.taskId) {
           try {
             const refundedPoints = await requestPointsRefund(spendRecord, error.message || config.errorFallback);
             syncSharedPointsState(refundedPoints);
@@ -2182,6 +2277,8 @@ document.addEventListener('DOMContentLoaded', () => {
     };
 
     const resetResultState = () => {
+      stopPendingGenerationPolling();
+      pendingGenerationTask = null;
       const config = getCurrentModeConfig();
       currentResult = null;
       currentResultItems = [];
@@ -2237,6 +2334,7 @@ document.addEventListener('DOMContentLoaded', () => {
           currentProductJson,
           selectedResultKeys: Array.from(selectedResultKeys),
           previewIndex,
+          pendingGenerationTask,
           viewState: getViewState(),
           resultMeta: resultMeta.textContent,
           resultStatus: {
@@ -2327,6 +2425,9 @@ document.addEventListener('DOMContentLoaded', () => {
               }))
             : []);
         selectedResultKeys = new Set(Array.isArray(state.selectedResultKeys) ? state.selectedResultKeys : []);
+        pendingGenerationTask = state.pendingGenerationTask && state.pendingGenerationTask.taskId
+          ? state.pendingGenerationTask
+          : null;
 
         if (currentResultItems.length > 0) {
           renderResultCards(currentResultItems);
@@ -2366,6 +2467,19 @@ document.addEventListener('DOMContentLoaded', () => {
         }
 
         restoreScrollState(state.scroll || {});
+        if (pendingGenerationTask?.taskId) {
+          showResultView();
+          const pendingCount = Number(pendingGenerationTask?.spendRecord?.metadata?.selected_scene_count) || Number(state.taskOutputCount) || 4;
+          renderLoadingResultCards(pendingCount);
+          setResultStatus('已恢复正在生成的任务，正在等待生成结果。');
+          if (pendingGenerationTask.mode === 'fashion') {
+            syncFashionState({ fashionFlowStep: 'result' });
+          } else if (generateBtn) {
+            generateBtn.disabled = true;
+            updateGenerateButtonLabel(getCurrentModeConfig().imageLoadingLabel);
+          }
+          pollPendingGenerationTask({ immediate: true });
+        }
         return true;
       } catch (e) {
         console.error('Failed to restore state:', e);
@@ -2765,20 +2879,43 @@ document.addEventListener('DOMContentLoaded', () => {
           syncSharedPointsState(spendRecord?.points);
 
           let result;
-          if (isMode2) {
-            result = await generateMode2Results(endpoint, formData, plannedOutputCount);
+          let asyncSuiteTaskStarted = false;
+          if (isMode2 || currentMode === 'aplus') {
+            if (isMode2) {
+              result = await generateMode2Results(endpoint, formData, plannedOutputCount);
+            } else {
+              const response = await fetch(endpoint, {
+                method: 'POST',
+                body: formData,
+              });
+              const rawResult = await parseJsonResponse(response);
+              result = rawResult;
+              if (!response.ok || !result?.success || !Array.isArray(result.images)) {
+                const detailMessage = typeof result?.details === 'string' ? result.details.trim() : '';
+                const baseMessage = result?.error || config.errorFallback;
+                throw new Error(detailMessage ? `${baseMessage}｜${detailMessage}` : baseMessage);
+              }
+            }
           } else {
+            formData.append('async_task', '1');
+            formData.append('points_request_id', spendRecord?.requestId || '');
+            formData.append('spend_record', JSON.stringify(spendRecord || {}));
             const response = await fetch(endpoint, {
               method: 'POST',
               body: formData,
             });
-            const rawResult = await response.json();
-            result = rawResult;
-            if (!response.ok || !result?.success || !Array.isArray(result.images)) {
-              const detailMessage = typeof result?.details === 'string' ? result.details.trim() : '';
-              const baseMessage = result?.error || config.errorFallback;
+            const taskPayload = await parseJsonResponse(response);
+            if (!response.ok || !taskPayload?.success || !taskPayload.task_id) {
+              const detailMessage = typeof taskPayload?.details === 'string' ? taskPayload.details.trim() : '';
+              const baseMessage = taskPayload?.error || config.errorFallback;
               throw new Error(detailMessage ? `${baseMessage}｜${detailMessage}` : baseMessage);
             }
+            savePendingGenerationTask(taskPayload.task_id, spendRecord, currentMode);
+            asyncSuiteTaskStarted = true;
+          }
+
+          if (asyncSuiteTaskStarted) {
+            return;
           }
 
           currentResult = result;
@@ -2791,7 +2928,7 @@ document.addEventListener('DOMContentLoaded', () => {
         } catch (error) {
           let refundFailed = false;
           const didSpendPoints = Boolean(spendRecord && !spendRecord.skipped && Number(spendRecord.amount) > 0);
-          if (didSpendPoints && !currentResultItems.length) {
+          if (didSpendPoints && !currentResultItems.length && !pendingGenerationTask?.taskId) {
             try {
               const refundedPoints = await requestPointsRefund(spendRecord, error.message || config.errorFallback);
               syncSharedPointsState(refundedPoints);
@@ -2814,8 +2951,10 @@ document.addEventListener('DOMContentLoaded', () => {
             : (refundFailed ? `${error.message || config.errorFallback}；本次积分自动返还失败，请联系客服核查。` : `${error.message || config.errorFallback}；本次扣减积分已自动返还。`), 'error');
           persistState();
         } finally {
-          generateBtn.disabled = false;
-          updateGenerateButtonLabel(config.generateBtnLabel);
+          if (!pendingGenerationTask?.taskId) {
+            generateBtn.disabled = false;
+            updateGenerateButtonLabel(config.generateBtnLabel);
+          }
         }
       });
     }

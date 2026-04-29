@@ -9,6 +9,7 @@
 - httpOnly Cookie 登录态
 - 积分余额、注册奖励、每日奖励
 - AI 图片生成与图片编辑
+- 生成任务支持刷新恢复、状态轮询和失败自动返还积分
 - VIP 套餐配置从 Supabase 表读取
 - ZPay 支付创建接口
 - ZPay 支付成功回调验签
@@ -116,6 +117,9 @@ SUPABASE_SETTINGS_ALLOWED_EMAILS=
 POINTS_SIGNUP_BONUS=100
 POINTS_DAILY_FREE=10
 POINTS_IMAGE_GENERATION_COST=1
+GENERATION_TASK_TTL_SECONDS=7200
+GENERATION_TASK_POLL_RETENTION_SECONDS=86400
+GENERATION_TASK_WORKERS=2
 
 # ZPay
 ZPAY_PID=你的商户 PID
@@ -177,13 +181,16 @@ SUBSCRIPTION_PRODUCT_DAYS_JSON={"plan_2":30,"plan_3":90}
 | `SUPABASE_SETTINGS_ALLOWED_EMAIL` | 否 | 允许访问配置管理的单个邮箱 |
 | `SUPABASE_SETTINGS_ALLOWED_EMAILS` | 否 | 允许访问配置管理的多个邮箱，英文逗号分隔 |
 
-### 积分
+### 积分与生成任务
 
 | 配置项 | 必填 | 说明 |
 | --- | --- | --- |
 | `POINTS_SIGNUP_BONUS` | 否 | 注册赠送积分 |
 | `POINTS_DAILY_FREE` | 否 | 每日免费积分 |
 | `POINTS_IMAGE_GENERATION_COST` | 否 | 生成图片消耗积分 |
+| `GENERATION_TASK_TTL_SECONDS` | 否 | 内存生成任务清理时间，默认 `7200` 秒，最小 `300` 秒 |
+| `GENERATION_TASK_POLL_RETENTION_SECONDS` | 否 | 前端可轮询恢复的任务保留时间，默认 `86400` 秒，最小 `3600` 秒 |
+| `GENERATION_TASK_WORKERS` | 否 | 后端生成任务线程数，默认 `2` |
 
 ### ZPay
 
@@ -235,6 +242,7 @@ SUBSCRIPTION_PRODUCT_DAYS_JSON={"plan_2":30,"plan_3":90}
 - `api_settings`
 - `vip_plan_config`
 - `zpay_transactions`
+- `generation_tasks`
 
 迁移 SQL 位于：
 
@@ -257,6 +265,29 @@ subscribe_expire > 当前时间
 ```
 
 只有到期时间大于当前时间，才会返回 `membership_active = true`。
+
+### 生成任务表
+
+`generation_tasks` 用于保存用户生成任务状态，支持页面刷新后恢复生成结果。核心字段包括：
+
+- `id`：生成任务 ID
+- `user_id`：任务所属用户
+- `mode`：生成模式，例如 `suite`、`fashion`
+- `request_id`：积分扣减请求 ID，用于失败后返还积分
+- `status`：任务状态，取值 `pending`、`running`、`succeeded`、`failed`
+- `result`：生成成功后的结果 JSON
+- `error` / `details`：失败原因
+- `spend_record`：本次扣分记录
+- `refunded` / `refund_error`：自动退款结果
+
+相关接口：
+
+```http
+GET /api/generation-tasks/<task_id>
+POST /api/generation-tasks/<task_id>/cancel
+```
+
+注意：当前生成任务会写入 Supabase，并保留进程内缓存兜底。若线上容器在生成中被强制重启，正在运行的线程会中断；要做到完全任务续跑，需要额外接入队列 Worker 或定时重试机制。
 
 ### 支付订单表
 
@@ -460,6 +491,17 @@ node --check static/js/workspace.js
 ### 会员已过期但仍显示已开通
 
 当前版本已修复。后端会判断 `subscribe_expire` 是否大于当前时间，只有未过期才返回 `membership_active=true`。
+
+### 生成过程中刷新页面后看不到结果
+
+当前版本已修复。套图和服饰生成会先创建 `generation_tasks` 任务，前端保存 `task_id` 并轮询任务状态；刷新页面后会自动恢复未完成任务，生成成功后重新渲染结果。
+
+如果线上仍无法恢复，重点检查：
+
+1. Supabase 是否已执行 `20260429_create_generation_tasks.sql`
+2. `SUPABASE_URL` 和 `SUPABASE_SERVICE_ROLE_KEY` 是否正确
+3. `/api/generation-tasks/<task_id>` 是否返回 401/403/404
+4. 容器是否在生成中被重启或强杀
 
 ### 前端提示 Supabase 配置缺失
 

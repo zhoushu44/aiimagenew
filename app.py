@@ -22,7 +22,7 @@ from urllib.parse import urlencode, urljoin, urlparse
 
 import requests
 from dotenv import load_dotenv
-from flask import Flask, g, jsonify, make_response, redirect, request, send_file, send_from_directory, url_for
+from flask import Flask, g, jsonify, make_response, redirect, request, send_file, send_from_directory
 from openai import APIError, APIStatusError, OpenAI
 from PIL import Image
 from requests.adapters import HTTPAdapter
@@ -94,6 +94,12 @@ SUPABASE_SETTINGS_SCOPE = 'global'
 SUPABASE_USER_PROFILES_TABLE = 'user_profiles'
 SUPABASE_POINTS_TABLE = 'user_points_balances'
 SUPABASE_PAYMENTS_TABLE = 'zpay_transactions'
+SUPABASE_GENERATION_TASKS_TABLE = 'generation_tasks'
+GENERATION_TASK_TTL_SECONDS = max(int(os.getenv('GENERATION_TASK_TTL_SECONDS') or 7200), 300)
+GENERATION_TASK_POLL_RETENTION_SECONDS = max(int(os.getenv('GENERATION_TASK_POLL_RETENTION_SECONDS') or 86400), 3600)
+GENERATION_TASKS: dict[str, dict] = {}
+GENERATION_TASKS_LOCK = threading.Lock()
+GENERATION_TASK_EXECUTOR = concurrent.futures.ThreadPoolExecutor(max_workers=max(int(os.getenv('GENERATION_TASK_WORKERS') or 2), 1))
 ZPAY_PID = (os.getenv('ZPAY_PID') or '').strip()
 ZPAY_KEY = (os.getenv('ZPAY_KEY') or '').strip()
 ZPAY_GATEWAY = (os.getenv('ZPAY_GATEWAY') or 'https://zpayz.cn/submit.php').strip()
@@ -457,7 +463,8 @@ def _spend_user_points_direct(user_id: str, amount: int, transaction_type: str =
             },
             json={
                 'user_id': normalized_user_id,
-                'change_amount': -normalized_amount,
+                'amount': -normalized_amount,
+                'balance_before': previous_balance,
                 'balance_after': int(balance_row.get('balance') or 0),
                 'transaction_type': str(transaction_type or 'consume').strip() or 'consume',
                 'reason': str(reason or '').strip(),
@@ -594,7 +601,7 @@ def spend_user_points(user_id: str, amount: int, transaction_type: str = 'consum
     return build_spend_failure(last_error_text or str(last_exception or '扣减积分失败'))
 
 
-def add_user_points_direct(user_id: str, amount: int, transaction_type: str = 'refund', reason: str = '', metadata: dict | None = None) -> dict | None:
+def add_user_points_direct(user_id: str, amount: int, transaction_type: str = 'refund', reason: str = '', metadata: dict | None = None, related_transaction_id=None) -> dict | None:
     normalized_user_id = str(user_id or '').strip()
     normalized_amount = max(int(amount), 0)
     if not normalized_user_id or normalized_amount <= 0:
@@ -625,6 +632,7 @@ def add_user_points_direct(user_id: str, amount: int, transaction_type: str = 'r
     if not isinstance(payload, list) or not payload:
         return get_user_points_balance(normalized_user_id) or points_row
     balance_row = _normalize_points_row(payload[0], normalized_user_id)
+    transaction_row = None
     try:
         transaction_response = requests.post(
             build_supabase_request_url('/rest/v1/user_points_transactions'),
@@ -634,21 +642,33 @@ def add_user_points_direct(user_id: str, amount: int, transaction_type: str = 'r
             },
             json={
                 'user_id': normalized_user_id,
-                'change_amount': normalized_amount,
+                'amount': normalized_amount,
+                'balance_before': previous_balance,
                 'balance_after': int(balance_row.get('balance') or 0),
                 'transaction_type': str(transaction_type or 'refund').strip() or 'refund',
                 'reason': str(reason or '').strip(),
                 'metadata': metadata if isinstance(metadata, dict) else {},
+                'related_transaction_id': related_transaction_id,
             },
             timeout=20,
         )
         transaction_response.raise_for_status()
+        transaction_payload = transaction_response.json()
+        if isinstance(transaction_payload, list) and transaction_payload:
+            transaction_row = transaction_payload[0]
+        elif isinstance(transaction_payload, dict):
+            transaction_row = transaction_payload
     except requests.RequestException as exc:
         app.logger.warning('Failed to insert direct add transaction for %s: %s', normalized_user_id, exc)
-    return balance_row
+    return {
+        'success': True,
+        'added': True,
+        'balance_row': balance_row,
+        'transaction_row': transaction_row,
+    }
 
 
-def add_user_points(user_id: str, amount: int, transaction_type: str = 'refund', reason: str = '', metadata: dict | None = None) -> dict | None:
+def add_user_points(user_id: str, amount: int, transaction_type: str = 'refund', reason: str = '', metadata: dict | None = None, related_transaction_id=None) -> dict | None:
     normalized_user_id = str(user_id or '').strip()
     if not normalized_user_id:
         return None
@@ -656,29 +676,52 @@ def add_user_points(user_id: str, amount: int, transaction_type: str = 'refund',
     if normalized_amount <= 0:
         return ensure_user_points_balance(normalized_user_id) or get_user_points_balance(normalized_user_id)
     normalized_metadata = metadata if isinstance(metadata, dict) else {}
-    try:
-        payload = _post_supabase_rpc('add_user_points', {
+    rpc_payloads = [
+        {
             'p_user_id': normalized_user_id,
             'p_amount': normalized_amount,
             'p_transaction_type': str(transaction_type or 'refund').strip() or 'refund',
             'p_reason': str(reason or '').strip(),
             'p_metadata': normalized_metadata,
-        })
-    except requests.RequestException as exc:
-        app.logger.warning('Failed to add user points for %s: %s', normalized_user_id, exc)
+            'p_related_transaction_id': related_transaction_id,
+        },
+        {
+            'p_user_id': normalized_user_id,
+            'p_amount': normalized_amount,
+            'p_transaction_type': str(transaction_type or 'refund').strip() or 'refund',
+            'p_reason': str(reason or '').strip(),
+            'p_metadata': normalized_metadata,
+        },
+    ]
+    last_exception = None
+    for rpc_payload in rpc_payloads:
         try:
-            return add_user_points_direct(normalized_user_id, normalized_amount, transaction_type, reason, normalized_metadata)
-        except requests.RequestException as fallback_exc:
-            app.logger.warning('Direct add user points fallback failed for %s: %s', normalized_user_id, fallback_exc)
-            return None
-    except RuntimeError as exc:
-        app.logger.warning('Failed to add user points for %s: %s', normalized_user_id, exc)
-        try:
-            return add_user_points_direct(normalized_user_id, normalized_amount, transaction_type, reason, normalized_metadata)
-        except requests.RequestException as fallback_exc:
-            app.logger.warning('Direct add user points fallback failed for %s: %s', normalized_user_id, fallback_exc)
-            return None
-    return payload if isinstance(payload, dict) else None
+            payload = _post_supabase_rpc('add_user_points', rpc_payload)
+            return payload if isinstance(payload, dict) else None
+        except requests.HTTPError as exc:
+            last_exception = exc
+            response = getattr(exc, 'response', None)
+            error_text = ''
+            if response is not None:
+                try:
+                    error_payload = response.json()
+                    if isinstance(error_payload, dict):
+                        error_text = str(error_payload.get('message') or error_payload.get('error') or '')
+                except ValueError:
+                    error_text = response.text or ''
+            if response is not None and response.status_code == 404 and 'Could not find the function' in error_text:
+                continue
+            app.logger.warning('Failed to add user points for %s: %s', normalized_user_id, exc)
+            break
+        except (requests.RequestException, RuntimeError) as exc:
+            last_exception = exc
+            app.logger.warning('Failed to add user points for %s: %s', normalized_user_id, exc)
+            break
+    try:
+        return add_user_points_direct(normalized_user_id, normalized_amount, transaction_type, reason, normalized_metadata, related_transaction_id)
+    except requests.RequestException as fallback_exc:
+        app.logger.warning('Direct add user points fallback failed for %s after %s: %s', normalized_user_id, last_exception, fallback_exc)
+        return None
 
 
 def serialize_points_payload(points_row: dict | None, user_profile_row: dict | None = None) -> dict:
@@ -730,8 +773,8 @@ def get_payment_points_amount(package_id: str) -> int:
 
 def grant_payment_points_once(order_row: dict) -> dict | None:
     user_id = str((order_row or {}).get('user_id') or '').strip()
-    order_no = str((order_row or {}).get('order_no') or '').strip()
-    package_id = str((order_row or {}).get('package_id') or '').strip()
+    order_no = get_payment_order_no(order_row)
+    package_id = get_payment_package_id(order_row)
     points_amount = get_payment_points_amount(package_id)
     if not user_id or not order_no or points_amount <= 0:
         return None
@@ -760,7 +803,7 @@ def grant_payment_points_once(order_row: dict) -> dict | None:
             'order_no': order_no,
             'package_id': package_id,
             'amount': str((order_row or {}).get('amount') or ''),
-            'zpay_trade_no': str((order_row or {}).get('zpay_trade_no') or ''),
+            'zpay_trade_no': get_payment_trade_no(order_row),
         },
     )
 
@@ -807,6 +850,332 @@ def _extract_single_supabase_row(payload, *, allow_empty: bool = False) -> dict 
     return None
 
 
+def _safe_json_payload(payload):
+    try:
+        return json.loads(json.dumps(payload, ensure_ascii=False, default=str))
+    except (TypeError, ValueError):
+        return None
+
+
+def is_generation_task_persistence_enabled() -> bool:
+    return bool(SUPABASE_URL and SUPABASE_SERVICE_ROLE_KEY)
+
+
+def build_generation_task_db_payload(task: dict) -> dict:
+    payload = task if isinstance(task, dict) else {}
+    return {
+        'id': payload.get('task_id'),
+        'user_id': payload.get('user_id'),
+        'mode': payload.get('mode') or 'suite',
+        'request_id': payload.get('request_id') or None,
+        'status': payload.get('status') or 'pending',
+        'result': _safe_json_payload(payload.get('result')),
+        'error': payload.get('error') or None,
+        'details': payload.get('details') or None,
+        'spend_record': _safe_json_payload(payload.get('spend_record')),
+        'refunded': bool(payload.get('refunded')),
+        'refund_error': payload.get('refund_error') or None,
+        'created_at': payload.get('created_at') or datetime.now(timezone.utc).isoformat(),
+        'updated_at': payload.get('updated_at') or datetime.now(timezone.utc).isoformat(),
+    }
+
+
+def normalize_generation_task_row(row: dict | None) -> dict | None:
+    if not isinstance(row, dict):
+        return None
+    task_id = str(row.get('id') or row.get('task_id') or '').strip()
+    if not task_id:
+        return None
+    return {
+        'task_id': task_id,
+        'user_id': str(row.get('user_id') or '').strip(),
+        'mode': row.get('mode') or 'suite',
+        'request_id': row.get('request_id') or '',
+        'spend_record': row.get('spend_record') if isinstance(row.get('spend_record'), dict) else None,
+        'status': row.get('status') or 'pending',
+        'result': row.get('result') if isinstance(row.get('result'), dict) else None,
+        'error': row.get('error') or '',
+        'details': row.get('details') or '',
+        'refunded': bool(row.get('refunded')),
+        'refund_error': row.get('refund_error') or '',
+        'created_at': row.get('created_at'),
+        'updated_at': row.get('updated_at'),
+        'created_at_ts': time.time(),
+        'updated_at_ts': time.time(),
+    }
+
+
+def persist_generation_task(task: dict) -> None:
+    if not is_generation_task_persistence_enabled():
+        return
+    db_payload = build_generation_task_db_payload(task)
+    if not db_payload.get('id') or not db_payload.get('user_id'):
+        return
+    try:
+        response = requests.post(
+            build_supabase_request_url(f'/rest/v1/{SUPABASE_GENERATION_TASKS_TABLE}'),
+            headers={
+                **_build_supabase_service_headers(),
+                'Prefer': 'resolution=merge-duplicates,return=minimal',
+            },
+            params={'on_conflict': 'id'},
+            json=db_payload,
+            timeout=20,
+        )
+        if response.status_code >= 400:
+            app.logger.warning('Failed to persist generation task %s: status=%s body=%s', db_payload.get('id'), response.status_code, response.text)
+            response.raise_for_status()
+    except Exception as exc:
+        app.logger.warning('Failed to persist generation task %s: %s', db_payload.get('id'), exc)
+
+
+def fetch_generation_task_row(task_id: str) -> dict | None:
+    if not is_generation_task_persistence_enabled():
+        return None
+    normalized_task_id = str(task_id or '').strip()
+    if not normalized_task_id:
+        return None
+    try:
+        response = requests.get(
+            build_supabase_request_url(f'/rest/v1/{SUPABASE_GENERATION_TASKS_TABLE}'),
+            headers=_build_supabase_service_headers(),
+            params={
+                'select': '*',
+                'id': f'eq.{normalized_task_id}',
+                'limit': '1',
+            },
+            timeout=20,
+        )
+        if response.status_code == 404:
+            return None
+        if response.status_code >= 400:
+            app.logger.warning('Failed to fetch generation task %s: status=%s body=%s', normalized_task_id, response.status_code, response.text)
+            return None
+        return _extract_single_supabase_row(response.json())
+    except Exception as exc:
+        app.logger.warning('Failed to fetch generation task %s: %s', normalized_task_id, exc)
+        return None
+
+
+def cache_generation_task(task: dict | None) -> None:
+    if not isinstance(task, dict) or not task.get('task_id'):
+        return
+    with GENERATION_TASKS_LOCK:
+        GENERATION_TASKS[str(task.get('task_id'))] = dict(task)
+
+
+def cleanup_generation_tasks():
+    now = time.time()
+    with GENERATION_TASKS_LOCK:
+        stale_ids = [
+            task_id
+            for task_id, task in GENERATION_TASKS.items()
+            if now - float(task.get('updated_at_ts') or task.get('created_at_ts') or now) > GENERATION_TASK_POLL_RETENTION_SECONDS
+        ]
+        for task_id in stale_ids:
+            GENERATION_TASKS.pop(task_id, None)
+
+
+def create_generation_task(user_id: str, mode: str, request_id: str = '', spend_record: dict | None = None) -> dict:
+    cleanup_generation_tasks()
+    now = time.time()
+    task_id = uuid.uuid4().hex
+    task = {
+        'task_id': task_id,
+        'user_id': str(user_id or '').strip(),
+        'mode': str(mode or 'suite').strip() or 'suite',
+        'request_id': str(request_id or '').strip(),
+        'spend_record': spend_record if isinstance(spend_record, dict) else None,
+        'status': 'pending',
+        'result': None,
+        'error': '',
+        'details': '',
+        'refunded': False,
+        'refund_error': '',
+        'created_at': datetime.now(timezone.utc).isoformat(),
+        'updated_at': datetime.now(timezone.utc).isoformat(),
+        'created_at_ts': now,
+        'updated_at_ts': now,
+    }
+    cache_generation_task(task)
+    persist_generation_task(task)
+    return serialize_generation_task(task)
+
+
+def update_generation_task(task_id: str, **patch) -> dict | None:
+    normalized_task_id = str(task_id or '').strip()
+    if not normalized_task_id:
+        return None
+    with GENERATION_TASKS_LOCK:
+        task = GENERATION_TASKS.get(normalized_task_id)
+        if not task:
+            db_task = normalize_generation_task_row(fetch_generation_task_row(normalized_task_id))
+            if not db_task:
+                return None
+            task = db_task
+            GENERATION_TASKS[normalized_task_id] = task
+        task.update(patch)
+        task['updated_at'] = datetime.now(timezone.utc).isoformat()
+        task['updated_at_ts'] = time.time()
+        snapshot = dict(task)
+    persist_generation_task(snapshot)
+    return snapshot
+
+
+def get_generation_task(task_id: str) -> dict | None:
+    normalized_task_id = str(task_id or '').strip()
+    if not normalized_task_id:
+        return None
+    cleanup_generation_tasks()
+    db_task = normalize_generation_task_row(fetch_generation_task_row(normalized_task_id))
+    if db_task:
+        cache_generation_task(db_task)
+        return db_task
+    with GENERATION_TASKS_LOCK:
+        task = GENERATION_TASKS.get(normalized_task_id)
+        return dict(task) if task else None
+
+
+def serialize_generation_task(task: dict | None) -> dict:
+    payload = task if isinstance(task, dict) else {}
+    return {
+        'task_id': payload.get('task_id'),
+        'mode': payload.get('mode'),
+        'request_id': payload.get('request_id') or '',
+        'status': payload.get('status') or 'missing',
+        'result': payload.get('result') if isinstance(payload.get('result'), dict) else None,
+        'error': payload.get('error') or '',
+        'details': payload.get('details') or '',
+        'refunded': bool(payload.get('refunded')),
+        'refund_error': payload.get('refund_error') or '',
+        'created_at': payload.get('created_at'),
+        'updated_at': payload.get('updated_at'),
+    }
+
+
+def fail_generation_task_with_refund(task_id: str, error: str, details: str = ''):
+    task = update_generation_task(task_id, status='failed', error=str(error or '生成失败'), details=str(details or ''))
+    if not task:
+        return
+    spend_record = task.get('spend_record') if isinstance(task.get('spend_record'), dict) else None
+    if not spend_record or bool(spend_record.get('skipped')) or int(spend_record.get('amount') or 0) <= 0:
+        return
+    refund_amount = int(spend_record.get('amount') or 0)
+    try:
+        request_id = str(task.get('request_id') or spend_record.get('requestId') or (spend_record.get('metadata') or {}).get('request_id') or '').strip()
+        if not request_id:
+            update_generation_task(task_id, refund_error='缺少 request_id，无法自动返还积分')
+            return
+        metadata = spend_record.get('metadata') if isinstance(spend_record.get('metadata'), dict) else {}
+        existing_refund = find_refund_transaction_for_request(task.get('user_id'), request_id)
+        if existing_refund:
+            update_generation_task(task_id, refunded=True)
+            return
+        spend_row = find_refundable_spend_transaction(task.get('user_id'), request_id, refund_amount, str(spend_record.get('type') or '').strip())
+        if not spend_row:
+            spend_row = find_refundable_spend_transaction(task.get('user_id'), request_id, refund_amount)
+        if not spend_row:
+            update_generation_task(task_id, refund_error='未找到匹配的原始扣费记录，无法自动返还积分')
+            return
+        refund_metadata = {
+            **metadata,
+            'request_id': request_id,
+            'refunded': True,
+            'refund_reason': 'generation_task_failed',
+            'generation_task_id': task_id,
+            'refunded_spend_transaction_id': spend_row.get('id'),
+        }
+        add_user_points(
+            task.get('user_id'),
+            refund_amount,
+            'refund',
+            f'{spend_record.get("reason") or "生成消耗"}失败返还',
+            refund_metadata,
+            spend_row.get('id'),
+        )
+        update_generation_task(task_id, refunded=True, refund_error='')
+    except Exception as exc:
+        app.logger.warning('Failed to refund generation task %s: %s', task_id, exc)
+        update_generation_task(task_id, refund_error=str(exc))
+
+
+def run_generation_task(task_id: str, form_payload: dict, file_payloads: dict):
+    update_generation_task(task_id, status='running')
+    try:
+        result = build_generation_result_from_payload(form_payload, file_payloads)
+        update_generation_task(task_id, status='succeeded', result=result, error='', details='')
+    except RequestEntityTooLarge as exc:
+        fail_generation_task_with_refund(task_id, '上传内容过大，请压缩图片后重试', str(exc))
+    except ValueError as exc:
+        fail_generation_task_with_refund(task_id, str(exc))
+    except RuntimeError as exc:
+        payload, _status_code = parse_runtime_error(exc)
+        fail_generation_task_with_refund(task_id, payload.get('error') or str(exc), payload.get('details') or '')
+    except (APIError, APIStatusError) as exc:
+        payload, _status_code = parse_ark_exception(exc)
+        fail_generation_task_with_refund(task_id, payload.get('error') or '图像生成接口调用失败', payload.get('details') or '')
+    except requests.Timeout as exc:
+        fail_generation_task_with_refund(task_id, '请求超时，请稍后重试', str(exc))
+    except requests.RequestException as exc:
+        fail_generation_task_with_refund(task_id, f'请求失败：{exc}', str(exc))
+    except Exception as exc:
+        app.logger.exception('Generation task failed: %s', task_id)
+        fail_generation_task_with_refund(task_id, f'服务端异常：{exc}', str(exc))
+
+
+def get_payment_order_no(order_row: dict | None) -> str:
+    return str((order_row or {}).get('order_no') or (order_row or {}).get('out_trade_no') or '').strip()
+
+
+def get_payment_pay_type(order_row: dict | None) -> str:
+    return str((order_row or {}).get('pay_type') or (order_row or {}).get('type') or '').strip()
+
+
+def get_payment_package_id(order_row: dict | None) -> str:
+    return str((order_row or {}).get('package_id') or (order_row or {}).get('product_id') or '').strip()
+
+
+def get_payment_trade_no(order_row: dict | None) -> str:
+    return str((order_row or {}).get('zpay_trade_no') or (order_row or {}).get('trade_no') or '').strip()
+
+
+def get_payment_subscribe_start(order_row: dict | None) -> str:
+    return str((order_row or {}).get('subscribe_start_at') or (order_row or {}).get('subscribe_start') or '').strip()
+
+
+def get_payment_subscribe_expire(order_row: dict | None) -> str:
+    return str((order_row or {}).get('subscribe_expire_at') or (order_row or {}).get('subscribe_expire') or '').strip()
+
+
+
+def build_legacy_payment_order_payload(order_payload: dict) -> dict:
+    return {
+        'out_trade_no': order_payload.get('order_no'),
+        'user_id': order_payload.get('user_id'),
+        'amount': order_payload.get('amount'),
+        'status': order_payload.get('status'),
+        'type': order_payload.get('pay_type'),
+        'product_id': order_payload.get('package_id'),
+        'trade_no': order_payload.get('zpay_trade_no'),
+        'subscribe_start': order_payload.get('subscribe_start_at'),
+        'subscribe_expire': order_payload.get('subscribe_expire_at'),
+    }
+
+
+def build_legacy_payment_patch_payload(patch_payload: dict) -> dict:
+    legacy_payload = {}
+    if 'status' in patch_payload:
+        legacy_payload['status'] = patch_payload.get('status')
+    if 'zpay_trade_no' in patch_payload:
+        legacy_payload['trade_no'] = patch_payload.get('zpay_trade_no')
+    if 'subscribe_start_at' in patch_payload:
+        legacy_payload['subscribe_start'] = patch_payload.get('subscribe_start_at')
+    if 'subscribe_expire_at' in patch_payload:
+        legacy_payload['subscribe_expire'] = patch_payload.get('subscribe_expire_at')
+    return legacy_payload
+
+
+
 def fetch_latest_active_subscription(user_id: str, product_id: str) -> dict | None:
     normalized_user_id = str(user_id or '').strip()
     normalized_product_id = str(product_id or '').strip()
@@ -818,12 +1187,12 @@ def fetch_latest_active_subscription(user_id: str, product_id: str) -> dict | No
         build_supabase_request_url(f'/rest/v1/{SUPABASE_PAYMENTS_TABLE}'),
         headers=_build_supabase_service_headers(),
         params={
-            'select': 'subscribe_expire_at',
+            'select': 'subscribe_expire',
             'user_id': f'eq.{normalized_user_id}',
-            'package_id': f'eq.{normalized_product_id}',
-            'pay_type': 'eq.subscription',
+            'product_id': f'eq.{normalized_product_id}',
+            'type': 'eq.subscription',
             'status': 'eq.paid',
-            'order': 'subscribe_expire_at.desc',
+            'order': 'subscribe_expire.desc',
             'limit': '1',
         },
         timeout=20,
@@ -847,7 +1216,7 @@ def compute_subscription_period(user_id: str, product_id: str) -> tuple[datetime
     subscription_days = get_subscription_days(product_id)
     now = datetime.now(timezone.utc)
     latest_row = fetch_latest_active_subscription(user_id, product_id)
-    latest_expire = parse_iso_datetime((latest_row or {}).get('subscribe_expire_at'))
+    latest_expire = parse_iso_datetime(get_payment_subscribe_expire(latest_row))
     subscribe_start = latest_expire if latest_expire and latest_expire > now else now
     subscribe_expire = subscribe_start + timedelta(days=subscription_days)
     return subscribe_start, subscribe_expire, subscription_days
@@ -901,13 +1270,14 @@ def build_zpay_payment_url(*, out_trade_no: str, product_id: str, amount: Decima
 def create_payment_order_record(order_payload: dict) -> dict:
     if not SUPABASE_URL or not SUPABASE_SERVICE_ROLE_KEY:
         raise RuntimeError('Supabase 服务配置缺失')
+    db_payload = build_legacy_payment_order_payload(order_payload)
     response = requests.post(
         build_supabase_request_url(f'/rest/v1/{SUPABASE_PAYMENTS_TABLE}'),
         headers={
             **_build_supabase_service_headers(),
             'Prefer': 'return=representation',
         },
-        json=order_payload,
+        json=db_payload,
         timeout=20,
     )
     response.raise_for_status()
@@ -927,7 +1297,7 @@ def fetch_payment_order_by_out_trade_no(out_trade_no: str) -> dict | None:
         headers=_build_supabase_service_headers(),
         params={
             'select': '*',
-            'order_no': f'eq.{normalized_order_no}',
+            'out_trade_no': f'eq.{normalized_order_no}',
             'limit': '1',
         },
         timeout=20,
@@ -960,6 +1330,7 @@ def update_payment_order(out_trade_no: str, patch_payload: dict) -> dict:
     normalized_order_no = str(out_trade_no or '').strip()
     if not normalized_order_no:
         raise ValueError('缺少 out_trade_no')
+    db_payload = build_legacy_payment_patch_payload(patch_payload)
     response = requests.patch(
         build_supabase_request_url(f'/rest/v1/{SUPABASE_PAYMENTS_TABLE}'),
         headers={
@@ -967,9 +1338,9 @@ def update_payment_order(out_trade_no: str, patch_payload: dict) -> dict:
             'Prefer': 'return=minimal',
         },
         params={
-            'order_no': f'eq.{normalized_order_no}',
+            'out_trade_no': f'eq.{normalized_order_no}',
         },
-        json=patch_payload,
+        json=db_payload,
         timeout=20,
     )
     if response.status_code >= 400:
@@ -1066,7 +1437,7 @@ def validate_callback_amount(order_row: dict, callback_money: str) -> None:
 
 
 def process_success_payment(order_row: dict, callback_trade_no: str) -> dict:
-    out_trade_no = str((order_row or {}).get('order_no') or '').strip()
+    out_trade_no = get_payment_order_no(order_row)
     if not out_trade_no:
         raise ValueError('订单号缺失')
     patch_payload = {
@@ -1083,9 +1454,9 @@ def process_success_payment(order_row: dict, callback_trade_no: str) -> dict:
     except requests.RequestException:
         app.logger.exception('Failed to grant payment points after payment success: out_trade_no=%s', out_trade_no)
 
-    if str((updated_row or {}).get('pay_type') or '').strip().lower() == 'subscription':
+    if get_payment_pay_type(updated_row).lower() == 'subscription':
         user_id = str((updated_row or {}).get('user_id') or '').strip()
-        subscribe_expire = str((updated_row or {}).get('subscribe_expire_at') or '').strip()
+        subscribe_expire = get_payment_subscribe_expire(updated_row)
         if user_id and subscribe_expire:
             try:
                 upsert_user_subscription_profile(user_id, subscribe_expire)
@@ -1097,16 +1468,16 @@ def process_success_payment(order_row: dict, callback_trade_no: str) -> dict:
 def serialize_payment_order(order_row: dict, *, pay_type: str, subscription_days: int | None = None) -> dict:
     return {
         'id': order_row.get('id'),
-        'out_trade_no': order_row.get('order_no'),
+        'out_trade_no': get_payment_order_no(order_row),
         'user_id': order_row.get('user_id'),
-        'product_id': order_row.get('package_id'),
+        'product_id': get_payment_package_id(order_row),
         'amount': str(order_row.get('amount') or ''),
         'status': str(order_row.get('status') or ''),
         'type': pay_type,
-        'db_type': str(order_row.get('pay_type') or ''),
-        'trade_no': order_row.get('zpay_trade_no'),
-        'subscribe_start': order_row.get('subscribe_start_at'),
-        'subscribe_expire': order_row.get('subscribe_expire_at'),
+        'db_type': get_payment_pay_type(order_row),
+        'trade_no': get_payment_trade_no(order_row),
+        'subscribe_start': get_payment_subscribe_start(order_row),
+        'subscribe_expire': get_payment_subscribe_expire(order_row),
         'created_at': order_row.get('created_at'),
         'updated_at': order_row.get('updated_at'),
         'subscription_days': subscription_days,
@@ -3918,6 +4289,11 @@ def parse_fashion_pose_camera_settings(raw_value: str, selections):
 
 
 def parse_fashion_selected_model_payload(form):
+    selected_payloads = get_image_payloads_from_request('fashion_selected_model_image', limit=1)
+    return parse_fashion_selected_model_payload_from_data(form, selected_payloads)
+
+
+def parse_fashion_selected_model_payload_from_data(form, selected_payloads):
     source = (form.get('fashion_selected_model_source', '') or '').strip()
     model_id = (form.get('fashion_selected_model_id', '') or '').strip()
     model_name = (form.get('fashion_selected_model_name', '') or '').strip()
@@ -3936,7 +4312,6 @@ def parse_fashion_selected_model_payload(form):
     if not model_id:
         raise ValueError('缺少当前已选模特 ID，请重新选择模特后再生成')
 
-    selected_payloads = get_image_payloads_from_request('fashion_selected_model_image', limit=1)
     if not selected_payloads:
         raise ValueError('缺少当前已选模特图片，请重新选择模特后再生成')
 
@@ -5014,7 +5389,7 @@ def save_generated_image(task_id: str, sort: int, image_type: str, image_bytes: 
     output_path = output_dir / filename
     output_path.write_bytes(image_bytes)
     relative_path = output_path.relative_to(GENERATED_SUITES_DIR).as_posix()
-    return filename, relative_path, url_for('serve_generated_file', path=relative_path)
+    return filename, relative_path, f'/generated/{relative_path}'
 
 
 def save_reference_image(task_id: str, sort: int, filename: str, image_bytes: bytes, mime_type: str):
@@ -5028,7 +5403,7 @@ def save_reference_image(task_id: str, sort: int, filename: str, image_bytes: by
     output_path = output_dir / output_name
     output_path.write_bytes(image_bytes)
     relative_path = output_path.relative_to(GENERATED_SUITES_DIR).as_posix()
-    return output_name, relative_path, url_for('serve_generated_file', path=relative_path)
+    return output_name, relative_path, f'/generated/{relative_path}'
 
 
 def build_reference_images(task_id: str, image_payloads, source: str = 'product', start_sort: int = 1):
@@ -5792,6 +6167,56 @@ def settings_refresh_api():
         return jsonify({'success': False, 'error': f'刷新设置失败：{exc}'}), 500
 
 
+def find_refundable_spend_transaction(user_id: str, request_id: str, amount: int | None = None, transaction_type: str = '') -> dict | None:
+    normalized_user_id = str(user_id or '').strip()
+    normalized_request_id = str(request_id or '').strip()
+    normalized_transaction_type = str(transaction_type or '').strip()
+    if not normalized_user_id or not normalized_request_id:
+        return None
+    params = {
+        'select': '*',
+        'user_id': f'eq.{normalized_user_id}',
+        'metadata->>request_id': f'eq.{normalized_request_id}',
+        'order': 'created_at.desc',
+        'limit': '1',
+    }
+    if normalized_transaction_type:
+        params['transaction_type'] = f'eq.{normalized_transaction_type}'
+    if amount is not None:
+        params['amount'] = f'eq.-{abs(int(amount))}'
+    response = requests.get(
+        build_supabase_request_url('/rest/v1/user_points_transactions'),
+        headers=_build_supabase_service_headers(),
+        params=params,
+        timeout=20,
+    )
+    response.raise_for_status()
+    payload = response.json()
+    return _extract_single_supabase_row(payload)
+
+
+def find_refund_transaction_for_request(user_id: str, request_id: str) -> dict | None:
+    normalized_user_id = str(user_id or '').strip()
+    normalized_request_id = str(request_id or '').strip()
+    if not normalized_user_id or not normalized_request_id:
+        return None
+    response = requests.get(
+        build_supabase_request_url('/rest/v1/user_points_transactions'),
+        headers=_build_supabase_service_headers(),
+        params={
+            'select': '*',
+            'user_id': f'eq.{normalized_user_id}',
+            'transaction_type': 'eq.refund',
+            'metadata->>request_id': f'eq.{normalized_request_id}',
+            'limit': '1',
+        },
+        timeout=20,
+    )
+    response.raise_for_status()
+    payload = response.json()
+    return _extract_single_supabase_row(payload)
+
+
 @app.get('/api/points/balance')
 def points_balance_api():
     try:
@@ -5983,27 +6408,63 @@ def points_refund_api():
         if amount <= 0:
             return jsonify({'success': False, 'error': '返还积分必须大于 0'}), 400
 
-        transaction_type = str(payload.get('type') or 'refund').strip() or 'refund'
-        reason = str(payload.get('reason') or '').strip()
         metadata = payload.get('metadata') if isinstance(payload.get('metadata'), dict) else {}
+        request_id = str(payload.get('request_id') or metadata.get('request_id') or '').strip()
+        if not request_id:
+            return jsonify({'success': False, 'error': '缺少 request_id，无法校验原始扣费记录'}), 400
 
-        refund_result = add_user_points(user_id, amount, transaction_type, reason, metadata)
+        existing_refund = find_refund_transaction_for_request(user_id, request_id)
+        if existing_refund:
+            balance_result = get_user_points_balance(user_id)
+            balance_row = (balance_result or {}).get('balance_row') or balance_result or {}
+            return jsonify({
+                'success': True,
+                'refunded': False,
+                'duplicate': True,
+                'points': {
+                    'user_id': user_id,
+                    **serialize_points_payload(balance_row),
+                },
+                'transaction': existing_refund,
+            })
+
+        refund_source_type = str(payload.get('type') or metadata.get('type') or '').strip()
+        if refund_source_type.endswith('_refund'):
+            refund_source_type = refund_source_type[:-7]
+        spend_row = find_refundable_spend_transaction(user_id, request_id, amount, refund_source_type)
+        if not spend_row:
+            spend_row = find_refundable_spend_transaction(user_id, request_id, amount)
+        if not spend_row:
+            return jsonify({'success': False, 'error': '未找到匹配的原始扣费记录，拒绝返还'}), 400
+        original_amount = abs(int(spend_row.get('amount') or 0))
+        if original_amount != amount:
+            return jsonify({'success': False, 'error': '返还金额与原始扣费不匹配'}), 400
+
+        reason = str(payload.get('reason') or '生成失败返还积分').strip()
+        refund_metadata = {
+            **metadata,
+            'request_id': request_id,
+            'refunded_spend_transaction_id': spend_row.get('id'),
+        }
+        refund_result = add_user_points(user_id, original_amount, 'refund', reason, refund_metadata, spend_row.get('id'))
         if not isinstance(refund_result, dict):
             return jsonify({'success': False, 'error': '返还积分失败'}), 502
+        balance_row = (refund_result or {}).get('balance_row') or refund_result
 
         return jsonify({
             'success': True,
             'refunded': True,
             'points': {
                 'user_id': user_id,
-                **serialize_points_payload(refund_result),
+                **serialize_points_payload(balance_row),
             },
             'refund': {
-                'amount': amount,
-                'type': transaction_type,
+                'amount': original_amount,
+                'type': 'refund',
                 'reason': reason,
-                'metadata': metadata,
+                'metadata': refund_metadata,
             },
+            'transaction': (refund_result or {}).get('transaction_row'),
         })
     except ValueError:
         return jsonify({'success': False, 'error': 'amount 必须是数字'}), 400
@@ -6394,309 +6855,333 @@ def generate_mode3_text2image():
         return jsonify({'success': False, 'error': f'服务端异常：{exc}'}), 500
 
 
-@app.post('/api/generate-suite')
-def generate_suite():
-    try:
-        selling_text = request.form.get('selling_text', '').strip()
-        platform = normalize_platform_label(request.form.get('platform', '亚马逊'))
-        mode = (request.form.get('mode', 'suite') or 'suite').strip() or 'suite'
-        image_payloads = get_image_payloads_from_request('images')
-        reference_payloads = get_image_payloads_from_request('reference_images')
-        country = request.form.get('country', '中国').strip() or '中国'
-        text_type = request.form.get('text_type', '中文').strip() or '中文'
-        image_size_ratio = request.form.get('image_size_ratio', '1:1').strip() or '1:1'
-        product_json = parse_product_json_payload(request.form.get('product_json', ''))
-        selected_style = parse_selected_style(
-            request.form.get('selected_style_title', ''),
-            request.form.get('selected_style_reasoning', ''),
-            request.form.get('selected_style_colors', ''),
-        )
+def build_generation_result_from_payload(form_payload: dict, file_payloads: dict):
+    form = form_payload if isinstance(form_payload, dict) else {}
+    payloads = file_payloads if isinstance(file_payloads, dict) else {}
+    selling_text = str(form.get('selling_text') or '').strip()
+    platform = normalize_platform_label(form.get('platform', '亚马逊'))
+    mode = (str(form.get('mode') or 'suite').strip() or 'suite')
+    image_payloads = list(payloads.get('images') or [])
+    reference_payloads = list(payloads.get('reference_images') or [])
+    country = str(form.get('country') or '中国').strip() or '中国'
+    text_type = str(form.get('text_type') or '中文').strip() or '中文'
+    image_size_ratio = str(form.get('image_size_ratio') or '1:1').strip() or '1:1'
+    product_json = parse_product_json_payload(str(form.get('product_json') or ''))
+    selected_style = parse_selected_style(
+        str(form.get('selected_style_title') or ''),
+        str(form.get('selected_style_reasoning') or ''),
+        str(form.get('selected_style_colors') or ''),
+    )
 
-        if not selling_text and not image_payloads and not reference_payloads:
-            return jsonify({'success': False, 'error': '请至少提供核心卖点文案或上传 1 张图片'}), 400
+    if not selling_text and not image_payloads and not reference_payloads:
+        raise ValueError('请至少提供核心卖点文案或上传 1 张图片')
 
-        if mode == 'fashion':
-            fashion_action = (request.form.get('fashion_action', 'generate') or 'generate').strip() or 'generate'
-            fashion_platform = FASHION_DEFAULT_PLATFORM
-            fashion_selling_text = FASHION_DEFAULT_SELLING_TEXT
-            fashion_country = FASHION_DEFAULT_COUNTRY
-            fashion_text_type = FASHION_DEFAULT_TEXT_TYPE
-            fashion_selected_style = FASHION_DEFAULT_SELECTED_STYLE
-            if fashion_action == 'scene_plan':
-                selected_model = parse_fashion_selected_model_payload(request.form)
-                planning_payloads = image_payloads + [selected_model['payload']]
-            else:
-                selected_model = None
-                planning_payloads = image_payloads
-            if not planning_payloads:
-                return jsonify({'success': False, 'error': '请至少上传商品图或模特参考图'}), 400
+    if mode == 'fashion':
+        fashion_action = (str(form.get('fashion_action') or 'generate').strip() or 'generate')
+        fashion_platform = FASHION_DEFAULT_PLATFORM
+        fashion_selling_text = FASHION_DEFAULT_SELLING_TEXT
+        fashion_country = FASHION_DEFAULT_COUNTRY
+        fashion_text_type = FASHION_DEFAULT_TEXT_TYPE
+        fashion_selected_style = FASHION_DEFAULT_SELECTED_STYLE
+        selected_model_payloads = list(payloads.get('fashion_selected_model_image') or [])
+        if fashion_action == 'scene_plan':
+            selected_model = parse_fashion_selected_model_payload_from_data(form, selected_model_payloads)
+            planning_payloads = image_payloads + [selected_model['payload']]
+        else:
+            selected_model = None
+            planning_payloads = image_payloads
+        if not planning_payloads:
+            raise ValueError('请至少上传商品图或模特参考图')
 
-            if fashion_action == 'scene_plan':
-                scene_plan = build_fashion_scene_plan(
-                    fashion_platform,
-                    fashion_selling_text,
-                    planning_payloads,
-                    fashion_country,
-                    fashion_text_type,
-                    image_size_ratio,
-                    fashion_selected_style,
-                )
-                fashion_debug = {
-                    'selected_model': selected_model.get('debug'),
-                    'product_image_count': len(image_payloads),
-                    'generation_payload_order': ['images'] * len(image_payloads) + ['fashion_selected_model_image'],
-                }
-                return jsonify(
-                    {
-                        'success': True,
-                        'mode': 'fashion',
-                        'fashion_action': 'scene_plan',
-                        'plan': scene_plan,
-                        'selected_style': fashion_selected_style,
-                        'fashion_debug': fashion_debug,
-                        'fashion_selection': {
-                            'selected_model': {
-                                'source': selected_model['source'],
-                                'id': selected_model['id'],
-                                'name': selected_model['name'],
-                            },
-                        },
-                    }
-                )
-
-            selected_model = parse_fashion_selected_model_payload(request.form)
-            selected_model_payload = selected_model['payload']
-            scene_plan = parse_fashion_scene_plan_payload(request.form.get('fashion_scene_plan', ''))
-            scene_group_ids = parse_json_string_list(request.form.get('fashion_scene_group_ids', ''), '场景')
-            pose_ids = parse_json_string_list(request.form.get('fashion_pose_ids', ''), '姿态')
-
-            selections = parse_fashion_scene_selections(scene_plan.get('scene_groups') or [], scene_group_ids, pose_ids)
-            pose_camera_settings = parse_fashion_pose_camera_settings(
-                request.form.get('fashion_pose_camera_settings', ''),
-                selections,
-            )
-            prompt_entries = build_fashion_generation_prompts(
+        if fashion_action == 'scene_plan':
+            scene_plan = build_fashion_scene_plan(
                 fashion_platform,
                 fashion_selling_text,
+                planning_payloads,
                 fashion_country,
                 fashion_text_type,
                 image_size_ratio,
                 fashion_selected_style,
-                selected_model,
-                scene_plan,
-                selections,
-                pose_camera_settings,
             )
-
-            task_id = uuid.uuid4().hex
-            task_name = build_task_name(fashion_platform, 'fashion', len(prompt_entries))
-            generated_at = build_generated_at()
-            reference_images = build_reference_images(task_id, image_payloads, source='product')
-            reference_images.extend(
-                build_reference_images(
-                    task_id,
-                    [selected_model_payload],
-                    source='fashion_reference',
-                    start_sort=len(reference_images) + 1,
-                )
-            )
-
-            fashion_generation_payloads = image_payloads + [selected_model_payload]
             fashion_debug = {
                 'selected_model': selected_model.get('debug'),
                 'product_image_count': len(image_payloads),
                 'generation_payload_order': ['images'] * len(image_payloads) + ['fashion_selected_model_image'],
             }
-            max_verify_attempts = max(1, get_optional_int_env('FASHION_OUTPUT_MAX_VERIFY_ATTEMPTS', FASHION_OUTPUT_MAX_VERIFY_ATTEMPTS))
-            images = []
-            failed_prompt_entries = []
-            for index, prompt_entry in enumerate(prompt_entries, start=1):
+            return {
+                'success': True,
+                'mode': 'fashion',
+                'fashion_action': 'scene_plan',
+                'plan': scene_plan,
+                'selected_style': fashion_selected_style,
+                'fashion_debug': fashion_debug,
+                'fashion_selection': {
+                    'selected_model': {
+                        'source': selected_model['source'],
+                        'id': selected_model['id'],
+                        'name': selected_model['name'],
+                    },
+                },
+            }
+
+        selected_model = parse_fashion_selected_model_payload_from_data(form, selected_model_payloads)
+        selected_model_payload = selected_model['payload']
+        scene_plan = parse_fashion_scene_plan_payload(str(form.get('fashion_scene_plan') or ''))
+        scene_group_ids = parse_json_string_list(str(form.get('fashion_scene_group_ids') or ''), '场景')
+        pose_ids = parse_json_string_list(str(form.get('fashion_pose_ids') or ''), '姿态')
+
+        selections = parse_fashion_scene_selections(scene_plan.get('scene_groups') or [], scene_group_ids, pose_ids)
+        pose_camera_settings = parse_fashion_pose_camera_settings(str(form.get('fashion_pose_camera_settings') or ''), selections)
+        prompt_entries = build_fashion_generation_prompts(
+            fashion_platform,
+            fashion_selling_text,
+            fashion_country,
+            fashion_text_type,
+            image_size_ratio,
+            fashion_selected_style,
+            selected_model,
+            scene_plan,
+            selections,
+            pose_camera_settings,
+        )
+
+        task_id = uuid.uuid4().hex
+        task_name = build_task_name(fashion_platform, 'fashion', len(prompt_entries))
+        generated_at = build_generated_at()
+        reference_images = build_reference_images(task_id, image_payloads, source='product')
+        reference_images.extend(
+            build_reference_images(
+                task_id,
+                [selected_model_payload],
+                source='fashion_reference',
+                start_sort=len(reference_images) + 1,
+            )
+        )
+
+        fashion_generation_payloads = image_payloads + [selected_model_payload]
+        fashion_debug = {
+            'selected_model': selected_model.get('debug'),
+            'product_image_count': len(image_payloads),
+            'generation_payload_order': ['images'] * len(image_payloads) + ['fashion_selected_model_image'],
+        }
+        max_verify_attempts = max(1, get_optional_int_env('FASHION_OUTPUT_MAX_VERIFY_ATTEMPTS', FASHION_OUTPUT_MAX_VERIFY_ATTEMPTS))
+        images = []
+        failed_prompt_entries = []
+        for index, prompt_entry in enumerate(prompt_entries, start=1):
+            app.logger.warning(
+                'Fashion image generation start: index=%s total=%s title=%s shot_size=%s view_angle=%s',
+                index,
+                len(prompt_entries),
+                prompt_entry['pose'].get('title') or f'服饰穿搭图 {index}',
+                prompt_entry.get('shot_size', ''),
+                prompt_entry.get('view_angle', ''),
+            )
+            verification = None
+            generated_items = []
+            image_bytes = None
+            mime_type = 'image/png'
+            for attempt in range(1, max_verify_attempts + 1):
+                generated_items = call_app_mode_image_generation(
+                    get_ark_client(),
+                    prompt_entry['prompt'],
+                    fashion_generation_payloads,
+                    image_size_ratio,
+                    '无文字',
+                    fashion_country,
+                    product_json,
+                    'fashion-look',
+                    max_images=1,
+                )
+                generated_count = len(generated_items) if isinstance(generated_items, list) else 0
                 app.logger.warning(
-                    'Fashion image generation start: index=%s total=%s title=%s shot_size=%s view_angle=%s',
+                    'Fashion image generation result: index=%s total=%s attempt=%s generated_count=%s title=%s',
                     index,
                     len(prompt_entries),
+                    attempt,
+                    generated_count,
                     prompt_entry['pose'].get('title') or f'服饰穿搭图 {index}',
-                    prompt_entry.get('shot_size', ''),
-                    prompt_entry.get('view_angle', ''),
                 )
-                verification = None
-                generated_items = []
-                image_bytes = None
-                mime_type = 'image/png'
-                for attempt in range(1, max_verify_attempts + 1):
-                    generated_items = call_app_mode_image_generation(
-                        get_ark_client(),
-                        prompt_entry['prompt'],
-                        fashion_generation_payloads,
-                        image_size_ratio,
-                        '无文字',
-                        fashion_country,
-                        product_json,
-                        'fashion-look',
-                        max_images=1,
-                    )
-                    generated_count = len(generated_items) if isinstance(generated_items, list) else 0
-                    app.logger.warning(
-                        'Fashion image generation result: index=%s total=%s attempt=%s generated_count=%s title=%s',
-                        index,
-                        len(prompt_entries),
-                        attempt,
-                        generated_count,
-                        prompt_entry['pose'].get('title') or f'服饰穿搭图 {index}',
-                    )
-                    if not generated_items:
-                        continue
-                    image_bytes, mime_type = decode_generated_image(generated_items[0])
-                    generated_payload = {
-                        'filename': f'fashion-look-{index:02d}.png',
-                        'mime_type': mime_type,
-                        'bytes': image_bytes,
-                        'base64': base64.b64encode(image_bytes).decode('utf-8'),
-                        'data_url': f'data:{mime_type};base64,{base64.b64encode(image_bytes).decode("utf-8")}',
-                    }
-                    verification = verify_fashion_generated_output(
-                        generated_payload,
-                        selected_model_payload,
-                        image_payloads,
-                    )
-                    app.logger.warning(
-                        'Fashion output verification: index=%s attempt=%s passed=%s score=%s failed_checks=%s reason=%s',
-                        index,
-                        attempt,
-                        verification.get('passed'),
-                        verification.get('score'),
-                        ','.join(verification.get('failed_checks') or []),
-                        verification.get('reason', ''),
-                    )
-                    if verification.get('passed'):
-                        break
-                if not generated_items or image_bytes is None:
-                    failed_prompt_entries.append(
-                        {
-                            'index': index,
-                            'title': prompt_entry['pose'].get('title') or f'服饰穿搭图 {index}',
-                            'reason': '生成结果为空',
-                        }
-                    )
+                if not generated_items:
                     continue
-                if not verification or not verification.get('passed'):
-                    failed_prompt_entries.append(
-                        {
-                            'index': index,
-                            'title': prompt_entry['pose'].get('title') or f'服饰穿搭图 {index}',
-                            'reason': (verification or {}).get('reason', '质检未通过'),
-                            'failed_checks': (verification or {}).get('failed_checks', []),
-                        }
-                    )
-                    continue
-                download_name, relative_path, image_url = save_generated_image(task_id, index, 'fashion-look', image_bytes, mime_type)
-                images.append(
+                image_bytes, mime_type = decode_generated_image(generated_items[0])
+                generated_payload = {
+                    'filename': f'fashion-look-{index:02d}.png',
+                    'mime_type': mime_type,
+                    'bytes': image_bytes,
+                    'base64': base64.b64encode(image_bytes).decode('utf-8'),
+                    'data_url': f'data:{mime_type};base64,{base64.b64encode(image_bytes).decode("utf-8")}',
+                }
+                verification = verify_fashion_generated_output(
+                    generated_payload,
+                    selected_model_payload,
+                    image_payloads,
+                )
+                app.logger.warning(
+                    'Fashion output verification: index=%s attempt=%s passed=%s score=%s failed_checks=%s reason=%s',
+                    index,
+                    attempt,
+                    verification.get('passed'),
+                    verification.get('score'),
+                    ','.join(verification.get('failed_checks') or []),
+                    verification.get('reason', ''),
+                )
+                if verification.get('passed'):
+                    break
+            if not generated_items or image_bytes is None:
+                failed_prompt_entries.append(
                     {
-                        'sort': index,
-                        'kind': 'generated',
-                        'type': '服饰穿搭图',
-                        'type_tag': 'Look',
+                        'index': index,
                         'title': prompt_entry['pose'].get('title') or f'服饰穿搭图 {index}',
-                        'keywords': [prompt_entry.get('shot_size', ''), prompt_entry.get('view_angle', '')],
-                        'prompt': prompt_entry['prompt'],
-                        'image_url': image_url,
-                        'image_path': relative_path,
-                        'download_name': download_name,
-                        'verification': verification,
+                        'reason': '生成结果为空',
                     }
                 )
-
-            if not images:
-                failure_titles = '、'.join(item['title'] for item in failed_prompt_entries[:3])
-                failure_reason = '；'.join(
-                    item['reason'] for item in failed_prompt_entries[:2] if str(item.get('reason') or '').strip()
+                continue
+            if not verification or not verification.get('passed'):
+                failed_prompt_entries.append(
+                    {
+                        'index': index,
+                        'title': prompt_entry['pose'].get('title') or f'服饰穿搭图 {index}',
+                        'reason': (verification or {}).get('reason', '质检未通过'),
+                        'failed_checks': (verification or {}).get('failed_checks', []),
+                    }
                 )
-                failure_hint = f'（失败场景：{failure_titles}）' if failure_titles else ''
-                failure_reason_hint = f'：{failure_reason}' if failure_reason else ''
-                raise RuntimeError(f'生成结果未通过模特/文字质检，请稍后重试{failure_hint}{failure_reason_hint}')
-
-            return jsonify(
+                continue
+            download_name, relative_path, image_url = save_generated_image(task_id, index, 'fashion-look', image_bytes, mime_type)
+            images.append(
                 {
-                    'success': True,
-                    'mode': 'fashion',
-                    'fashion_action': 'generate',
-                    'task_id': task_id,
-                    'task_name': task_name,
-                    'generated_at': generated_at,
-                    'selected_style': fashion_selected_style,
-                    'fashion_debug': fashion_debug,
-                    'reference_images': reference_images,
-                    'images': images,
-                    'fashion_selection': {
-                        'selected_model': {
-                            'source': selected_model['source'],
-                            'id': selected_model['id'],
-                            'name': selected_model['name'],
-                            'gender': selected_model.get('gender', ''),
-                            'age': selected_model.get('age', ''),
-                            'ethnicity': selected_model.get('ethnicity', ''),
-                            'body_type': selected_model.get('body_type', ''),
-                        },
-                        'scene_group_ids': scene_group_ids,
-                        'pose_ids': pose_ids,
-                        'pose_camera_settings': pose_camera_settings,
-                    },
+                    'sort': index,
+                    'kind': 'generated',
+                    'type': '服饰穿搭图',
+                    'type_tag': 'Look',
+                    'title': prompt_entry['pose'].get('title') or f'服饰穿搭图 {index}',
+                    'keywords': [prompt_entry.get('shot_size', ''), prompt_entry.get('view_angle', '')],
+                    'prompt': prompt_entry['prompt'],
+                    'image_url': image_url,
+                    'image_path': relative_path,
+                    'download_name': download_name,
+                    'verification': verification,
                 }
             )
 
-        output_count, _ = get_suite_type_rules(request.form.get('output_count', '8'))
-        task_id = uuid.uuid4().hex
-        task_name = build_task_name(platform, 'suite', output_count)
-        generated_at = build_generated_at()
-        reference_images = build_reference_images(task_id, image_payloads, source='product')
-        if reference_payloads:
-            reference_images.extend(
-                build_reference_images(
-                    task_id,
-                    reference_payloads,
-                    source='reference',
-                    start_sort=len(reference_images) + 1,
-                )
+        if not images:
+            failure_titles = '、'.join(item['title'] for item in failed_prompt_entries[:3])
+            failure_reason = '；'.join(
+                item['reason'] for item in failed_prompt_entries[:2] if str(item.get('reason') or '').strip()
             )
-        planning_payloads = image_payloads + reference_payloads
-        if product_json is None and planning_payloads:
-            app.logger.warning('Suite generation extracting product_json from uploaded reference images: mode=%s image_count=%s', mode, len(planning_payloads))
-            product_json = extract_product_json_from_image_payloads(selling_text, planning_payloads)
-        app.logger.warning(
-            'Suite generation upload payloads: mode=%s product_count=%s reference_count=%s total_generation_count=%s product_json_ready=%s',
-            mode,
-            len(image_payloads),
-            len(reference_payloads),
-            len(planning_payloads),
-            bool(product_json),
-        )
-        plan = build_suite_plan(
-            platform,
-            selling_text,
-            output_count,
-            planning_payloads,
-            country,
-            text_type,
-            image_size_ratio,
-            selected_style,
-            mode,
-            product_json,
-        )
-        images = generate_suite_images(plan, planning_payloads, task_id, image_size_ratio, text_type, country, product_json)
+            failure_hint = f'（失败场景：{failure_titles}）' if failure_titles else ''
+            failure_reason_hint = f'：{failure_reason}' if failure_reason else ''
+            raise RuntimeError(f'生成结果未通过模特/文字质检，请稍后重试{failure_hint}{failure_reason_hint}')
 
-        return jsonify(
-            {
-                'success': True,
-                'mode': mode,
-                'task_id': task_id,
-                'task_name': task_name,
-                'generated_at': generated_at,
-                'plan': plan,
-                'selected_style': selected_style,
-                'reference_images': reference_images,
-                'images': images,
-            }
+        return {
+            'success': True,
+            'mode': 'fashion',
+            'fashion_action': 'generate',
+            'task_id': task_id,
+            'task_name': task_name,
+            'generated_at': generated_at,
+            'selected_style': fashion_selected_style,
+            'fashion_debug': fashion_debug,
+            'reference_images': reference_images,
+            'images': images,
+            'fashion_selection': {
+                'selected_model': {
+                    'source': selected_model['source'],
+                    'id': selected_model['id'],
+                    'name': selected_model['name'],
+                    'gender': selected_model.get('gender', ''),
+                    'age': selected_model.get('age', ''),
+                    'ethnicity': selected_model.get('ethnicity', ''),
+                    'body_type': selected_model.get('body_type', ''),
+                },
+                'scene_group_ids': scene_group_ids,
+                'pose_ids': pose_ids,
+                'pose_camera_settings': pose_camera_settings,
+            },
+        }
+
+    output_count, _ = get_suite_type_rules(form.get('output_count', '8'))
+    task_id = uuid.uuid4().hex
+    task_name = build_task_name(platform, 'suite', output_count)
+    generated_at = build_generated_at()
+    reference_images = build_reference_images(task_id, image_payloads, source='product')
+    if reference_payloads:
+        reference_images.extend(
+            build_reference_images(
+                task_id,
+                reference_payloads,
+                source='reference',
+                start_sort=len(reference_images) + 1,
+            )
         )
+    planning_payloads = image_payloads + reference_payloads
+    if product_json is None and planning_payloads:
+        app.logger.warning('Suite generation extracting product_json from uploaded reference images: mode=%s image_count=%s', mode, len(planning_payloads))
+        product_json = extract_product_json_from_image_payloads(selling_text, planning_payloads)
+    app.logger.warning(
+        'Suite generation upload payloads: mode=%s product_count=%s reference_count=%s total_generation_count=%s product_json_ready=%s',
+        mode,
+        len(image_payloads),
+        len(reference_payloads),
+        len(planning_payloads),
+        bool(product_json),
+    )
+    plan = build_suite_plan(
+        platform,
+        selling_text,
+        output_count,
+        planning_payloads,
+        country,
+        text_type,
+        image_size_ratio,
+        selected_style,
+        mode,
+        product_json,
+    )
+    images = generate_suite_images(plan, planning_payloads, task_id, image_size_ratio, text_type, country, product_json)
+
+    return {
+        'success': True,
+        'mode': mode,
+        'task_id': task_id,
+        'task_name': task_name,
+        'generated_at': generated_at,
+        'plan': plan,
+        'selected_style': selected_style,
+        'reference_images': reference_images,
+        'images': images,
+    }
+
+
+@app.post('/api/generate-suite')
+def generate_suite():
+    try:
+        form_payload = {key: request.form.get(key, '') for key in request.form.keys()}
+        file_payloads = {
+            'images': get_image_payloads_from_request('images'),
+            'reference_images': get_image_payloads_from_request('reference_images'),
+            'fashion_selected_model_image': get_image_payloads_from_request('fashion_selected_model_image', limit=1),
+        }
+        run_async = str(form_payload.get('async_task') or '').strip().lower() in {'1', 'true', 'yes'}
+        if run_async:
+            session_data = g.get('supabase_session') or get_supabase_session()
+            user_id = _get_supabase_user_id(session_data)
+            if not user_id:
+                return jsonify({'success': False, 'error': '请先登录'}), 401
+            spend_record = None
+            spend_payload = form_payload.get('spend_record')
+            if spend_payload:
+                try:
+                    parsed_spend_record = json.loads(spend_payload)
+                    if isinstance(parsed_spend_record, dict):
+                        spend_record = parsed_spend_record
+                except (TypeError, ValueError):
+                    spend_record = None
+            request_id = str(form_payload.get('points_request_id') or (spend_record or {}).get('requestId') or '').strip()
+            task = create_generation_task(user_id, str(form_payload.get('mode') or 'suite'), request_id, spend_record)
+            GENERATION_TASK_EXECUTOR.submit(run_generation_task, task['task_id'], form_payload, file_payloads)
+            return jsonify({'success': True, 'async_task': True, 'task': task, 'task_id': task['task_id']}), 202
+        result = build_generation_result_from_payload(form_payload, file_payloads)
+        return jsonify(result)
     except RequestEntityTooLarge as exc:
         return handle_request_entity_too_large(exc)
     except ValueError as exc:
@@ -6713,6 +7198,38 @@ def generate_suite():
         return jsonify({'success': False, 'error': f'请求失败：{exc}'}), 502
     except Exception as exc:
         return jsonify({'success': False, 'error': f'服务端异常：{exc}'}), 500
+
+
+@app.get('/api/generation-tasks/<task_id>')
+def generation_task_status(task_id):
+    session_data = g.get('supabase_session') or get_supabase_session()
+    user_id = _get_supabase_user_id(session_data)
+    if not user_id:
+        return jsonify({'success': False, 'error': '请先登录'}), 401
+    task = get_generation_task(task_id)
+    if not task:
+        return jsonify({'success': False, 'error': '生成任务不存在或已过期'}), 404
+    if str(task.get('user_id') or '') != str(user_id):
+        return jsonify({'success': False, 'error': '无权访问该生成任务'}), 403
+    return jsonify({'success': True, 'task': serialize_generation_task(task)})
+
+
+@app.post('/api/generation-tasks/<task_id>/cancel')
+def generation_task_cancel(task_id):
+    session_data = g.get('supabase_session') or get_supabase_session()
+    user_id = _get_supabase_user_id(session_data)
+    if not user_id:
+        return jsonify({'success': False, 'error': '请先登录'}), 401
+    task = get_generation_task(task_id)
+    if not task:
+        return jsonify({'success': False, 'error': '生成任务不存在或已过期'}), 404
+    if str(task.get('user_id') or '') != str(user_id):
+        return jsonify({'success': False, 'error': '无权访问该生成任务'}), 403
+    if task.get('status') in {'succeeded', 'failed'}:
+        return jsonify({'success': True, 'task': serialize_generation_task(task)})
+    fail_generation_task_with_refund(task_id, '生成已取消')
+    updated_task = get_generation_task(task_id)
+    return jsonify({'success': True, 'task': serialize_generation_task(updated_task)})
 
 
 @app.post('/api/generate-aplus')

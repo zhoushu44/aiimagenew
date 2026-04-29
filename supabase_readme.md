@@ -319,6 +319,34 @@ using (true)
 with check (true);
 ```
 
+### generation_tasks
+
+用途：保存用户图片生成任务状态。套图和服饰生成会先创建任务，前端保存 `task_id` 并通过状态接口轮询；页面刷新后可继续恢复生成结果。
+
+| 列名 | 类型 | 含义 |
+| --- | --- | --- |
+| `id` | text | 生成任务 ID，主键 |
+| `user_id` | uuid | 任务所属用户 |
+| `mode` | text | 生成模式，例如 `suite`、`fashion` |
+| `request_id` | text | 积分扣减请求 ID |
+| `status` | text | 任务状态：`pending`、`running`、`succeeded`、`failed` |
+| `result` | jsonb | 生成成功后的结果 JSON |
+| `error` | text | 失败错误摘要 |
+| `details` | text | 失败详情 |
+| `spend_record` | jsonb | 本次扣分记录，用于失败自动退款 |
+| `refunded` | boolean | 是否已自动退款 |
+| `refund_error` | text | 自动退款失败原因 |
+| `created_at` | timestamptz | 创建时间 |
+| `updated_at` | timestamptz | 更新时间 |
+
+迁移文件：
+
+```text
+supabase/migrations/20260429_create_generation_tasks.sql
+```
+
+RLS 策略：当前仅开放 `service_role` 全权限访问。前端不能直接读写该表，必须通过后端接口按登录用户校验任务归属。
+
 ### zpay\_transactions
 
 用途：ZPay 支付订单表。后端创建支付订单、支付回调、订阅续期、会员状态查询都会使用此表。
@@ -406,6 +434,7 @@ with check (true);
 | 积分流水    | `user_points_transactions`                                            |
 | 每日领取积分  | `user_points_balances`                                                |
 | 生成图片扣积分 | `user_points_balances`、`user_points_transactions`                     |
+| 生成任务恢复   | `generation_tasks`                                                     |
 | 会员套餐弹窗  | `vip_plan_config`                                                     |
 | 支付订单    | `zpay_transactions`                                                   |
 | 会员到期状态  | `user_profiles.subscribe_expire`、`zpay_transactions.subscribe_expire` |
