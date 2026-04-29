@@ -10,7 +10,7 @@
 - 积分余额、注册奖励、每日奖励
 - AI 图片生成与图片编辑
 - 生成任务支持刷新恢复、状态轮询和失败自动返还积分
-- VIP 套餐配置从 Supabase 表读取
+- 配置从 .env 和本地 config.json 读取
 - ZPay 支付创建接口
 - ZPay 支付成功回调验签
 - 一次性购买和订阅购买
@@ -170,6 +170,21 @@ SUBSCRIPTION_PRODUCT_DAYS_JSON={"plan_2":30,"plan_3":90}
 | `MODE2_DEFAULT_SAMPLE_STRENGTH` | 否 | 参考图强度，默认 `0.65` |
 | `MODE2_ALLOWED_IMAGE_HOSTS` | 否 | 允许远程参考图的域名白名单，多个用英文逗号分隔 |
 
+### Mode3 图生图
+
+| 配置项 | 必填 | 说明 |
+| --- | --- | --- |
+| `MODE3_OPENAI_API_KEY` | 是 | 图生图接口密钥 |
+| `MODE3_OPENAI_BASE_URL` | 是 | 图生图接口地址 |
+| `MODE3_IMAGE_EDIT_MODEL` | 是 | 图生图模型 |
+| `MODE3_TIMEOUT_SECONDS` | 否 | 单次请求超时，默认 `180`，最小 `30` |
+| `MODE3_RETRY_ATTEMPTS` | 否 | 整批重试次数，默认 `2`，最小 `0` |
+| `MODE3_RETRY_DELAY_SECONDS` | 否 | 重试间隔，默认 `1.5`，最小 `0` |
+| `MODE3_SEQUENTIAL_GENERATION` | 否 | 串行生成策略，`on`/`true`/`1`/`yes`=强制串行，`off`/`false`/`0`/`no`=强制并行，`auto`=自动（>1张图时并行） |
+| `MODE3_PARALLEL_WORKERS` | 否 | 并行线程数，默认 `9`，最小 `1` |
+| `MODE3_SUITE_BATCH_SIZE` | 否 | 套图批次大小，默认 `1`，最小 `1` |
+| `MODE3_PARTIAL_RETRY_ATTEMPTS` | 否 | 部分失败后的补图重试次数，默认 `2`，最小 `0` |
+
 ### Supabase
 
 | 配置项 | 必填 | 说明 |
@@ -177,9 +192,8 @@ SUBSCRIPTION_PRODUCT_DAYS_JSON={"plan_2":30,"plan_3":90}
 | `SUPABASE_URL` | 是 | Supabase 项目 URL |
 | `SUPABASE_ANON_KEY` | 是 | 前端登录用 anon key，可公开，但仍建议由后端注入页面配置 |
 | `SUPABASE_SERVICE_ROLE_KEY` | 是 | 后端管理员 key，只能放后端 `.env`，严禁写入前端 JS |
-| `SUPABASE_SETTINGS_SCOPE` | 否 | 后台配置表 scope，默认 `global` |
-| `SUPABASE_SETTINGS_ALLOWED_EMAIL` | 否 | 允许访问配置管理的单个邮箱 |
-| `SUPABASE_SETTINGS_ALLOWED_EMAILS` | 否 | 允许访问配置管理的多个邮箱，英文逗号分隔 |
+| `ADMIN_ALLOWED_EMAIL` | 否 | 允许访问配置管理的单个邮箱 |
+| `ADMIN_ALLOWED_EMAILS` | 否 | 允许访问配置管理的多个邮箱，英文逗号分隔 |
 
 ### 积分与生成任务
 

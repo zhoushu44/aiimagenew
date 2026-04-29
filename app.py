@@ -30,7 +30,27 @@ from urllib3.util.retry import Retry
 from werkzeug.exceptions import RequestEntityTooLarge
 
 BASE_DIR = Path(__file__).resolve().parent
+CONFIG_FILE = BASE_DIR / 'config.json'
 load_dotenv(BASE_DIR / '.env')
+
+
+def load_local_config() -> dict[str, str]:
+    if not CONFIG_FILE.exists():
+        return {}
+    try:
+        with open(CONFIG_FILE, 'r', encoding='utf-8') as f:
+            data = json.load(f)
+            return data if isinstance(data, dict) else {}
+    except Exception:
+        return {}
+
+
+def save_local_config(config: dict[str, str]) -> None:
+    with open(CONFIG_FILE, 'w', encoding='utf-8') as f:
+        json.dump(config, f, ensure_ascii=False, indent=2)
+
+
+LOCAL_CONFIG = load_local_config()
 
 app = Flask(__name__, static_folder=str(BASE_DIR / 'static'), static_url_path='/static')
 app.config['SEND_FILE_MAX_AGE_DEFAULT'] = 0
@@ -89,8 +109,6 @@ PUBLIC_PATHS = {'/', '/logout'}
 SUPABASE_URL = (os.getenv('SUPABASE_URL') or os.getenv('SUPABASE_PROJECT_URL') or '').strip()
 SUPABASE_ANON_KEY = (os.getenv('SUPABASE_ANON_KEY') or os.getenv('SUPABASE_PUBLISHABLE_KEY') or '').strip()
 SUPABASE_SERVICE_ROLE_KEY = (os.getenv('SUPABASE_SERVICE_ROLE_KEY') or os.getenv('SUPABASE_SERVICE_KEY') or '').strip()
-SUPABASE_SETTINGS_TABLE = 'api_settings'
-SUPABASE_SETTINGS_SCOPE = 'global'
 SUPABASE_USER_PROFILES_TABLE = 'user_profiles'
 SUPABASE_POINTS_TABLE = 'user_points_balances'
 SUPABASE_PAYMENTS_TABLE = 'zpay_transactions'
@@ -1520,6 +1538,30 @@ def get_settings_allowed_phones() -> set[str]:
     return allowed_phones
 
 
+def _is_settings_user_allowed(session_data: dict | None = None) -> bool:
+    allowed_emails = get_settings_allowed_emails()
+    allowed_phones = {_normalize_phone_identifier(phone) for phone in get_settings_allowed_phones()}
+    user_email = _get_supabase_user_email(session_data)
+    user_phone = _get_supabase_user_phone(session_data)
+    return bool(
+        (user_email and user_email in allowed_emails)
+        or (user_phone and user_phone in allowed_phones)
+    )
+
+
+def _normalize_supabase_setting_key(key: str) -> str:
+    return str(key or '').strip().upper()
+
+
+def _supabase_setting_is_sensitive(setting_key: str) -> bool:
+    normalized_key = _normalize_supabase_setting_key(setting_key)
+    return any(token in normalized_key for token in {'KEY', 'SECRET', 'TOKEN', 'PASSWORD', 'PASS', 'PRIVATE'})
+
+
+def _mask_supabase_setting_value(setting_value: str) -> str:
+    return '••••••••' if setting_value else ''
+
+
 def get_admin_password() -> str:
     return os.getenv('ADMIN_PASSWORD', '').strip()
 
@@ -1618,17 +1660,6 @@ def _is_supabase_admin_user(session_data: dict | None = None) -> bool:
     return False
 
 
-def _is_settings_user_allowed(session_data: dict | None = None) -> bool:
-    allowed_emails = get_settings_allowed_emails()
-    allowed_phones = {_normalize_phone_identifier(phone) for phone in get_settings_allowed_phones()}
-    user_email = _get_supabase_user_email(session_data)
-    user_phone = _get_supabase_user_phone(session_data)
-    return bool(
-        (user_email and user_email in allowed_emails)
-        or (user_phone and user_phone in allowed_phones)
-    )
-
-
 def build_admin_session_signature(identifier: str, expires_at: int) -> str:
     message = f'{identifier}:{expires_at}'.encode('utf-8')
     return hmac.new(get_admin_session_secret().encode('utf-8'), message, hashlib.sha256).hexdigest()
@@ -1709,215 +1740,9 @@ def get_app_mode() -> str:
     return normalize_app_mode(get_supabase_setting('APP_MODE', 'mode1'))
 
 
-def _normalize_supabase_setting_key(key: str) -> str:
-    return str(key or '').strip().upper()
-
-
-def _normalize_supabase_setting_value(value) -> str:
-    if value is None:
-        return ''
-    return str(value).strip()
-
-
-_SUPABASE_SETTINGS_CACHE: dict[str, str] | None = None
-_SUPABASE_SETTINGS_LOCK = threading.Lock()
-
-
-def fetch_supabase_settings() -> dict[str, str]:
-    if not SUPABASE_URL or not SUPABASE_SERVICE_ROLE_KEY:
-        return {}
-
-    response = requests.get(
-        build_supabase_request_url(f'/rest/v1/{SUPABASE_SETTINGS_TABLE}'),
-        headers={
-            'apikey': SUPABASE_SERVICE_ROLE_KEY,
-            'Authorization': f'Bearer {SUPABASE_SERVICE_ROLE_KEY}',
-            'Content-Type': 'application/json',
-        },
-        params={
-            'select': 'setting_key,setting_value,scope',
-            'scope': f'eq.{SUPABASE_SETTINGS_SCOPE}',
-        },
-        timeout=20,
-    )
-    response.raise_for_status()
-    payload = response.json()
-    if not isinstance(payload, list):
-        raise RuntimeError('Supabase 设置表返回格式异常')
-
-    settings: dict[str, str] = {}
-    for row in payload:
-        if not isinstance(row, dict):
-            continue
-        setting_key = _normalize_supabase_setting_key(row.get('setting_key'))
-        if not setting_key:
-            continue
-        settings[setting_key] = _normalize_supabase_setting_value(row.get('setting_value'))
-    return settings
-
-
-def _supabase_setting_is_sensitive(setting_key: str) -> bool:
-    normalized_key = _normalize_supabase_setting_key(setting_key)
-    return any(token in normalized_key for token in {'KEY', 'SECRET', 'TOKEN', 'PASSWORD', 'PASS', 'PRIVATE'})
-
-
-def _mask_supabase_setting_value(setting_value: str) -> str:
-    return '••••••••' if setting_value else ''
-
-
-def fetch_supabase_setting_records(scope: str = SUPABASE_SETTINGS_SCOPE) -> list[dict[str, object]]:
-    if not SUPABASE_URL or not SUPABASE_SERVICE_ROLE_KEY:
-        return []
-
-    normalized_scope = str(scope or '').strip() or SUPABASE_SETTINGS_SCOPE
-    headers = {
-        'apikey': SUPABASE_SERVICE_ROLE_KEY,
-        'Authorization': f'Bearer {SUPABASE_SERVICE_ROLE_KEY}',
-        'Content-Type': 'application/json',
-    }
-    params = {
-        'select': 'scope,setting_key,setting_value,description,updated_at',
-        'scope': f'eq.{normalized_scope}',
-        'order': 'setting_key.asc',
-    }
-    response = requests.get(
-        build_supabase_request_url(f'/rest/v1/{SUPABASE_SETTINGS_TABLE}'),
-        headers=headers,
-        params=params,
-        timeout=20,
-    )
-    if response.status_code == 400:
-        error_text = response.text.lower()
-        if 'description' in error_text and ('column' in error_text or 'schema cache' in error_text):
-            response = requests.get(
-                build_supabase_request_url(f'/rest/v1/{SUPABASE_SETTINGS_TABLE}'),
-                headers=headers,
-                params={
-                    'select': 'scope,setting_key,setting_value,updated_at',
-                    'scope': f'eq.{normalized_scope}',
-                    'order': 'setting_key.asc',
-                },
-                timeout=20,
-            )
-    response.raise_for_status()
-    payload = response.json()
-    if not isinstance(payload, list):
-        raise RuntimeError('Supabase 设置表返回格式异常')
-
-    records: list[dict[str, object]] = []
-    for row in payload:
-        if not isinstance(row, dict):
-            continue
-        setting_key = _normalize_supabase_setting_key(row.get('setting_key'))
-        if not setting_key:
-            continue
-        raw_value = _normalize_supabase_setting_value(row.get('setting_value'))
-        is_sensitive = _supabase_setting_is_sensitive(setting_key)
-        records.append(
-            {
-                'scope': str(row.get('scope') or normalized_scope),
-                'setting_key': setting_key,
-                'description': str(row.get('description') or '').strip(),
-                'setting_value': '' if is_sensitive else raw_value,
-                'value_preview': _mask_supabase_setting_value(raw_value) if is_sensitive else raw_value,
-                'is_sensitive': is_sensitive,
-                'updated_at': str(row.get('updated_at') or ''),
-            }
-        )
-    return records
-
-
-def reload_supabase_settings_cache() -> dict[str, str]:
-    global _SUPABASE_SETTINGS_CACHE
-    with _SUPABASE_SETTINGS_LOCK:
-        try:
-            _SUPABASE_SETTINGS_CACHE = fetch_supabase_settings()
-        except requests.RequestException as exc:
-            app.logger.warning('Failed to reload Supabase settings: %s', exc)
-            _SUPABASE_SETTINGS_CACHE = {}
-        except Exception as exc:
-            app.logger.warning('Unexpected Supabase settings reload failure: %s', exc)
-            _SUPABASE_SETTINGS_CACHE = {}
-    return dict(_SUPABASE_SETTINGS_CACHE)
-
-
-def update_supabase_setting(scope: str, setting_key: str, setting_value: str) -> dict:
-    if not SUPABASE_URL or not SUPABASE_SERVICE_ROLE_KEY:
-        raise RuntimeError('Supabase 服务配置缺失')
-
-    normalized_scope = str(scope or '').strip() or SUPABASE_SETTINGS_SCOPE
-    normalized_key = _normalize_supabase_setting_key(setting_key)
-    if not normalized_key:
-        raise ValueError('setting_key 不能为空')
-
-    response = requests.patch(
-        build_supabase_request_url(f'/rest/v1/{SUPABASE_SETTINGS_TABLE}'),
-        headers={
-            'apikey': SUPABASE_SERVICE_ROLE_KEY,
-            'Authorization': f'Bearer {SUPABASE_SERVICE_ROLE_KEY}',
-            'Content-Type': 'application/json',
-            'Prefer': 'return=representation',
-        },
-        params={
-            'scope': f'eq.{normalized_scope}',
-            'setting_key': f'eq.{normalized_key}',
-        },
-        json={
-            'setting_value': setting_value,
-        },
-        timeout=20,
-    )
-    response.raise_for_status()
-    payload = response.json()
-    if not isinstance(payload, list) or not payload:
-        response = requests.post(
-            build_supabase_request_url(f'/rest/v1/{SUPABASE_SETTINGS_TABLE}'),
-            headers={
-                'apikey': SUPABASE_SERVICE_ROLE_KEY,
-                'Authorization': f'Bearer {SUPABASE_SERVICE_ROLE_KEY}',
-                'Content-Type': 'application/json',
-                'Prefer': 'return=representation',
-            },
-            json={
-                'scope': normalized_scope,
-                'setting_key': normalized_key,
-                'setting_value': setting_value,
-            },
-            timeout=20,
-        )
-        response.raise_for_status()
-        payload = response.json()
-        if not isinstance(payload, list) or not payload:
-            raise RuntimeError('未找到可更新的 Supabase 设置')
-
-    reload_supabase_settings_cache()
-    return payload[0]
-
-
-def get_supabase_settings() -> dict[str, str]:
-    global _SUPABASE_SETTINGS_CACHE
-    if _SUPABASE_SETTINGS_CACHE is None:
-        with _SUPABASE_SETTINGS_LOCK:
-            if _SUPABASE_SETTINGS_CACHE is None:
-                try:
-                    _SUPABASE_SETTINGS_CACHE = fetch_supabase_settings()
-                except requests.RequestException as exc:
-                    app.logger.warning('Failed to load Supabase settings: %s', exc)
-                    _SUPABASE_SETTINGS_CACHE = {}
-                except Exception as exc:
-                    app.logger.warning('Unexpected Supabase settings load failure: %s', exc)
-                    _SUPABASE_SETTINGS_CACHE = {}
-    return dict(_SUPABASE_SETTINGS_CACHE)
-
-
 def get_supabase_setting(name: str, default: str = '') -> str:
-    key = _normalize_supabase_setting_key(name)
-    if not key:
-        return default
-    settings = get_supabase_settings()
-    value = settings.get(key)
-    if value:
-        return value
+    if name in LOCAL_CONFIG:
+        return str(LOCAL_CONFIG[name]).strip()
     return os.getenv(name, default).strip()
 
 
@@ -1926,7 +1751,7 @@ def get_supabase_setting_int(name: str, default: int) -> int:
     try:
         return int(raw_value)
     except ValueError as exc:
-        raise ValueError(f'Supabase 设置 {name} 必须为整数') from exc
+        raise ValueError(f'环境变量 {name} 必须为整数') from exc
 
 
 def get_supabase_setting_float(name: str, default: float) -> float:
@@ -1934,7 +1759,7 @@ def get_supabase_setting_float(name: str, default: float) -> float:
     try:
         return float(raw_value)
     except ValueError as exc:
-        raise ValueError(f'Supabase 设置 {name} 必须为数字') from exc
+        raise ValueError(f'环境变量 {name} 必须为数字') from exc
 
 
 def get_supabase_setting_bool(name: str, default: bool = False) -> bool:
@@ -1958,7 +1783,7 @@ def get_supabase_setting_json(name: str, default=None):
     try:
         return json.loads(raw_value)
     except json.JSONDecodeError as exc:
-        raise ValueError(f'Supabase 设置 {name} 必须为合法 JSON') from exc
+        raise ValueError(f'环境变量 {name} 必须为合法 JSON') from exc
 
 
 DEFAULT_POINTS_RULES = {
@@ -3380,6 +3205,82 @@ def strip_code_fences(text: str) -> str:
     return cleaned.strip()
 
 
+def extract_json_candidate(text: str) -> str:
+    cleaned = strip_code_fences(str(text or ''))
+    if not cleaned:
+        return cleaned
+    start_indexes = [index for index in [cleaned.find('{'), cleaned.find('[')] if index >= 0]
+    if not start_indexes:
+        return cleaned
+    start = min(start_indexes)
+    opener = cleaned[start]
+    closer = '}' if opener == '{' else ']'
+    end = cleaned.rfind(closer)
+    if end <= start:
+        return cleaned
+    return cleaned[start:end + 1].strip()
+
+
+def remove_trailing_json_commas(text: str) -> str:
+    return re.sub(r',\s*([}\]])', r'\1', text)
+
+
+def parse_json_candidate(text: str, error_prefix: str):
+    candidates = []
+    raw_candidate = strip_code_fences(str(text or ''))
+    extracted_candidate = extract_json_candidate(raw_candidate)
+    for candidate in [raw_candidate, extracted_candidate, remove_trailing_json_commas(extracted_candidate)]:
+        normalized = str(candidate or '').strip()
+        if normalized and normalized not in candidates:
+            candidates.append(normalized)
+    last_error = None
+    for candidate in candidates:
+        try:
+            return json.loads(candidate)
+        except json.JSONDecodeError as exc:
+            last_error = exc
+    raise ValueError(f'{error_prefix}：{last_error}') from last_error
+
+
+def build_json_repair_prompt(raw_text: str, error_message: str) -> str:
+    return (
+        '下面内容本应是 JSON，但格式不合法。请只返回修复后的合法 JSON，不要解释，不要 Markdown 代码块。\n'
+        f'解析错误：{error_message}\n'
+        '原始内容：\n'
+        f'{str(raw_text or "")}'
+    )
+
+
+def call_chat_json_with_repair(
+    system_prompt: str,
+    user_content,
+    parser,
+    error_prefix: str,
+    temperature: float = 0.3,
+    timeout_seconds: int = 60,
+    repair_attempts: int = 1,
+):
+    response_text = call_chat_completion(system_prompt, user_content, temperature=temperature, timeout_seconds=timeout_seconds)
+    try:
+        return parser(response_text), response_text
+    except ValueError as first_exc:
+        last_exc = first_exc
+        repaired_text = response_text
+        for attempt in range(max(int(repair_attempts or 0), 0)):
+            try:
+                repaired_text = call_chat_completion(
+                    '你是严格的 JSON 修复器，只能输出合法 JSON。',
+                    build_json_repair_prompt(repaired_text, str(last_exc)),
+                    temperature=0,
+                    timeout_seconds=min(max(timeout_seconds, 60), 120),
+                )
+                return parser(repaired_text), repaired_text
+            except ValueError as exc:
+                last_exc = exc
+                app.logger.warning('%s JSON repair attempt %s failed: %s', error_prefix, attempt + 1, exc)
+        raise last_exc
+
+
 def normalize_hex_color(value: str) -> str:
     color = (value or '').strip()
     if not color:
@@ -3394,11 +3295,7 @@ def normalize_hex_color(value: str) -> str:
 
 
 def parse_style_analysis(text: str):
-    cleaned = strip_code_fences(text)
-    try:
-        payload = json.loads(cleaned)
-    except json.JSONDecodeError as exc:
-        raise ValueError(f'风格分析结果格式异常：{exc}') from exc
+    payload = parse_json_candidate(text, '风格分析结果格式异常')
 
     styles = payload.get('styles')
     if not isinstance(styles, list) or len(styles) != 4:
@@ -3680,11 +3577,10 @@ def normalize_product_json(raw_value):
 
 
 def parse_product_json(text: str):
-    cleaned = strip_code_fences(text)
     try:
-        payload = json.loads(cleaned)
-    except json.JSONDecodeError:
-        payload = extract_json_object_from_text(cleaned)
+        payload = parse_json_candidate(text, '商品结构化信息格式异常')
+    except ValueError:
+        payload = extract_json_object_from_text(strip_code_fences(text))
         if payload is None:
             raise ValueError('商品结构化信息格式异常：无法解析为 JSON 对象')
     if not isinstance(payload, dict):
@@ -3731,17 +3627,20 @@ def extract_json_object_from_text(text: str):
 def extract_product_json_from_image_payloads(selling_text: str, image_payloads):
     if not image_payloads:
         return None
-    product_json_text = call_chat_completion(
+    product_json, _response_text = call_chat_json_with_repair(
         PRODUCT_JSON_SYSTEM_PROMPT,
         build_multimodal_content(
             PRODUCT_JSON_USER_PROMPT_TEMPLATE.format(selling_text=selling_text or '（未填写）'),
             image_payloads,
         ),
+        parse_product_json,
+        '商品结构化信息格式异常',
         temperature=0.2,
         timeout_seconds=get_suite_plan_timeout_seconds(),
+        repair_attempts=1,
     )
     try:
-        return parse_product_json(product_json_text)
+        return normalize_product_json(product_json)
     except ValueError as exc:
         app.logger.warning('商品结构化信息解析失败，已降级为空结构：%s', exc)
         return normalize_product_json(PRODUCT_JSON_FALLBACK)
@@ -3790,11 +3689,7 @@ def build_suite_plan_prompt(platform: str, selling_text: str, output_count: int,
 
 
 def parse_suite_plan(text: str, expected_output_count: int, allowed_types):
-    cleaned = strip_code_fences(text)
-    try:
-        payload = json.loads(cleaned)
-    except json.JSONDecodeError as exc:
-        raise ValueError(f'套图规划结果格式异常：{exc}') from exc
+    payload = parse_json_candidate(text, '套图规划结果格式异常')
 
     summary = str(payload.get('summary', '')).strip()
     output_count = payload.get('output_count')
@@ -3924,25 +3819,22 @@ def normalize_plan_type_list(raw_value, allowed_types, limit=3):
 
 def build_suite_plan(platform: str, selling_text: str, output_count: int, image_payloads, country: str, text_type: str, image_size_ratio: str, selected_style=None, mode: str = 'suite', product_json=None):
     _, type_rules = get_suite_type_rules(output_count)
-    response_text = call_chat_completion(
+    prompt = build_suite_plan_prompt(platform, selling_text, output_count, type_rules, country, text_type, image_size_ratio, selected_style, mode, product_json)
+    plan, _response_text = call_chat_json_with_repair(
         SUITE_PLAN_SYSTEM_PROMPT,
-        build_multimodal_content(
-            build_suite_plan_prompt(platform, selling_text, output_count, type_rules, country, text_type, image_size_ratio, selected_style, mode, product_json),
-            image_payloads,
-        ),
-        temperature=0.8,
+        build_multimodal_content(prompt, image_payloads),
+        lambda text: parse_suite_plan(text, output_count, type_rules),
+        '套图规划结果格式异常',
+        temperature=0.3,
         timeout_seconds=get_suite_plan_timeout_seconds(),
+        repair_attempts=1,
     )
-    return parse_suite_plan(response_text, output_count, type_rules)
+    return plan
 
 
 
 def parse_fashion_scene_plan(text: str):
-    cleaned = strip_code_fences(text)
-    try:
-        payload = json.loads(cleaned)
-    except json.JSONDecodeError as exc:
-        raise ValueError(f'场景规划结果格式异常：{exc}') from exc
+    payload = parse_json_candidate(text, '场景规划结果格式异常')
 
     summary = str(payload.get('summary', '')).strip()
     scene_prompt = str(payload.get('scene_prompt', '')).strip()
@@ -4038,16 +3930,17 @@ FASHION_SCENE_PLAN_MODEL_TIMEOUT_SECONDS = 120
 
 
 def build_fashion_scene_plan(platform: str, selling_text: str, image_payloads, country: str, text_type: str, image_size_ratio: str, selected_style=None):
-    response_text = call_chat_completion(
+    prompt = build_fashion_scene_plan_prompt(platform, selling_text, country, text_type, image_size_ratio, selected_style)
+    plan, _response_text = call_chat_json_with_repair(
         FASHION_SCENE_PLAN_SYSTEM_PROMPT,
-        build_multimodal_content(
-            build_fashion_scene_plan_prompt(platform, selling_text, country, text_type, image_size_ratio, selected_style),
-            image_payloads,
-        ),
-        temperature=0.85,
+        build_multimodal_content(prompt, image_payloads),
+        parse_fashion_scene_plan,
+        '服饰场景规划结果格式异常',
+        temperature=0.3,
         timeout_seconds=FASHION_SCENE_PLAN_MODEL_TIMEOUT_SECONDS,
+        repair_attempts=1,
     )
-    return parse_fashion_scene_plan(response_text)
+    return plan
 
 
 
@@ -4451,11 +4344,7 @@ def build_fashion_generation_prompts(platform: str, selling_text: str, country: 
 
 
 def parse_fashion_output_verification(text: str):
-    cleaned = strip_code_fences(text)
-    try:
-        payload = json.loads(cleaned)
-    except json.JSONDecodeError as exc:
-        raise ValueError(f'服饰成图质检结果格式异常：{exc}') from exc
+    payload = parse_json_candidate(text, '服饰成图质检结果格式异常')
 
     if not isinstance(payload, dict):
         raise ValueError('服饰成图质检结果格式异常：返回值必须为对象')
@@ -4526,13 +4415,16 @@ def verify_fashion_generated_output(generated_payload: dict, selected_model_payl
         raise ValueError('缺少商品图，无法执行服饰成图质检')
 
     verification_payloads = [generated_payload, selected_model_payload, product_payloads[0]]
-    response_text = call_chat_completion(
+    verification, _response_text = call_chat_json_with_repair(
         FASHION_OUTPUT_VERIFIER_SYSTEM_PROMPT,
         build_multimodal_content(FASHION_OUTPUT_VERIFIER_USER_PROMPT_TEMPLATE, verification_payloads),
+        parse_fashion_output_verification,
+        '服饰成图质检结果格式异常',
         temperature=0,
         timeout_seconds=90,
+        repair_attempts=1,
     )
-    return parse_fashion_output_verification(response_text)
+    return verification
 
 
 
@@ -4627,11 +4519,7 @@ def build_aplus_plan_prompt(platform: str, selling_text: str, selected_module_ke
 
 
 def parse_aplus_plan(text: str, selected_module_keys):
-    cleaned = strip_code_fences(text)
-    try:
-        payload = json.loads(cleaned)
-    except json.JSONDecodeError as exc:
-        raise ValueError(f'A+ 规划结果格式异常：{exc}') from exc
+    payload = parse_json_candidate(text, 'A+ 规划结果格式异常')
 
     summary = str(payload.get('summary', '')).strip()
     module_count = payload.get('module_count')
@@ -4692,15 +4580,17 @@ def parse_aplus_plan(text: str, selected_module_keys):
 
 
 def build_aplus_plan(platform: str, selling_text: str, selected_module_keys, image_payloads, country: str, text_type: str, image_size_ratio: str, selected_style=None, product_json=None):
-    response_text = call_chat_completion(
+    prompt = build_aplus_plan_prompt(platform, selling_text, selected_module_keys, country, text_type, image_size_ratio, selected_style, product_json)
+    plan, _response_text = call_chat_json_with_repair(
         APLUS_PLAN_SYSTEM_PROMPT,
-        build_multimodal_content(
-            build_aplus_plan_prompt(platform, selling_text, selected_module_keys, country, text_type, image_size_ratio, selected_style, product_json),
-            image_payloads,
-        ),
-        temperature=0.8,
+        build_multimodal_content(prompt, image_payloads),
+        lambda text: parse_aplus_plan(text, selected_module_keys),
+        'A+ 规划结果格式异常',
+        temperature=0.3,
+        timeout_seconds=90,
+        repair_attempts=1,
     )
-    return parse_aplus_plan(response_text, selected_module_keys)
+    return plan
 
 
 def get_ark_client() -> OpenAI:
@@ -6101,6 +5991,9 @@ def fashion_page():
 
 @app.get('/settings')
 def settings_page():
+    admin_session = g.get('admin_session') or get_admin_session()
+    if not admin_session:
+        return redirect('/')
     return render_html_page('settings.html')
 
 
@@ -6111,60 +6004,70 @@ def serve_generated_file(path: str):
 
 @app.get('/api/settings')
 def settings_list_api():
-    scope = request.args.get('scope', SUPABASE_SETTINGS_SCOPE)
-    try:
-        records = fetch_supabase_setting_records(scope)
-        return jsonify({'success': True, 'scope': str(scope or SUPABASE_SETTINGS_SCOPE).strip() or SUPABASE_SETTINGS_SCOPE, 'records': records})
-    except requests.RequestException as exc:
-        return jsonify({'success': False, 'error': f'读取设置失败：{exc}'}), 502
-    except Exception as exc:
-        return jsonify({'success': False, 'error': f'读取设置失败：{exc}'}), 500
+    admin_session = g.get('admin_session') or get_admin_session()
+    if not admin_session:
+        return jsonify({'success': False, 'error': '未授权'}), 401
+    scope = request.args.get('scope', 'global')
+    records = []
+    for key, value in LOCAL_CONFIG.items():
+        normalized_key = _normalize_supabase_setting_key(key)
+        records.append({
+            'scope': scope,
+            'setting_key': normalized_key,
+            'setting_value': '' if _supabase_setting_is_sensitive(normalized_key) else str(value),
+            'value_preview': _mask_supabase_setting_value(str(value)),
+            'description': '',
+            'updated_at': datetime.now(timezone.utc).isoformat(),
+        })
+    for key, value in os.environ.items():
+        normalized_key = _normalize_supabase_setting_key(key)
+        if normalized_key not in {r['setting_key'] for r in records}:
+            records.append({
+                'scope': scope,
+                'setting_key': normalized_key,
+                'setting_value': '' if _supabase_setting_is_sensitive(normalized_key) else str(value),
+                'value_preview': _mask_supabase_setting_value(str(value)),
+                'description': '',
+                'updated_at': '',
+            })
+    return jsonify({'success': True, 'scope': scope, 'records': records})
 
 
 @app.patch('/api/settings')
 def settings_update_api():
-    try:
-        payload = request.get_json(silent=True) or {}
-        scope = str(payload.get('scope') or SUPABASE_SETTINGS_SCOPE).strip() or SUPABASE_SETTINGS_SCOPE
-        setting_key = str(payload.get('setting_key') or '').strip()
-        if not setting_key:
-            return jsonify({'success': False, 'error': 'setting_key 不能为空'}), 400
-        if 'setting_value' not in payload:
-            return jsonify({'success': False, 'error': 'setting_value 不能为空'}), 400
-        setting_value = str(payload.get('setting_value') or '')
-        updated_row = update_supabase_setting(scope, setting_key, setting_value)
-        return jsonify({
-            'success': True,
-            'record': {
-                'scope': str(updated_row.get('scope') or scope),
-                'setting_key': str(updated_row.get('setting_key') or setting_key),
-                'setting_value': _normalize_supabase_setting_value(updated_row.get('setting_value')),
-                'description': str(updated_row.get('description') or '').strip(),
-                'updated_at': str(updated_row.get('updated_at') or ''),
-            },
-        })
-    except ValueError as exc:
-        return jsonify({'success': False, 'error': str(exc)}), 400
-    except requests.RequestException as exc:
-        return jsonify({'success': False, 'error': f'更新设置失败：{exc}'}), 502
-    except RuntimeError as exc:
-        return jsonify({'success': False, 'error': str(exc)}), 500
-    except Exception as exc:
-        return jsonify({'success': False, 'error': f'更新设置失败：{exc}'}), 500
+    admin_session = g.get('admin_session') or get_admin_session()
+    if not admin_session:
+        return jsonify({'success': False, 'error': '未授权'}), 401
+    payload = request.get_json(silent=True) or {}
+    setting_key = str(payload.get('setting_key') or '').strip()
+    if not setting_key:
+        return jsonify({'success': False, 'error': 'setting_key 不能为空'}), 400
+    if 'setting_value' not in payload:
+        return jsonify({'success': False, 'error': 'setting_value 不能为空'}), 400
+    setting_value = str(payload.get('setting_value') or '')
+    LOCAL_CONFIG[setting_key.upper()] = setting_value
+    save_local_config(LOCAL_CONFIG)
+    return jsonify({
+        'success': True,
+        'record': {
+            'scope': str(payload.get('scope') or 'global'),
+            'setting_key': setting_key.upper(),
+            'setting_value': '' if _supabase_setting_is_sensitive(setting_key.upper()) else setting_value,
+            'value_preview': _mask_supabase_setting_value(setting_value),
+            'description': '',
+            'updated_at': datetime.now(timezone.utc).isoformat(),
+        },
+    })
 
 
 @app.post('/api/settings/refresh')
 def settings_refresh_api():
-    try:
-        reload_supabase_settings_cache()
-        scope = request.get_json(silent=True) or {}
-        requested_scope = str(scope.get('scope') or SUPABASE_SETTINGS_SCOPE).strip() or SUPABASE_SETTINGS_SCOPE
-        records = fetch_supabase_setting_records(requested_scope)
-        return jsonify({'success': True, 'scope': requested_scope, 'records': records})
-    except requests.RequestException as exc:
-        return jsonify({'success': False, 'error': f'刷新设置失败：{exc}'}), 502
-    except Exception as exc:
-        return jsonify({'success': False, 'error': f'刷新设置失败：{exc}'}), 500
+    admin_session = g.get('admin_session') or get_admin_session()
+    if not admin_session:
+        return jsonify({'success': False, 'error': '未授权'}), 401
+    global LOCAL_CONFIG
+    LOCAL_CONFIG = load_local_config()
+    return jsonify({'success': True})
 
 
 def find_refundable_spend_transaction(user_id: str, request_id: str, amount: int | None = None, transaction_type: str = '') -> dict | None:
@@ -6538,15 +6441,18 @@ def ai_write():
         )
         product_json = None
         if image_payloads or text:
-            product_json_text = call_chat_completion(
+            product_json, _response_text = call_chat_json_with_repair(
                 PRODUCT_JSON_SYSTEM_PROMPT,
                 build_multimodal_content(
                     PRODUCT_JSON_USER_PROMPT_TEMPLATE.format(selling_text=text or selling_text or '（未填写）'),
                     image_payloads,
                 ),
+                parse_product_json,
+                '商品结构化信息格式异常',
                 temperature=0.2,
+                timeout_seconds=60,
+                repair_attempts=1,
             )
-            product_json = parse_product_json(product_json_text)
 
         return jsonify({'success': True, 'text': text, 'product_json': product_json})
     except RequestEntityTooLarge as exc:
@@ -6574,7 +6480,7 @@ def style_analysis():
         if not selling_text and not image_payloads:
             return jsonify({'success': False, 'error': '请至少提供核心卖点文案或上传 1 张图片'}), 400
 
-        response_text = call_chat_completion(
+        styles, _response_text = call_chat_json_with_repair(
             STYLE_ANALYSIS_SYSTEM_PROMPT,
             build_multimodal_content(
                 STYLE_ANALYSIS_USER_PROMPT_TEMPLATE.format(
@@ -6583,9 +6489,12 @@ def style_analysis():
                 ),
                 image_payloads,
             ),
-            temperature=1,
+            parse_style_analysis,
+            '风格分析结果格式异常',
+            temperature=0.3,
+            timeout_seconds=60,
+            repair_attempts=1,
         )
-        styles = parse_style_analysis(response_text)
         return jsonify({'success': True, 'styles': styles})
     except RequestEntityTooLarge as exc:
         return handle_request_entity_too_large(exc)
