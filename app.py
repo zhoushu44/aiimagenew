@@ -4784,6 +4784,88 @@ def should_mode3_use_sequential_generation(target_count: int, image_payloads) ->
     return int(target_count or 0) <= 1
 
 
+def get_mode1_retry_attempts() -> int:
+    return max(get_supabase_setting_int('MODE1_RETRY_ATTEMPTS', get_optional_int_env('MODE1_RETRY_ATTEMPTS', 2)), 0)
+
+
+def get_mode1_retry_delay_seconds() -> float:
+    raw_value = get_supabase_setting('MODE1_RETRY_DELAY_SECONDS', get_optional_env('MODE1_RETRY_DELAY_SECONDS', '1.5'))
+    try:
+        return max(float(raw_value), 0.0)
+    except ValueError:
+        return 1.5
+
+
+def get_mode1_parallel_workers() -> int:
+    return max(get_supabase_setting_int('MODE1_PARALLEL_WORKERS', get_optional_int_env('MODE1_PARALLEL_WORKERS', 3)), 1)
+
+
+def get_mode1_partial_retry_attempts() -> int:
+    return max(get_supabase_setting_int('MODE1_PARTIAL_RETRY_ATTEMPTS', get_optional_int_env('MODE1_PARTIAL_RETRY_ATTEMPTS', 2)), 0)
+
+
+def get_mode1_timeout_seconds() -> int:
+    return max(get_supabase_setting_int('MODE1_TIMEOUT_SECONDS', get_optional_int_env('MODE1_TIMEOUT_SECONDS', 180)), 30)
+
+
+def should_mode1_use_sequential_generation(target_count: int, image_payloads) -> bool:
+    mode = str(get_supabase_setting('MODE1_SEQUENTIAL_GENERATION', get_optional_env('MODE1_SEQUENTIAL_GENERATION', 'auto')) or 'auto').strip().lower()
+    if mode in {'on', 'true', '1', 'yes'}:
+        return True
+    if mode in {'off', 'false', '0', 'no'}:
+        return False
+    return int(target_count or 0) <= 1
+
+
+def get_mode2_parallel_workers() -> int:
+    return max(get_supabase_setting_int('MODE2_PARALLEL_WORKERS', get_optional_int_env('MODE2_PARALLEL_WORKERS', 3)), 1)
+
+
+def get_mode2_partial_retry_attempts() -> int:
+    return max(get_supabase_setting_int('MODE2_PARTIAL_RETRY_ATTEMPTS', get_optional_int_env('MODE2_PARTIAL_RETRY_ATTEMPTS', 2)), 0)
+
+
+def get_mode2_timeout_seconds() -> int:
+    return max(get_supabase_setting_int('MODE2_TIMEOUT_SECONDS', get_optional_int_env('MODE2_TIMEOUT_SECONDS', 180)), 30)
+
+
+def should_mode2_use_sequential_generation(target_count: int, image_payloads) -> bool:
+    mode = str(get_supabase_setting('MODE2_SEQUENTIAL_GENERATION', get_optional_env('MODE2_SEQUENTIAL_GENERATION', 'auto')) or 'auto').strip().lower()
+    if mode in {'on', 'true', '1', 'yes'}:
+        return True
+    if mode in {'off', 'false', '0', 'no'}:
+        return False
+    return int(target_count or 0) <= 1
+
+
+def is_retryable_mode1_error(exc: Exception) -> bool:
+    message = str(exc or '')
+    retryable_fragments = (
+        'openai_error',
+        'bad_response_status_code',
+        'Read timed out',
+        'timed out',
+        'Connection aborted',
+        'Connection reset',
+        'temporarily unavailable',
+        'upstream',
+        '524',
+        'ssl',
+        'sslerror',
+        'decryption failed',
+        'bad record mac',
+        'max retries exceeded',
+        'connectionpool',
+        'protocolerror',
+        'eof',
+        'unexpected eof',
+    )
+    if any(fragment.lower() in message.lower() for fragment in retryable_fragments):
+        return True
+    status_code = getattr(exc, 'status_code', None)
+    return status_code in {408, 409, 425, 429, 500, 502, 503, 504, 524}
+
+
 def is_retryable_mode2_error(exc: Exception) -> bool:
     message = str(exc or '')
     retryable_fragments = (
@@ -4898,12 +4980,16 @@ def validate_mode2_remote_image_url(image_url: str) -> str:
 
 def build_remote_image_payload(image_url: str):
     normalized_url = validate_mode2_remote_image_url(image_url)
-    response = requests.get(normalized_url, timeout=120, allow_redirects=False)
+    return _fetch_url_to_image_payload(normalized_url)
+
+
+def _fetch_url_to_image_payload(image_url: str):
+    response = requests.get(image_url, timeout=120, allow_redirects=False)
     if 300 <= response.status_code < 400:
         raise ValueError('参考图片链接不允许重定向')
     response.raise_for_status()
     content = response.content
-    filename = Path(normalized_url.split('?', 1)[0]).name or 'reference-image'
+    filename = Path(image_url.split('?', 1)[0]).name or 'reference-image'
     mime_type = sniff_image_mime_type(content)
     if not mime_type:
         header_mime_type = response.headers.get('Content-Type', '').split(';', 1)[0].strip().lower()
@@ -4926,7 +5012,7 @@ def build_remote_image_payload(image_url: str):
         'bytes': content,
         'base64': encoded,
         'data_url': f'data:{mime_type};base64,{encoded}',
-        'source_url': normalized_url,
+        'source_url': image_url,
     }
 
 
@@ -5144,6 +5230,88 @@ def call_mode3_images_parallel_with_partial_retry(prompt: str, image_payloads, m
     return generated_items[:target_count]
 
 
+def create_mode1_blank_canvas_payload(image_size_ratio: str = ''):
+    size = resolve_image_size(image_size_ratio)
+    width, height = 2048, 2048
+    match = re.fullmatch(r'(\d+)x(\d+)', size)
+    if match:
+        width, height = int(match.group(1)), int(match.group(2))
+    image = Image.new('RGB', (width, height), (255, 255, 255))
+    buffer = io.BytesIO()
+    image.save(buffer, format='PNG')
+    image_bytes = buffer.getvalue()
+    return {
+        'filename': f'mode1-blank-{width}x{height}.png',
+        'mime_type': 'image/png',
+        'bytes': image_bytes,
+        'data_url': f'data:image/png;base64,{base64.b64encode(image_bytes).decode("ascii")}',
+    }
+
+
+def create_mode2_blank_canvas_payload(ratio: str = '', resolution: str = ''):
+    size = resolve_mode2_image_size(ratio, resolution)
+    width, height = 2048, 2048
+    match = re.fullmatch(r'(\d+)x(\d+)', size)
+    if match:
+        width, height = int(match.group(1)), int(match.group(2))
+    image = Image.new('RGB', (width, height), (255, 255, 255))
+    buffer = io.BytesIO()
+    image.save(buffer, format='PNG')
+    image_bytes = buffer.getvalue()
+    return {
+        'filename': f'mode2-blank-{width}x{height}.png',
+        'mime_type': 'image/png',
+        'bytes': image_bytes,
+        'data_url': f'data:image/png;base64,{base64.b64encode(image_bytes).decode("ascii")}',
+    }
+
+
+def get_mode1_api_key() -> str:
+    api_key = get_supabase_setting('ARK_API_KEY', get_optional_env('ARK_API_KEY', ''))
+    if not api_key:
+        api_key = get_supabase_setting('OPENAI_API_KEY', get_optional_env('OPENAI_API_KEY', ''))
+    return api_key
+
+
+def get_mode1_base_url() -> str:
+    return get_supabase_setting('ARK_BASE_URL', get_optional_env('ARK_BASE_URL', 'https://ark.cn-beijing.volces.com/api/v3')).rstrip('/')
+
+
+def get_mode1_client() -> OpenAI:
+    return OpenAI(
+        api_key=get_mode1_api_key(),
+        base_url=get_mode1_base_url(),
+    )
+
+
+def call_mode1_image_edit(client: OpenAI, prompt: str, image_payloads, image_size_ratio: str = ''):
+    model = get_supabase_setting('ARK_IMAGE_MODEL', get_optional_env('ARK_IMAGE_MODEL', 'doubao-seedream-5-0-260128'))
+    size = resolve_image_size(image_size_ratio)
+    watermark = get_supabase_setting_bool('ARK_IMAGE_WATERMARK', get_optional_bool_env('ARK_IMAGE_WATERMARK', False))
+    reference_instruction = build_mode1_reference_anchor_prompt(len(image_payloads or []))
+    request_payload = {
+        'model': model,
+        'prompt': reference_instruction + prompt,
+        'size': size,
+        'response_format': 'url',
+        'extra_body': {
+            'image': [image_payload['data_url'] for image_payload in image_payloads],
+            'watermark': watermark,
+            'sequential_image_generation': 'disabled',
+        },
+    }
+    app.logger.warning('Mode1 image edit request model=%s size=%s reference_count=%s', model, size, len(image_payloads or []))
+    response = client.images.generate(**request_payload)
+    return pick_generated_image_item(response), model
+
+
+def call_mode1_text2image(client: OpenAI, prompt: str):
+    model = get_supabase_setting('ARK_IMAGE_MODEL', get_optional_env('ARK_IMAGE_MODEL', 'doubao-seedream-5-0-260128'))
+    blank_payload = create_mode1_blank_canvas_payload()
+    generated_item, _model = call_mode1_image_edit(client, prompt, [blank_payload], '1:1')
+    return generated_item, model
+
+
 def call_mode2_image_edit(client: OpenAI, prompt: str, image_payloads, ratio: str, resolution: str, sample_strength: str):
     model = get_supabase_setting('MODE2_IMAGE_EDIT_MODEL', get_optional_env('MODE2_IMAGE_EDIT_MODEL', 'doubao-seedream-5-0-260128'))
     request_payload = {
@@ -5166,18 +5334,9 @@ def call_mode2_image_edit(client: OpenAI, prompt: str, image_payloads, ratio: st
 
 def call_mode2_text2image(client: OpenAI, prompt: str, ratio: str, resolution: str):
     model = get_supabase_setting('MODE2_TEXT2IMAGE_MODEL', get_optional_env('MODE2_TEXT2IMAGE_MODEL', 'doubao-seedream-5-0-260128'))
-    request_payload = {
-        'model': model,
-        'prompt': prompt,
-        'response_format': 'url',
-        'extra_body': {
-            'ratio': resolve_mode2_image_ratio(ratio),
-            'resolution': resolve_mode2_image_resolution(resolution),
-        },
-    }
-    app.logger.warning('Mode2 text2image request ratio=%s resolution=%s model=%s', request_payload['extra_body']['ratio'], request_payload['extra_body']['resolution'], model)
-    response = call_mode2_images_generate_with_retry(client, request_payload)
-    return pick_generated_image_item(response), model
+    blank_payload = create_mode2_blank_canvas_payload(ratio, resolution)
+    generated_item, _model = call_mode2_image_edit(client, prompt, [blank_payload], ratio, resolution, '')
+    return generated_item, model
 
 
 def get_mode3_api_key() -> str:
@@ -5301,27 +5460,178 @@ def call_mode3_image_edit(client: OpenAI, prompt: str, image_payloads, image_siz
     return pick_generated_image_item(payload), model
 
 
+def call_mode1_single_image(prompt: str, image_payloads, image_size_ratio: str = '', text_type: str = '', country: str = '', product_json=None, image_type: str = '', plan_item=None, all_plan_types=None):
+    generated_item, _model = call_mode1_image_edit(get_mode1_client(), prompt, image_payloads or [create_mode1_blank_canvas_payload(image_size_ratio)], image_size_ratio)
+    return generated_item
+
+
+def call_mode1_single_image_with_retry(prompt: str, image_payloads, image_size_ratio: str = '', text_type: str = '', country: str = '', product_json=None, image_type: str = '', plan_item=None, all_plan_types=None):
+    retry_attempts = get_mode1_retry_attempts()
+    retry_delay_seconds = get_mode1_retry_delay_seconds()
+    last_exc = None
+    for attempt in range(retry_attempts + 1):
+        try:
+            return call_mode1_single_image(prompt, image_payloads, image_size_ratio, text_type, country, product_json, image_type, plan_item, all_plan_types)
+        except Exception as exc:
+            last_exc = exc
+            should_retry = attempt < retry_attempts and is_retryable_mode1_error(exc)
+            if not should_retry:
+                raise
+            wait_seconds = retry_delay_seconds * (attempt + 1)
+            app.logger.warning('Mode1 single image failed, retrying in %.2fs (%s/%s): %s', wait_seconds, attempt + 1, retry_attempts, exc)
+            time.sleep(wait_seconds)
+    raise last_exc
+
+
+def call_mode1_images_parallel_with_partial_retry(prompt: str, image_payloads, max_images: int, image_size_ratio: str = '', text_type: str = '', country: str = '', product_json=None, image_type: str = '', plan_item=None, all_plan_types=None):
+    target_count = max(1, int(max_images or 1))
+    enriched_prompt = build_enriched_image_prompt(prompt, image_size_ratio, text_type, country, product_json, image_type, plan_item, all_plan_types)
+    if target_count == 1:
+        return [call_mode1_single_image_with_retry(enriched_prompt, image_payloads, image_size_ratio, text_type, country, product_json, image_type, plan_item, all_plan_types)]
+
+    if should_mode1_use_sequential_generation(target_count, image_payloads):
+        generated_items = []
+        for index in range(target_count):
+            item = call_mode1_single_image_with_retry(enriched_prompt, image_payloads, image_size_ratio, text_type, country, product_json, image_type, plan_item, all_plan_types)
+            generated_items.append(item)
+        return generated_items[:target_count]
+
+    workers = min(target_count, get_mode1_parallel_workers())
+    partial_retry_attempts = get_mode1_partial_retry_attempts()
+    retry_delay_seconds = get_mode1_retry_delay_seconds()
+    generated_items = []
+    failures = []
+
+    def run_one(global_index: int):
+        return call_mode1_single_image_with_retry(enriched_prompt, image_payloads, image_size_ratio, text_type, country, product_json, image_type, plan_item, all_plan_types)
+
+    for attempt_index in range(partial_retry_attempts + 1):
+        missing_count = target_count - len(generated_items)
+        if missing_count <= 0:
+            break
+        failures = []
+        batch_workers = min(missing_count, workers)
+        with concurrent.futures.ThreadPoolExecutor(max_workers=batch_workers) as executor:
+            future_map = {executor.submit(run_one, i): i for i in range(missing_count)}
+            for future in concurrent.futures.as_completed(future_map):
+                batch_index = future_map[future]
+                try:
+                    generated_items.append(future.result())
+                except Exception as exc:
+                    failures.append(f'第{batch_index+1}张：{exc}')
+        if missing_count > 0 and len(generated_items) >= target_count:
+            break
+        if failures and attempt_index < partial_retry_attempts:
+            app.logger.warning('Mode1 parallel partial retry (%s/%s): %s', attempt_index + 1, partial_retry_attempts, '; '.join(failures[:3]))
+            time.sleep(retry_delay_seconds * (attempt_index + 1))
+
+    if len(generated_items) < target_count:
+        error_text = '；'.join(failures[:3]) if failures else '未知错误'
+        raise ValueError(f'mode1 部分图片生成失败，已成功 {len(generated_items)}/{target_count}：{error_text}')
+    return generated_items[:target_count]
+
+
+def call_mode2_single_image(prompt: str, image_payloads, image_size_ratio: str = '', text_type: str = '', country: str = '', product_json=None, image_type: str = '', plan_item=None, all_plan_types=None):
+    ratio = image_size_ratio or '1:1'
+    generated_item, _model = call_mode2_image_edit(get_mode2_client(), prompt, image_payloads or [create_mode2_blank_canvas_payload(ratio)], ratio, '', '')
+    return generated_item
+
+
+def call_mode2_single_image_with_retry(prompt: str, image_payloads, image_size_ratio: str = '', text_type: str = '', country: str = '', product_json=None, image_type: str = '', plan_item=None, all_plan_types=None):
+    retry_attempts = get_mode2_retry_attempts()
+    retry_delay_seconds = get_mode2_retry_delay_seconds()
+    last_exc = None
+    for attempt in range(retry_attempts + 1):
+        try:
+            return call_mode2_single_image(prompt, image_payloads, image_size_ratio, text_type, country, product_json, image_type, plan_item, all_plan_types)
+        except Exception as exc:
+            last_exc = exc
+            should_retry = attempt < retry_attempts and is_retryable_mode2_error(exc)
+            if not should_retry:
+                raise
+            wait_seconds = retry_delay_seconds * (attempt + 1)
+            app.logger.warning('Mode2 single image failed, retrying in %.2fs (%s/%s): %s', wait_seconds, attempt + 1, retry_attempts, exc)
+            time.sleep(wait_seconds)
+    raise last_exc
+
+
+def call_mode2_images_parallel_with_partial_retry(prompt: str, image_payloads, max_images: int, image_size_ratio: str = '', text_type: str = '', country: str = '', product_json=None, image_type: str = '', plan_item=None, all_plan_types=None):
+    target_count = max(1, int(max_images or 1))
+    enriched_prompt = build_enriched_image_prompt(prompt, image_size_ratio, text_type, country, product_json, image_type, plan_item, all_plan_types)
+    if target_count == 1:
+        return [call_mode2_single_image_with_retry(enriched_prompt, image_payloads, image_size_ratio, text_type, country, product_json, image_type, plan_item, all_plan_types)]
+
+    if should_mode2_use_sequential_generation(target_count, image_payloads):
+        generated_items = []
+        for index in range(target_count):
+            item = call_mode2_single_image_with_retry(enriched_prompt, image_payloads, image_size_ratio, text_type, country, product_json, image_type, plan_item, all_plan_types)
+            generated_items.append(item)
+        return generated_items[:target_count]
+
+    workers = min(target_count, get_mode2_parallel_workers())
+    partial_retry_attempts = get_mode2_partial_retry_attempts()
+    retry_delay_seconds = get_mode2_retry_delay_seconds()
+    generated_items = []
+    failures = []
+
+    def run_one(global_index: int):
+        return call_mode2_single_image_with_retry(enriched_prompt, image_payloads, image_size_ratio, text_type, country, product_json, image_type, plan_item, all_plan_types)
+
+    for attempt_index in range(partial_retry_attempts + 1):
+        missing_count = target_count - len(generated_items)
+        if missing_count <= 0:
+            break
+        failures = []
+        batch_workers = min(missing_count, workers)
+        with concurrent.futures.ThreadPoolExecutor(max_workers=batch_workers) as executor:
+            future_map = {executor.submit(run_one, i): i for i in range(missing_count)}
+            for future in concurrent.futures.as_completed(future_map):
+                batch_index = future_map[future]
+                try:
+                    generated_items.append(future.result())
+                except Exception as exc:
+                    failures.append(f'第{batch_index+1}张：{exc}')
+        if missing_count > 0 and len(generated_items) >= target_count:
+            break
+        if failures and attempt_index < partial_retry_attempts:
+            app.logger.warning('Mode2 parallel partial retry (%s/%s): %s', attempt_index + 1, partial_retry_attempts, '; '.join(failures[:3]))
+            time.sleep(retry_delay_seconds * (attempt_index + 1))
+
+    if len(generated_items) < target_count:
+        error_text = '；'.join(failures[:3]) if failures else '未知错误'
+        raise ValueError(f'mode2 部分图片生成失败，已成功 {len(generated_items)}/{target_count}：{error_text}')
+    return generated_items[:target_count]
+
+
 def call_app_mode_image_generation(client: OpenAI, prompt: str, image_payloads, image_size_ratio: str, text_type: str, country: str, product_json=None, image_type: str = '', plan_item=None, all_plan_types=None, max_images: int = 1):
     app_mode = get_app_mode()
+    if app_mode == 'mode1':
+        return call_mode1_images_parallel_with_partial_retry(
+            prompt,
+            image_payloads,
+            max_images,
+            image_size_ratio,
+            text_type,
+            country,
+            product_json,
+            image_type,
+            plan_item,
+            all_plan_types,
+        )
+
     if app_mode == 'mode2':
-        mode2_client = get_mode2_client()
-        if image_payloads:
-            generated_item, _model = call_mode2_image_edit(
-                mode2_client,
-                prompt,
-                image_payloads,
-                image_size_ratio,
-                '',
-                '',
-            )
-        else:
-            generated_item, _model = call_mode2_text2image(
-                mode2_client,
-                prompt,
-                image_size_ratio,
-                '',
-            )
-        return [generated_item]
+        return call_mode2_images_parallel_with_partial_retry(
+            prompt,
+            image_payloads,
+            max_images,
+            image_size_ratio,
+            text_type,
+            country,
+            product_json,
+            image_type,
+            plan_item,
+            all_plan_types,
+        )
 
     if app_mode == 'mode3':
         return call_mode3_images_parallel_with_partial_retry(
@@ -5718,6 +6028,136 @@ def build_generated_suite_image_item(task_id: str, plan_item: dict, generated_it
     }
 
 
+def generate_mode1_suite_images_parallel(plan: dict, image_payloads, task_id: str, image_size_ratio: str, text_type: str, country: str, product_json=None, all_plan_types=None):
+    plan_items = list(plan.get('items') or [])
+    if not plan_items:
+        return []
+    workers = min(len(plan_items), get_mode1_parallel_workers())
+    partial_retry_attempts = get_mode1_partial_retry_attempts()
+    retry_delay_seconds = get_mode1_retry_delay_seconds()
+    results = []
+    failures = []
+
+    def run_one(plan_item: dict):
+        generated_item = call_mode1_single_image_with_retry(
+            build_enriched_image_prompt(
+                plan_item['prompt'],
+                image_size_ratio,
+                text_type,
+                country,
+                product_json,
+                plan_item['type'],
+                plan_item,
+                all_plan_types or [],
+            ),
+            image_payloads,
+            image_size_ratio,
+            text_type,
+            country,
+            product_json,
+            plan_item['type'],
+            plan_item,
+            all_plan_types,
+        )
+        return build_generated_suite_image_item(task_id, plan_item, generated_item)
+
+    pending_items = list(plan_items)
+    for attempt_index in range(partial_retry_attempts + 1):
+        if not pending_items:
+            break
+        batch_workers = min(len(pending_items), workers)
+        batch_results = []
+        batch_failures = []
+        with concurrent.futures.ThreadPoolExecutor(max_workers=batch_workers) as executor:
+            future_map = {executor.submit(run_one, item): item for item in pending_items}
+            for future in concurrent.futures.as_completed(future_map):
+                plan_item = future_map[future]
+                try:
+                    batch_results.append(future.result())
+                except Exception as exc:
+                    batch_failures.append((plan_item, f'{plan_item.get("type") or plan_item.get("title") or plan_item.get("sort")}：{exc}'))
+        results.extend(batch_results)
+        pending_items = [item for item, _msg in batch_failures]
+        failures = [_msg for _item, _msg in batch_failures]
+        if pending_items and attempt_index < partial_retry_attempts:
+            app.logger.warning(
+                'Mode1 suite partial generation missing %s/%s images, retrying in %.2fs (%s/%s): %s',
+                len(pending_items), len(plan_items), retry_delay_seconds * (attempt_index + 1),
+                attempt_index + 1, partial_retry_attempts,
+                '; '.join(failures[:3]),
+            )
+            time.sleep(retry_delay_seconds * (attempt_index + 1))
+
+    if failures:
+        raise ValueError(f'mode1 套图部分生成失败：{"；".join(failures[:3])}')
+    return sorted(results, key=lambda item: item.get('sort') or 0)
+
+
+def generate_mode2_suite_images_parallel(plan: dict, image_payloads, task_id: str, image_size_ratio: str, text_type: str, country: str, product_json=None, all_plan_types=None):
+    plan_items = list(plan.get('items') or [])
+    if not plan_items:
+        return []
+    workers = min(len(plan_items), get_mode2_parallel_workers())
+    partial_retry_attempts = get_mode2_partial_retry_attempts()
+    retry_delay_seconds = get_mode2_retry_delay_seconds()
+    results = []
+    failures = []
+
+    def run_one(plan_item: dict):
+        generated_item = call_mode2_single_image_with_retry(
+            build_enriched_image_prompt(
+                plan_item['prompt'],
+                image_size_ratio,
+                text_type,
+                country,
+                product_json,
+                plan_item['type'],
+                plan_item,
+                all_plan_types or [],
+            ),
+            image_payloads,
+            image_size_ratio,
+            text_type,
+            country,
+            product_json,
+            plan_item['type'],
+            plan_item,
+            all_plan_types,
+        )
+        return build_generated_suite_image_item(task_id, plan_item, generated_item)
+
+    pending_items = list(plan_items)
+    for attempt_index in range(partial_retry_attempts + 1):
+        if not pending_items:
+            break
+        batch_workers = min(len(pending_items), workers)
+        batch_results = []
+        batch_failures = []
+        with concurrent.futures.ThreadPoolExecutor(max_workers=batch_workers) as executor:
+            future_map = {executor.submit(run_one, item): item for item in pending_items}
+            for future in concurrent.futures.as_completed(future_map):
+                plan_item = future_map[future]
+                try:
+                    batch_results.append(future.result())
+                except Exception as exc:
+                    batch_failures.append((plan_item, f'{plan_item.get("type") or plan_item.get("title") or plan_item.get("sort")}：{exc}'))
+        results.extend(batch_results)
+        pending_items = [item for item, _msg in batch_failures]
+        failures = [_msg for _item, _msg in batch_failures]
+        if pending_items and attempt_index < partial_retry_attempts:
+            app.logger.warning(
+                'Mode2 suite partial generation missing %s/%s images, retrying in %.2fs (%s/%s): %s',
+                len(pending_items), len(plan_items), retry_delay_seconds * (attempt_index + 1),
+                attempt_index + 1, partial_retry_attempts,
+                '; '.join(failures[:3]),
+            )
+            time.sleep(retry_delay_seconds * (attempt_index + 1))
+
+    if failures:
+        raise ValueError(f'mode2 套图部分生成失败：{"；".join(failures[:3])}')
+    return sorted(results, key=lambda item: item.get('sort') or 0)
+
+
 def generate_mode3_suite_images_parallel(plan: dict, image_payloads, task_id: str, image_size_ratio: str, text_type: str, country: str, product_json=None, all_plan_types=None):
     plan_items = list(plan.get('items') or [])
     if not plan_items:
@@ -5789,6 +6229,10 @@ def generate_suite_images(plan: dict, image_payloads, task_id: str, image_size_r
     all_plan_types = [str(item.get('type', '')).strip() for item in plan.get('items', []) if str(item.get('type', '')).strip()]
     plan_items = list(plan.get('items') or [])
     app_mode = get_app_mode()
+    if app_mode == 'mode1':
+        return generate_mode1_suite_images_parallel(plan, image_payloads, task_id, image_size_ratio, text_type, country, product_json, all_plan_types)
+    if app_mode == 'mode2':
+        return generate_mode2_suite_images_parallel(plan, image_payloads, task_id, image_size_ratio, text_type, country, product_json, all_plan_types)
     if app_mode == 'mode3':
         return generate_mode3_suite_images_parallel(plan, image_payloads, task_id, image_size_ratio, text_type, country, product_json, all_plan_types)
     batch_limit = max(get_supabase_setting_int('ARK_SEQUENTIAL_MAX_IMAGES', get_optional_int_env('ARK_SEQUENTIAL_MAX_IMAGES', 1)), 1)
@@ -5826,48 +6270,104 @@ def generate_suite_images(plan: dict, image_payloads, task_id: str, image_size_r
 
 
 def generate_aplus_images(plan: dict, image_payloads, task_id: str, image_size_ratio: str, text_type: str, country: str, product_json=None):
-    client = get_ark_client()
-    images = []
+    plan_items = list(plan.get('items') or [])
+    if not plan_items:
+        return []
 
-    for item in plan['items']:
+    app_mode = get_app_mode()
+    workers, partial_retry_attempts, retry_delay_seconds = _get_parallel_config(app_mode, len(plan_items))
+
+    results = []
+    failures = []
+
+    def run_one(plan_item: dict):
         generated_items = call_app_mode_image_generation(
-            client,
-            item['prompt'],
+            get_ark_client(),
+            plan_item['prompt'],
             image_payloads,
             image_size_ratio,
             text_type,
             country,
             product_json,
-            item['type'],
+            plan_item['type'],
             max_images=1,
         )
         generated_item = generated_items[0]
         image_bytes, mime_type = decode_generated_image(generated_item)
-        download_name, relative_path, image_url = save_generated_image(task_id, item['sort'], item['type'], image_bytes, mime_type)
-        images.append(
-            {
-                'sort': item['sort'],
-                'kind': 'generated',
-                'type': item['type'],
-                'type_tag': item['type_tag'],
-                'title': item['title'],
-                'keywords': item['keywords'],
-                'prompt': item['prompt'],
-                'module': item.get('module', ''),
-                'story_role': item.get('story_role', ''),
-                'decision_task': item.get('decision_task', ''),
-                'info_density': item.get('info_density', ''),
-                'layout_style': item.get('layout_style', ''),
-                'font_style': item.get('font_style', ''),
-                'color_scheme': item.get('color_scheme', ''),
-                'decor_elements': item.get('decor_elements', []),
-                'image_url': image_url,
-                'image_path': relative_path,
-                'download_name': download_name,
-            }
-        )
+        download_name, relative_path, image_url = save_generated_image(task_id, plan_item['sort'], plan_item['type'], image_bytes, mime_type)
+        return {
+            'sort': plan_item['sort'],
+            'kind': 'generated',
+            'type': plan_item['type'],
+            'type_tag': plan_item['type_tag'],
+            'title': plan_item['title'],
+            'keywords': plan_item['keywords'],
+            'prompt': plan_item['prompt'],
+            'module': plan_item.get('module', ''),
+            'story_role': plan_item.get('story_role', ''),
+            'decision_task': plan_item.get('decision_task', ''),
+            'info_density': plan_item.get('info_density', ''),
+            'layout_style': plan_item.get('layout_style', ''),
+            'font_style': plan_item.get('font_style', ''),
+            'color_scheme': plan_item.get('color_scheme', ''),
+            'decor_elements': plan_item.get('decor_elements', []),
+            'image_url': image_url,
+            'image_path': relative_path,
+            'download_name': download_name,
+        }
 
-    return images
+    pending_items = list(plan_items)
+    for attempt_index in range(partial_retry_attempts + 1):
+        if not pending_items:
+            break
+        batch_workers = min(len(pending_items), workers)
+        batch_results = []
+        batch_failures = []
+        with concurrent.futures.ThreadPoolExecutor(max_workers=batch_workers) as executor:
+            future_map = {executor.submit(run_one, item): item for item in pending_items}
+            for future in concurrent.futures.as_completed(future_map):
+                plan_item = future_map[future]
+                try:
+                    batch_results.append(future.result())
+                except Exception as exc:
+                    batch_failures.append((plan_item, f'{plan_item.get("type") or plan_item.get("title") or plan_item.get("sort")}：{exc}'))
+        results.extend(batch_results)
+        pending_items = [item for item, _msg in batch_failures]
+        failures = [_msg for _item, _msg in batch_failures]
+        if pending_items and attempt_index < partial_retry_attempts:
+            app.logger.warning(
+                'A+ parallel partial generation missing %s/%s, retrying in %.2fs (%s/%s): %s',
+                len(pending_items), len(plan_items), retry_delay_seconds * (attempt_index + 1),
+                attempt_index + 1, partial_retry_attempts,
+                '; '.join(failures[:3]),
+            )
+            time.sleep(retry_delay_seconds * (attempt_index + 1))
+
+    if failures:
+        raise ValueError(f'A+ 部分图片生成失败：{"；".join(failures[:3])}')
+    return sorted(results, key=lambda item: item.get('sort') or 0)
+
+
+def _get_parallel_config(app_mode: str, plan_item_count: int):
+    if app_mode == 'mode1':
+        return (
+            min(plan_item_count, get_mode1_parallel_workers()),
+            get_mode1_partial_retry_attempts(),
+            get_mode1_retry_delay_seconds(),
+        )
+    if app_mode == 'mode2':
+        return (
+            min(plan_item_count, get_mode2_parallel_workers()),
+            get_mode2_partial_retry_attempts(),
+            get_mode2_retry_delay_seconds(),
+        )
+    if app_mode == 'mode3':
+        return (
+            min(plan_item_count, get_mode3_parallel_workers()),
+            get_mode3_partial_retry_attempts(),
+            get_mode3_retry_delay_seconds(),
+        )
+    return (min(plan_item_count, 3), 0, 1.5)
 
 
 @app.before_request
@@ -6883,6 +7383,90 @@ def generate_fashion_model():
         return jsonify({'success': False, 'error': f'服务端异常：{exc}'}), 500
 
 
+@app.post('/api/generate-mode1-image-edit')
+def generate_mode1_image_edit():
+    try:
+        if get_app_mode() != 'mode1':
+            return jsonify({'success': False, 'error': '当前模式未开启 mode1'}), 404
+
+        payload = request.get_json(silent=True) if request.is_json else {}
+        if not isinstance(payload, dict):
+            payload = {}
+
+        prompt = get_request_value(payload, request.form, 'prompt', '')
+        image_url = get_request_value(payload, request.form, 'image_url', '')
+        uploaded_payloads = get_image_payloads_from_request('images')
+
+        if not prompt:
+            return jsonify({'success': False, 'error': 'prompt 不能为空'}), 400
+        if uploaded_payloads and image_url:
+            return jsonify({'success': False, 'error': '上传图片与 image_url 二选一'}), 400
+        if uploaded_payloads:
+            image_payloads = uploaded_payloads
+        elif image_url:
+            image_payloads = [build_remote_image_payload(image_url)]
+        else:
+            return jsonify({'success': False, 'error': '请上传 1 张或多张参考图片，或提供 image_url'}), 400
+
+        task_id = uuid.uuid4().hex
+        image_size_ratio = request.form.get('image_size_ratio', '1:1')
+        product_json = extract_product_json_from_image_payloads(prompt, image_payloads)
+        enriched_prompt = build_enriched_image_prompt(prompt, image_size_ratio, '中文', '中国', product_json, 'mode1-image-edit')
+        generated_item, model = call_mode1_image_edit(get_mode1_client(), enriched_prompt, image_payloads, image_size_ratio)
+        return jsonify(build_mode2_success_response(task_id, 'mode1-image-edit', enriched_prompt, model, generated_item))
+    except RequestEntityTooLarge as exc:
+        return handle_request_entity_too_large(exc)
+    except ValueError as exc:
+        return jsonify({'success': False, 'error': str(exc)}), 400
+    except RuntimeError as exc:
+        payload, status_code = parse_runtime_error(exc)
+        return jsonify(payload), status_code
+    except (APIError, APIStatusError) as exc:
+        payload, status_code = parse_ark_exception(exc)
+        return jsonify(payload), status_code
+    except requests.Timeout:
+        return jsonify({'success': False, 'error': '请求超时，请稍后重试'}), 504
+    except requests.RequestException as exc:
+        return jsonify({'success': False, 'error': f'请求失败：{exc}'}), 502
+    except Exception as exc:
+        return jsonify({'success': False, 'error': f'服务端异常：{exc}'}), 500
+
+
+@app.post('/api/generate-mode1-text2image')
+def generate_mode1_text2image():
+    try:
+        if get_app_mode() != 'mode1':
+            return jsonify({'success': False, 'error': '当前模式未开启 mode1'}), 404
+
+        payload = request.get_json(silent=True) if request.is_json else {}
+        if not isinstance(payload, dict):
+            payload = {}
+
+        prompt = get_request_value(payload, request.form, 'prompt', '')
+        if not prompt:
+            return jsonify({'success': False, 'error': 'prompt 不能为空'}), 400
+
+        task_id = uuid.uuid4().hex
+        generated_item, model = call_mode1_text2image(get_mode1_client(), prompt)
+        return jsonify(build_mode2_success_response(task_id, 'mode1-text2image', prompt, model, generated_item))
+    except RequestEntityTooLarge as exc:
+        return handle_request_entity_too_large(exc)
+    except ValueError as exc:
+        return jsonify({'success': False, 'error': str(exc)}), 400
+    except RuntimeError as exc:
+        payload, status_code = parse_runtime_error(exc)
+        return jsonify(payload), status_code
+    except (APIError, APIStatusError) as exc:
+        payload, status_code = parse_ark_exception(exc)
+        return jsonify(payload), status_code
+    except requests.Timeout:
+        return jsonify({'success': False, 'error': '请求超时，请稍后重试'}), 504
+    except requests.RequestException as exc:
+        return jsonify({'success': False, 'error': f'请求失败：{exc}'}), 502
+    except Exception as exc:
+        return jsonify({'success': False, 'error': f'服务端异常：{exc}'}), 500
+
+
 @app.post('/api/generate-mode2-image-edit')
 def generate_mode2_image_edit():
     try:
@@ -7095,6 +7679,10 @@ def build_generation_result_from_payload(form_payload: dict, file_payloads: dict
         fashion_text_type = FASHION_DEFAULT_TEXT_TYPE
         fashion_selected_style = FASHION_DEFAULT_SELECTED_STYLE
         selected_model_payloads = list(payloads.get('fashion_selected_model_image') or [])
+        if not selected_model_payloads:
+            model_image_url = str(form.get('fashion_selected_model_image_url') or '').strip()
+            if model_image_url:
+                selected_model_payloads = [_fetch_url_to_image_payload(model_image_url)]
         if fashion_action == 'scene_plan':
             selected_model = parse_fashion_selected_model_payload_from_data(form, selected_model_payloads)
             planning_payloads = image_payloads + [selected_model['payload']]
@@ -7176,9 +7764,8 @@ def build_generation_result_from_payload(form_payload: dict, file_payloads: dict
             'generation_payload_order': ['images'] * len(image_payloads) + ['fashion_selected_model_image'],
         }
         max_verify_attempts = max(1, get_optional_int_env('FASHION_OUTPUT_MAX_VERIFY_ATTEMPTS', FASHION_OUTPUT_MAX_VERIFY_ATTEMPTS))
-        images = []
-        failed_prompt_entries = []
-        for index, prompt_entry in enumerate(prompt_entries, start=1):
+
+        def _generate_one_fashion_look(index: int, prompt_entry: dict):
             app.logger.warning(
                 'Fashion image generation start: index=%s total=%s title=%s shot_size=%s view_angle=%s',
                 index,
@@ -7239,40 +7826,58 @@ def build_generation_result_from_payload(form_payload: dict, file_payloads: dict
                 if verification.get('passed'):
                     break
             if not generated_items or image_bytes is None:
-                failed_prompt_entries.append(
-                    {
-                        'index': index,
-                        'title': prompt_entry['pose'].get('title') or f'服饰穿搭图 {index}',
-                        'reason': '生成结果为空',
-                    }
-                )
-                continue
+                raise ValueError('生成结果为空')
             if not verification or not verification.get('passed'):
-                failed_prompt_entries.append(
-                    {
-                        'index': index,
-                        'title': prompt_entry['pose'].get('title') or f'服饰穿搭图 {index}',
-                        'reason': (verification or {}).get('reason', '质检未通过'),
-                        'failed_checks': (verification or {}).get('failed_checks', []),
-                    }
-                )
-                continue
+                raise RuntimeError((verification or {}).get('reason', '质检未通过'))
             download_name, relative_path, image_url = save_generated_image(task_id, index, 'fashion-look', image_bytes, mime_type)
-            images.append(
-                {
-                    'sort': index,
-                    'kind': 'generated',
-                    'type': '服饰穿搭图',
-                    'type_tag': 'Look',
-                    'title': prompt_entry['pose'].get('title') or f'服饰穿搭图 {index}',
-                    'keywords': [prompt_entry.get('shot_size', ''), prompt_entry.get('view_angle', '')],
-                    'prompt': prompt_entry['prompt'],
-                    'image_url': image_url,
-                    'image_path': relative_path,
-                    'download_name': download_name,
-                    'verification': verification,
-                }
-            )
+            return {
+                'sort': index,
+                'kind': 'generated',
+                'type': '服饰穿搭图',
+                'type_tag': 'Look',
+                'title': prompt_entry['pose'].get('title') or f'服饰穿搭图 {index}',
+                'keywords': [prompt_entry.get('shot_size', ''), prompt_entry.get('view_angle', '')],
+                'prompt': prompt_entry['prompt'],
+                'image_url': image_url,
+                'image_path': relative_path,
+                'download_name': download_name,
+                'verification': verification,
+            }
+
+        images = []
+        failed_prompt_entries = []
+        workers, partial_retry_attempts, retry_delay_seconds = _get_parallel_config(get_app_mode(), len(prompt_entries))
+
+        pending_entries = list(enumerate(prompt_entries, start=1))
+        for attempt_index in range(partial_retry_attempts + 1):
+            if not pending_entries:
+                break
+            batch_workers = min(len(pending_entries), workers)
+            batch_failures = []
+            with concurrent.futures.ThreadPoolExecutor(max_workers=batch_workers) as executor:
+                future_map = {executor.submit(_generate_one_fashion_look, idx, entry): (idx, entry) for idx, entry in pending_entries}
+                for future in concurrent.futures.as_completed(future_map):
+                    idx, entry = future_map[future]
+                    try:
+                        images.append(future.result())
+                    except Exception as exc:
+                        batch_failures.append((idx, entry, str(exc)))
+            for idx, entry, msg in batch_failures:
+                failed_prompt_entries.append({
+                    'index': idx,
+                    'title': entry['pose'].get('title') or f'服饰穿搭图 {idx}',
+                    'reason': msg,
+                })
+            pending_entries = [(idx, entry) for idx, entry, _msg in batch_failures]
+            if pending_entries and attempt_index < partial_retry_attempts:
+                failures_brief = [msg for _idx, _entry, msg in batch_failures[:3]]
+                app.logger.warning(
+                    'Fashion parallel partial generation missing %s/%s, retrying in %.2fs (%s/%s): %s',
+                    len(pending_entries), len(prompt_entries), retry_delay_seconds * (attempt_index + 1),
+                    attempt_index + 1, partial_retry_attempts,
+                    '; '.join(failures_brief),
+                )
+                time.sleep(retry_delay_seconds * (attempt_index + 1))
 
         if not images:
             failure_titles = '、'.join(item['title'] for item in failed_prompt_entries[:3])

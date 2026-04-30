@@ -76,7 +76,7 @@ http://127.0.0.1:5078
 
 当前会同时推送同一个镜像的两个标签：
 
-- `8.0`
+- `9.0`
 - `latest`
 
 工作流文件：
@@ -114,6 +114,12 @@ ARK_IMAGE_QUALITY=
 ARK_IMAGE_WATERMARK=false
 ARK_SEQUENTIAL_IMAGE_GENERATION=auto
 ARK_SEQUENTIAL_MAX_IMAGES=1
+MODE1_RETRY_ATTEMPTS=2
+MODE1_RETRY_DELAY_SECONDS=1.5
+MODE1_PARALLEL_WORKERS=3
+MODE1_PARTIAL_RETRY_ATTEMPTS=2
+MODE1_TIMEOUT_SECONDS=180
+MODE1_SEQUENTIAL_GENERATION=auto
 
 # Mode 2 image edit / text-to-image
 MODE2_OPENAI_API_KEY=你的图片编辑 Key
@@ -124,6 +130,23 @@ MODE2_DEFAULT_RATIO=1:1
 MODE2_DEFAULT_RESOLUTION=2048x2048
 MODE2_DEFAULT_SAMPLE_STRENGTH=0.65
 MODE2_ALLOWED_IMAGE_HOSTS=
+MODE2_RETRY_ATTEMPTS=2
+MODE2_RETRY_DELAY_SECONDS=1.5
+MODE2_PARALLEL_WORKERS=3
+MODE2_PARTIAL_RETRY_ATTEMPTS=2
+MODE2_TIMEOUT_SECONDS=180
+MODE2_SEQUENTIAL_GENERATION=auto
+
+# Mode 3 image edit / text-to-image
+MODE3_OPENAI_API_KEY=你的图生图 Key
+MODE3_OPENAI_BASE_URL=https://api.example.com/v1
+MODE3_IMAGE_MODEL=gpt-image-2
+MODE3_IMAGE_EDIT_SIZE=2048x2048
+MODE3_RETRY_ATTEMPTS=2
+MODE3_RETRY_DELAY_SECONDS=1.5
+MODE3_PARALLEL_WORKERS=9
+MODE3_PARTIAL_RETRY_ATTEMPTS=2
+MODE3_SEQUENTIAL_GENERATION=off
 
 # Supabase
 SUPABASE_URL=https://你的项目.supabase.opentrust.net
@@ -209,6 +232,30 @@ SUBSCRIPTION_PRODUCT_DAYS_JSON={"plan_2":30,"plan_3":90}
 | `MODE3_PARALLEL_WORKERS` | 否 | 套图并发线程数，默认 `9`，最小 `1`。mode3 套图按每张图独立 prompt 并发，总耗时接近单张 |
 | `MODE3_PARTIAL_RETRY_ATTEMPTS` | 否 | 套图部分失败后的补图重试次数，默认 `2`，最小 `0` |
 | `MODE3_SUITE_BATCH_SIZE` | 否 | 套图批次大小，仅非 mode3 模式生效，mode3 已改为并发 |
+
+mode1 和 mode2 同样支持与 mode3 完全一致的并行生成与三层断流重试，各自通过对应的环境变量独立控制：
+
+### Mode1 并行配置
+
+| 配置项 | 默认值 | 说明 |
+| --- | --- | --- |
+| `MODE1_RETRY_ATTEMPTS` | `2` | 单张图重试次数 |
+| `MODE1_RETRY_DELAY_SECONDS` | `1.5` | 重试间隔秒数 |
+| `MODE1_PARALLEL_WORKERS` | `3` | 并发线程数 |
+| `MODE1_PARTIAL_RETRY_ATTEMPTS` | `2` | 部分失败后补图轮次 |
+| `MODE1_TIMEOUT_SECONDS` | `180` | 单次请求超时秒数 |
+| `MODE1_SEQUENTIAL_GENERATION` | `auto` | 串行/并行策略 |
+
+### Mode2 并行配置
+
+| 配置项 | 默认值 | 说明 |
+| --- | --- | --- |
+| `MODE2_RETRY_ATTEMPTS` | `2` | 单张图重试次数 |
+| `MODE2_RETRY_DELAY_SECONDS` | `1.5` | 重试间隔秒数 |
+| `MODE2_PARALLEL_WORKERS` | `3` | 并发线程数 |
+| `MODE2_PARTIAL_RETRY_ATTEMPTS` | `2` | 部分失败后补图轮次 |
+| `MODE2_TIMEOUT_SECONDS` | `180` | 单次请求超时秒数 |
+| `MODE2_SEQUENTIAL_GENERATION` | `auto` | 串行/并行策略 |
 
 ### Supabase
 
@@ -554,6 +601,15 @@ SUPABASE_ANON_KEY=
 并确认页面是通过 Flask 返回的，不是直接用浏览器打开本地 HTML 文件。
 
 ## 近期更新
+
+### 2026-05-01 · v9.0
+
+- mode1/mode2 接入并行生成与三层断流重试，与 mode3 完全对称
+- Fashion 穿搭、A+ 模块改为并发生成
+- mode2 文生图改为白底 PNG → 图生图
+- 修复 Fashion 场景规划跨域 CORS 无法获取模特图片
+- 新增 `POST /api/generate-mode1-image-edit`、`/api/generate-mode1-text2image`
+- Docker 镜像版本 `9.0` + `latest`
 
 ### 2026-04-30
 

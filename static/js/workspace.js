@@ -1047,10 +1047,6 @@ document.addEventListener('DOMContentLoaded', () => {
       if (!selectedFashionModel) {
         throw new Error('当前已选模特不存在，请重新选择后再继续');
       }
-      const selectedFashionModelFile = await resolveFashionSelectedModelFile(selectedFashionModel.model);
-      if (!selectedFashionModelFile) {
-        throw new Error(missingImageMessage);
-      }
       const selectedModel = selectedFashionModel.model || {};
       formData.append('fashion_selected_model_source', selectedFashionModel.source);
       formData.append('fashion_selected_model_id', selectedFashionModel.id);
@@ -1062,7 +1058,16 @@ document.addEventListener('DOMContentLoaded', () => {
       formData.append('fashion_selected_model_appearance_details', selectedModel.appearanceDetails || '');
       formData.append('fashion_selected_model_summary', selectedModel.summary || '');
       formData.append('fashion_selected_model_detail_text', selectedModel.detailText || '');
-      formData.append('fashion_selected_model_image', selectedFashionModelFile);
+      const modelImageUrl = (selectedModel.imageUrl || selectedModel.previewUrl || '').trim();
+      if (modelImageUrl) {
+        formData.append('fashion_selected_model_image_url', modelImageUrl);
+      }
+      const selectedFashionModelFile = await resolveFashionSelectedModelFile(selectedFashionModel.model);
+      if (selectedFashionModelFile) {
+        formData.append('fashion_selected_model_image', selectedFashionModelFile);
+      } else if (!modelImageUrl) {
+        throw new Error(missingImageMessage);
+      }
       return selectedFashionModel;
     };
 
