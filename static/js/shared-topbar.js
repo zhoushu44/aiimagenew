@@ -51,35 +51,6 @@
       metrics: ['Web / H5 / 详情页', '专属权益', '稳定协作'],
     },
   ];
-  const VIP_PLAN_OPTIONS = [
-    {
-      key: 'month',
-      title: '连续包月',
-      price: '30',
-      origin: '原价 ¥48',
-      unit: '¥1/天',
-      badge: '',
-      trial: '',
-    },
-    {
-      key: 'year',
-      title: '连续包年',
-      price: '1.1',
-      origin: '原价 ¥358',
-      unit: '¥0.6/天',
-      badge: '超低价试用',
-      trial: '试用 7 天',
-    },
-    {
-      key: 'quarter',
-      title: '连续包季',
-      price: '68',
-      origin: '原价 ¥128',
-      unit: '¥0.76/天',
-      badge: '',
-      trial: '',
-    },
-  ];
 
   const runtimeConfig = window.AI_IMAGE_CONFIG || {};
   const SUPABASE_URL = String(runtimeConfig.supabaseUrl || '').trim();
@@ -91,9 +62,10 @@
     loginOpen: false,
     vipPreviewOpen: false,
     vipPreviewIndex: 0,
-    vipSelectedPlan: 'plan_2',
+    vipSelectedPlan: '',
     vipPlans: [],
     vipPlansLoaded: false,
+    vipPlanConfig: null,
     vipPlansPromise: null,
     vipPayBusy: false,
     vipCheckoutPending: false,
@@ -132,7 +104,7 @@
   };
 
   function getVipPlanList() {
-    return Array.isArray(accountState.vipPlans) && accountState.vipPlans.length ? accountState.vipPlans : VIP_PLAN_OPTIONS;
+    return Array.isArray(accountState.vipPlans) ? accountState.vipPlans : [];
   }
 
   function normalizeVipPlanValue(value) {
@@ -150,6 +122,8 @@
         return null;
       }
       const originalPrice = normalizeVipPlanValue(config[`original_price_${index}`]);
+      const payType = normalizeVipPlanValue(config[`pay_type_${index}`]).toLowerCase();
+      const validityDays = Number(config[`validity_days_${index}`] || config[`duration_days_${index}`] || config[`subscription_days_${index}`] || 0);
       return {
         key: `plan_${index}`,
         title,
@@ -159,8 +133,23 @@
         points: Number(config[`points_${index}`] || 0),
         badge: normalizeVipPlanValue(config[`badge_${index}`]),
         trial: normalizeVipPlanValue(config[`trial_text_${index}`]),
+        payType: payType === 'one_time' || payType === 'subscribe'
+          ? payType
+          : (validityDays > 0 ? 'subscribe' : 'one_time'),
       };
     }).filter(Boolean);
+  }
+
+  function resolveDefaultVipPlanKey(config, plans) {
+    const normalizedPlans = Array.isArray(plans) ? plans : [];
+    const candidateFields = ['default_plan', 'default_plan_key', 'default_product_id', 'selected_plan', 'recommended_plan'];
+    for (const fieldName of candidateFields) {
+      const candidate = normalizeVipPlanValue(config?.[fieldName]).toLowerCase();
+      if (candidate && normalizedPlans.some((item) => item.key === candidate)) {
+        return candidate;
+      }
+    }
+    return normalizedPlans[0]?.key || '';
   }
 
   async function loadVipPlanConfig(force = false) {
@@ -182,14 +171,22 @@
           throw error;
         }
         const plans = buildVipPlansFromConfig(data);
-        accountState.vipPlans = plans.length ? plans : VIP_PLAN_OPTIONS;
+        if (!plans.length) {
+          throw new Error('vip_plan_config 未配置有效套餐');
+        }
+        accountState.vipPlanConfig = data;
+        accountState.vipPlans = plans;
+        accountState.vipPlansLoaded = true;
       } catch (error) {
-        accountState.vipPlans = VIP_PLAN_OPTIONS;
+        accountState.vipPlanConfig = null;
+        accountState.vipPlans = [];
+        accountState.vipPlansLoaded = false;
+        throw error;
       }
-      accountState.vipPlansLoaded = true;
       const currentPlans = getVipPlanList();
+      const defaultPlanKey = resolveDefaultVipPlanKey(accountState.vipPlanConfig, currentPlans);
       if (!currentPlans.some((item) => item.key === accountState.vipSelectedPlan)) {
-        accountState.vipSelectedPlan = currentPlans[1]?.key || currentPlans[0]?.key || 'plan_1';
+        accountState.vipSelectedPlan = defaultPlanKey;
       }
       if (accountState.vipModal) {
         renderVipPlanCards();
@@ -262,6 +259,10 @@
       return;
     }
     const plans = getVipPlanList();
+    if (!plans.length) {
+      pricingEl.innerHTML = '<div class="shared-vip-preview-modal__plan-empty">套餐加载失败，请稍后重试</div>';
+      return;
+    }
     pricingEl.innerHTML = plans.map((plan) => getVipPlanArticleMarkup(plan, plan.key === accountState.vipSelectedPlan)).join('');
     bindVipPlanEvents(modal);
   }
@@ -2219,7 +2220,7 @@
           <div class="shared-vip-preview-modal__detail-card">
             <div class="shared-vip-preview-modal__paybox">
               <div class="shared-vip-preview-modal__payinfo">
-                <div class="shared-vip-preview-modal__paylabel">支付：<span class="shared-vip-preview-modal__paycurrency">¥</span><strong>1.1</strong></div>
+                <div class="shared-vip-preview-modal__paylabel">支付：<span class="shared-vip-preview-modal__paycurrency">¥</span><strong>--</strong></div>
                 <div class="shared-vip-preview-modal__paymethod">
                   <span class="shared-vip-preview-modal__paymethod-icon"></span>
                   <span>支付宝扫码开通</span>
@@ -2349,8 +2350,8 @@
   }
 
   function getVipPlanPayType(plan) {
-    const normalizedKey = String(plan?.key || '').trim().toLowerCase();
-    return normalizedKey === 'plan_1' ? 'one_time' : 'subscribe';
+    const normalizedPayType = String(plan?.payType || '').trim().toLowerCase();
+    return normalizedPayType === 'subscribe' ? 'subscribe' : 'one_time';
   }
 
   function setVipCheckoutStatus(message, type = '') {
@@ -2374,8 +2375,9 @@
     }
     const plan = getSelectedVipPlan();
     const payType = getVipPlanPayType(plan);
-    const idleText = payType === 'subscribe' ? '立即订阅' : '立即购买';
-    button.disabled = Boolean(accountState.vipPayBusy);
+    const hasPlan = Boolean(plan);
+    const idleText = !hasPlan ? '暂无可购套餐' : (payType === 'subscribe' ? '立即订阅' : '立即购买');
+    button.disabled = Boolean(accountState.vipPayBusy) || !hasPlan;
     button.classList.toggle('is-loading', Boolean(accountState.vipPayBusy));
     button.textContent = accountState.vipPayBusy ? '跳转支付中...' : idleText;
     const statusEl = modal.querySelector('[data-vip-preview-status]');
@@ -2506,7 +2508,12 @@
       openLoginModal(trigger);
       return;
     }
-    await loadVipPlanConfig();
+    try {
+      await loadVipPlanConfig();
+    } catch (error) {
+      accountState.vipCheckoutMessage = '套餐加载失败，请稍后重试';
+      return;
+    }
     const modal = ensureVipPreviewModal();
     if (!modal) {
       return;

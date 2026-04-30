@@ -125,16 +125,8 @@ ZPAY_GATEWAY = (os.getenv('ZPAY_GATEWAY') or 'https://zpayz.cn/submit.php').stri
 ZPAY_NOTIFY_URL = (os.getenv('ZPAY_NOTIFY_URL') or '').strip()
 ZPAY_RETURN_URL = (os.getenv('ZPAY_RETURN_URL') or '').strip()
 ZPAY_DEFAULT_CHANNEL = (os.getenv('ZPAY_DEFAULT_CHANNEL') or 'alipay').strip()
-ZPAY_SUBSCRIPTION_PRODUCT_DAYS = (os.getenv('SUBSCRIPTION_PRODUCT_DAYS_JSON') or '{}').strip()
 ZPAY_SUCCESS_STATUSES = {'TRADE_SUCCESS', 'TRADE_FINISHED', 'SUCCESS'}
-PAYMENT_POINTS_PACKAGE_MAP = {
-    'plan_1': 100,
-    'plan_2': 300,
-    'plan_3': 1000,
-    'month': 100,
-    'quarter': 300,
-    'year': 1000,
-}
+VIP_PLAN_CONFIG_TABLE = 'vip_plan_config'
 
 
 def build_supabase_request_url(path: str) -> str:
@@ -783,11 +775,114 @@ def parse_money_amount(value) -> Decimal:
     return amount
 
 
-def get_payment_points_amount(package_id: str) -> int:
-    normalized_package_id = str(package_id or '').strip()
-    if not normalized_package_id:
+def normalize_vip_plan_key(product_id: str | None) -> str:
+    normalized_product_id = str(product_id or '').strip().lower()
+    if not normalized_product_id:
+        return ''
+    if normalized_product_id not in {'plan_1', 'plan_2', 'plan_3'}:
+        raise ValueError(f'无效的套餐标识: {normalized_product_id}')
+    return normalized_product_id
+
+
+def _resolve_configured_plan_key(value: str) -> str:
+    normalized_value = str(value or '').strip().lower()
+    return normalized_value if normalized_value in {'plan_1', 'plan_2', 'plan_3'} else ''
+
+
+def fetch_vip_plan_config() -> dict:
+    if not SUPABASE_URL or not SUPABASE_SERVICE_ROLE_KEY:
+        raise RuntimeError('Supabase 服务配置缺失')
+    response = requests.get(
+        build_supabase_request_url(f'/rest/v1/{VIP_PLAN_CONFIG_TABLE}'),
+        headers=_build_supabase_service_headers(),
+        params={
+            'select': '*',
+            'config_key': 'eq.default',
+            'limit': '1',
+        },
+        timeout=20,
+    )
+    response.raise_for_status()
+    payload = response.json()
+    row = _extract_single_supabase_row(payload)
+    if not isinstance(row, dict) or not row:
+        raise RuntimeError('未找到 Supabase vip_plan_config 套餐配置')
+    return row
+
+
+def _get_vip_plan_config_int(config: dict, field_name: str) -> int:
+    try:
+        return max(int(config.get(field_name) or 0), 0)
+    except (TypeError, ValueError):
         return 0
-    return max(int(PAYMENT_POINTS_PACKAGE_MAP.get(normalized_package_id, 0) or 0), 0)
+
+
+def _get_vip_plan_config_str(config: dict, field_name: str) -> str:
+    return str((config or {}).get(field_name) or '').strip()
+
+
+def resolve_vip_plan_pay_type(config: dict, product_id: str) -> str:
+    normalized_product_id = normalize_vip_plan_key(product_id)
+    if not normalized_product_id:
+        return 'one_time'
+    try:
+        plan_index = int(normalized_product_id.split('_', 1)[1])
+    except (IndexError, ValueError) as exc:
+        raise ValueError(f'无效的套餐标识: {normalized_product_id}') from exc
+
+    configured_pay_type = _get_vip_plan_config_str(config, f'pay_type_{plan_index}').lower()
+    if configured_pay_type in {'one_time', 'subscribe'}:
+        return configured_pay_type
+
+    subscription_days = _get_vip_plan_config_int(config, f'validity_days_{plan_index}')
+    if subscription_days <= 0:
+        subscription_days = _get_vip_plan_config_int(config, f'duration_days_{plan_index}')
+    if subscription_days <= 0:
+        subscription_days = _get_vip_plan_config_int(config, f'subscription_days_{plan_index}')
+    return 'subscribe' if subscription_days > 0 else 'one_time'
+
+
+def resolve_default_vip_plan_key(config: dict) -> str:
+    for field_name in ('default_plan', 'default_plan_key', 'default_product_id', 'selected_plan', 'recommended_plan'):
+        normalized_value = _resolve_configured_plan_key(_get_vip_plan_config_str(config, field_name))
+        if normalized_value:
+            return normalized_value
+    return ''
+
+
+def get_vip_plan_config_snapshot(product_id: str) -> tuple[dict, str, int]:
+    normalized_product_id = normalize_vip_plan_key(product_id)
+    if not normalized_product_id:
+        raise ValueError('缺少套餐标识')
+    config = fetch_vip_plan_config()
+    plan_index = int(normalized_product_id.split('_', 1)[1])
+    return config, normalized_product_id, plan_index
+
+
+def get_vip_plan_benefits(product_id: str) -> dict:
+    config, normalized_product_id, plan_index = get_vip_plan_config_snapshot(product_id)
+    if not normalized_product_id.startswith('plan_'):
+        raise ValueError(f'无效的套餐标识: {normalized_product_id or product_id}')
+    subscription_days = _get_vip_plan_config_int(config, f'validity_days_{plan_index}')
+    if subscription_days <= 0:
+        subscription_days = _get_vip_plan_config_int(config, f'duration_days_{plan_index}')
+    if subscription_days <= 0:
+        subscription_days = _get_vip_plan_config_int(config, f'subscription_days_{plan_index}')
+    points = _get_vip_plan_config_int(config, f'points_{plan_index}')
+    pay_type = resolve_vip_plan_pay_type(config, normalized_product_id)
+    discount_price = parse_money_amount(_get_vip_plan_config_str(config, f'discount_price_{plan_index}'))
+    return {
+        'product_id': normalized_product_id,
+        'subscription_days': subscription_days,
+        'points': points,
+        'pay_type': pay_type,
+        'discount_price': discount_price,
+    }
+
+
+def get_payment_points_amount(package_id: str) -> int:
+    benefits = get_vip_plan_benefits(package_id)
+    return max(int(benefits.get('points') or 0), 0)
 
 
 def grant_payment_points_once(order_row: dict) -> dict | None:
@@ -804,7 +899,7 @@ def grant_payment_points_once(order_row: dict) -> dict | None:
             'select': 'id',
             'user_id': f'eq.{user_id}',
             'transaction_type': 'eq.purchase',
-            'metadata->>order_no': f'eq.{order_no}',
+            'metadata': f"cs.{json.dumps({'order_no': order_no}, ensure_ascii=False)}",
             'limit': '1',
         },
         timeout=20,
@@ -827,31 +922,13 @@ def grant_payment_points_once(order_row: dict) -> dict | None:
     )
 
 
-def load_subscription_days_config() -> dict[str, int]:
-    try:
-        payload = json.loads(ZPAY_SUBSCRIPTION_PRODUCT_DAYS or '{}')
-    except json.JSONDecodeError:
-        payload = {}
-    if not isinstance(payload, dict):
-        return {}
-    normalized: dict[str, int] = {}
-    for key, value in payload.items():
-        key_str = str(key or '').strip()
-        if not key_str:
-            continue
-        try:
-            normalized[key_str] = max(int(value), 0)
-        except (TypeError, ValueError):
-            continue
-    return normalized
-
-
 def get_subscription_days(product_id: str) -> int:
-    normalized_product_id = str(product_id or '').strip()
-    days = load_subscription_days_config().get(normalized_product_id, 0)
-    if days <= 0:
-        raise ValueError(f'订阅商品 {normalized_product_id} 未配置有效时长')
-    return days
+    benefits = get_vip_plan_benefits(product_id)
+    subscription_days = max(int(benefits.get('subscription_days') or 0), 0)
+    normalized_product_id = str(benefits.get('product_id') or '').strip()
+    if subscription_days <= 0:
+        raise ValueError(f'订阅商品 {normalized_product_id or product_id} 未配置有效时长')
+    return subscription_days
 
 
 def generate_payment_order_no() -> str:
@@ -1197,7 +1274,7 @@ def build_legacy_payment_patch_payload(patch_payload: dict) -> dict:
 
 def fetch_latest_active_subscription(user_id: str, product_id: str) -> dict | None:
     normalized_user_id = str(user_id or '').strip()
-    normalized_product_id = str(product_id or '').strip()
+    normalized_product_id = normalize_vip_plan_key(product_id)
     if not normalized_user_id or not normalized_product_id:
         return None
     if not SUPABASE_URL or not SUPABASE_SERVICE_ROLE_KEY:
@@ -1210,7 +1287,7 @@ def fetch_latest_active_subscription(user_id: str, product_id: str) -> dict | No
             'user_id': f'eq.{normalized_user_id}',
             'product_id': f'eq.{normalized_product_id}',
             'type': 'eq.subscription',
-            'status': 'eq.paid',
+            'status': 'in.(paid,success)',
             'order': 'subscribe_expire.desc',
             'limit': '1',
         },
@@ -1445,7 +1522,8 @@ def normalize_callback_payload() -> dict:
 
 
 def is_order_success(order_row: dict | None) -> bool:
-    return str((order_row or {}).get('status') or '').strip().lower() == 'paid'
+    normalized_status = str((order_row or {}).get('status') or '').strip().lower()
+    return normalized_status in {'paid', 'success'}
 
 
 def validate_callback_amount(order_row: dict, callback_money: str) -> None:
@@ -1459,18 +1537,20 @@ def process_success_payment(order_row: dict, callback_trade_no: str) -> dict:
     out_trade_no = get_payment_order_no(order_row)
     if not out_trade_no:
         raise ValueError('订单号缺失')
+    callback_payload = normalize_callback_payload()
+    payment_method = str((callback_payload or {}).get('type') or '').strip() or str((order_row or {}).get('payment_method') or '').strip() or None
     patch_payload = {
         'status': 'paid',
         'zpay_trade_no': str(callback_trade_no or '').strip() or None,
         'paid_at': datetime.now(timezone.utc).isoformat(),
-        'payment_method': str(((order_row or {}).get('callback_payload') or {}).get('type') or '').strip() or str((order_row or {}).get('payment_method') or '').strip() or None,
-        'callback_payload': normalize_callback_payload(),
+        'payment_method': payment_method,
+        'callback_payload': callback_payload,
     }
     updated_row = update_payment_order(out_trade_no, patch_payload)
 
     try:
         grant_payment_points_once(updated_row)
-    except requests.RequestException:
+    except (requests.RequestException, RuntimeError, ValueError):
         app.logger.exception('Failed to grant payment points after payment success: out_trade_no=%s', out_trade_no)
 
     if get_payment_pay_type(updated_row).lower() == 'subscription':
@@ -4966,34 +5046,59 @@ def normalize_chat_completion_image_response(response):
     return response
 
 
+def is_retryable_mode3_error(exc: Exception) -> bool:
+    message = str(exc or '')
+    retryable_fragments = (
+        'openai_error',
+        'bad_response_status_code',
+        'Read timed out',
+        'timed out',
+        'Connection aborted',
+        'Connection reset',
+        'temporarily unavailable',
+        'upstream',
+        '524',
+    )
+    if any(fragment.lower() in message.lower() for fragment in retryable_fragments):
+        return True
+    status_code = getattr(exc, 'status_code', None)
+    return status_code in {408, 409, 425, 429, 500, 502, 503, 504, 524}
+
+
 def call_mode3_single_image(prompt: str, image_payloads, image_size_ratio: str = '', text_type: str = '', country: str = '', product_json=None, image_type: str = '', plan_item=None, all_plan_types=None):
     generated_item, _model = call_mode3_image_edit(get_mode3_client(), prompt, image_payloads or [create_mode3_blank_canvas_payload(image_size_ratio)], image_size_ratio)
     return generated_item
+
+
+def call_mode3_single_image_with_retry(prompt: str, image_payloads, image_size_ratio: str = '', text_type: str = '', country: str = '', product_json=None, image_type: str = '', plan_item=None, all_plan_types=None):
+    retry_attempts = get_mode3_retry_attempts()
+    retry_delay_seconds = get_mode3_retry_delay_seconds()
+    last_exc = None
+    for attempt in range(retry_attempts + 1):
+        try:
+            return call_mode3_single_image(prompt, image_payloads, image_size_ratio, text_type, country, product_json, image_type, plan_item, all_plan_types)
+        except Exception as exc:
+            last_exc = exc
+            should_retry = attempt < retry_attempts and is_retryable_mode3_error(exc)
+            if not should_retry:
+                raise
+            wait_seconds = retry_delay_seconds * (attempt + 1)
+            app.logger.warning('Mode3 single image failed, retrying in %.2fs (%s/%s): %s', wait_seconds, attempt + 1, retry_attempts, exc)
+            time.sleep(wait_seconds)
+    raise last_exc
 
 
 def call_mode3_images_parallel_with_partial_retry(prompt: str, image_payloads, max_images: int, image_size_ratio: str = '', text_type: str = '', country: str = '', product_json=None, image_type: str = '', plan_item=None, all_plan_types=None):
     target_count = max(1, int(max_images or 1))
     enriched_prompt = build_enriched_image_prompt(prompt, image_size_ratio, text_type, country, product_json, image_type, plan_item, all_plan_types)
     if target_count == 1:
-        return [call_mode3_single_image(enriched_prompt, image_payloads, image_size_ratio, text_type, country, product_json, image_type, plan_item, all_plan_types)]
+        return [call_mode3_single_image_with_retry(enriched_prompt, image_payloads, image_size_ratio, text_type, country, product_json, image_type, plan_item, all_plan_types)]
 
     if should_mode3_use_sequential_generation(target_count, image_payloads):
         generated_items = []
-        retry_attempts = get_mode3_retry_attempts()
-        retry_delay_seconds = get_mode3_retry_delay_seconds()
         for index in range(target_count):
-            last_exc = None
-            for attempt in range(retry_attempts + 1):
-                try:
-                    item = call_mode3_single_image(enriched_prompt, image_payloads, image_size_ratio, text_type, country, product_json, image_type, plan_item, all_plan_types)
-                    generated_items.append(item)
-                    break
-                except Exception as exc:
-                    last_exc = exc
-                    if attempt < retry_attempts:
-                        time.sleep(retry_delay_seconds * (attempt + 1))
-            if last_exc and len(generated_items) <= index:
-                raise last_exc
+            item = call_mode3_single_image_with_retry(enriched_prompt, image_payloads, image_size_ratio, text_type, country, product_json, image_type, plan_item, all_plan_types)
+            generated_items.append(item)
         return generated_items[:target_count]
 
     workers = min(target_count, get_mode3_parallel_workers())
@@ -5003,7 +5108,7 @@ def call_mode3_images_parallel_with_partial_retry(prompt: str, image_payloads, m
     failures = []
 
     def run_one(global_index: int):
-        return call_mode3_single_image(enriched_prompt, image_payloads, image_size_ratio, text_type, country, product_json, image_type, plan_item, all_plan_types)
+        return call_mode3_single_image_with_retry(enriched_prompt, image_payloads, image_size_ratio, text_type, country, product_json, image_type, plan_item, all_plan_types)
 
     for attempt_index in range(partial_retry_attempts + 1):
         missing_count = target_count - len(generated_items)
@@ -5789,8 +5894,7 @@ def create_pay_order_api():
         payload = request.get_json(silent=True) or {}
         request_user_id = str(payload.get('user_id') or '').strip()
         product_id = str(payload.get('product_id') or '').strip()
-        pay_type = str(payload.get('pay_type') or '').strip()
-        amount = parse_money_amount(payload.get('amount'))
+        requested_amount = parse_money_amount(payload.get('amount'))
 
         if not request_user_id:
             return jsonify({'error': 'MISSING_USER_ID', 'message': '缺少 user_id'}), 400
@@ -5798,8 +5902,15 @@ def create_pay_order_api():
             return jsonify({'error': 'USER_MISMATCH', 'message': 'user_id 与当前登录用户不匹配'}), 403
         if not product_id:
             return jsonify({'error': 'MISSING_PRODUCT_ID', 'message': '缺少 product_id'}), 400
+
+        plan_benefits = get_vip_plan_benefits(product_id)
+        product_id = str(plan_benefits.get('product_id') or product_id).strip()
+        pay_type = str(plan_benefits.get('pay_type') or 'one_time').strip()
+        amount = parse_money_amount(plan_benefits.get('discount_price'))
+        if requested_amount != amount:
+            return jsonify({'error': 'AMOUNT_MISMATCH', 'message': '支付金额与套餐配置不一致'}), 400
         if pay_type not in {'one_time', 'subscribe'}:
-            return jsonify({'error': 'INVALID_PAY_TYPE', 'message': 'pay_type 只能是 one_time 或 subscribe'}), 400
+            return jsonify({'error': 'INVALID_PAY_TYPE', 'message': 'Supabase 套餐 pay_type 配置无效'}), 400
 
         out_trade_no = generate_payment_order_no()
         db_type = 'one_time'
@@ -6115,7 +6226,7 @@ def find_refundable_spend_transaction(user_id: str, request_id: str, amount: int
     params = {
         'select': '*',
         'user_id': f'eq.{normalized_user_id}',
-        'metadata->>request_id': f'eq.{normalized_request_id}',
+        'metadata': f"cs.{json.dumps({'request_id': normalized_request_id}, ensure_ascii=False)}",
         'order': 'created_at.desc',
         'limit': '1',
     }
@@ -6146,7 +6257,7 @@ def find_refund_transaction_for_request(user_id: str, request_id: str) -> dict |
             'select': '*',
             'user_id': f'eq.{normalized_user_id}',
             'transaction_type': 'eq.refund',
-            'metadata->>request_id': f'eq.{normalized_request_id}',
+            'metadata': f"cs.{json.dumps({'request_id': normalized_request_id}, ensure_ascii=False)}",
             'limit': '1',
         },
         timeout=20,
