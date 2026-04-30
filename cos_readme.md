@@ -1,436 +1,602 @@
-# COS / CDN 小白教程
+# COS / CDN 配置教程
 
-这份文档是给第一次接触腾讯云 COS 和 CDN 的人看的。
+这份文档用于说明本项目如何把生成图片上传到腾讯云 COS，并通过 CDN 使用 HTTPS 地址访问，避免图片堆在服务器本地，也避免浏览器因为 `http://` 图片资源显示不安全。
 
-你可以把它理解成一句话：
-
-- **COS**：负责存文件
-- **CDN**：负责让文件访问更快
-
-在你这个项目里，生成图片后的流程是：
+## 1. 当前项目的图片链路
 
 ```text
 用户生成图片
-  -> 后端拿到图片二进制
-  -> 上传到腾讯云 COS
-  -> 返回 CDN 图片地址
-  -> 前端直接显示 CDN 图片
-  -> 用户下载时也优先直接走 COS/CDN
+  -> Flask 后端拿到图片二进制
+  -> 后端使用 .env 里的 COS 密钥上传到腾讯云 COS
+  -> 上传成功后返回图片 URL
+  -> 如果配置了 CDN 域名，返回 https://CDN域名/文件路径
+  -> 前端直接展示这个 HTTPS 图片地址
 ```
 
----
+当前代码里 COS 的核心逻辑在：
 
-## 1. 先搞懂 COS 和 CDN 是什么
+- [cos_utils.py](file:///c:/Users/zhou/Desktop/aiimagenew/cos_utils.py)
+- [app.py](file:///c:/Users/zhou/Desktop/aiimagenew/app.py)
+
+## 2. COS 和 CDN 的分工
 
 ### COS 是什么
-COS 就是腾讯云对象存储。
 
-你可以把它理解成一个“云硬盘”，但它不是给你远程登录进去当电脑盘用的，而是专门拿来放：
+COS 是腾讯云对象存储，用来保存项目生成后的图片文件。
 
-- 图片
-- 视频
-- 压缩包
-- 静态文件
-- 其他上传文件
-
-你这个项目里，COS 主要就是拿来放生成后的图片。
-
-### CDN 是什么
-CDN 就是内容分发网络。
-
-你可以把它理解成“加速层”。
-
-如果图片直接从 COS 原始地址访问：
-- 也能打开
-- 但是速度可能一般
-- 某些地区访问慢
-
-如果前面加一层 CDN：
-- 图片加载更快
-- 用户打开页面更顺畅
-- 下载也更稳定
-
-所以现在项目是：
-
-- **COS 负责存储**
-- **CDN 负责加速访问**
-
----
-
-## 2. 你这个项目为什么要用 COS
-
-你之前的核心问题有两个：
-
-1. **服务器磁盘不够用**
-2. **前端图片加载慢**
-
-接入 COS 以后：
-
-- 图片不再优先堆在服务器本地
-- 服务器压力小很多
-- 图片访问走 CDN，会明显更快
-
-所以这套方案最适合你这种“会生成很多图片、还要给用户看和下载”的项目。
-
----
-
-## 3. 当前项目里的真实工作方式
-
-现在项目不是“只存本地”，而是：
-
-### 生成图保存流程
-
-1. 后端生成图片
-2. 优先上传到 COS
-3. 上传成功后，返回图片 URL
-4. 这个 URL 优先使用 CDN 域名
-5. 前端直接显示这个 URL
-
-简单理解就是：
+你可以理解为：
 
 ```text
-生成成功 = 上传到 COS = 返回 CDN 地址 = 前端直接展示
+COS = 云端文件仓库
 ```
 
-### 如果 COS 暂时不可用
-代码里还保留了兜底逻辑：
+### CDN 是什么
 
-- 如果 COS 上传失败
-- 会回退到本地保存
+CDN 是内容分发网络，用来加速图片访问，并且可以提供 HTTPS 域名访问。
 
-所以它不是“一挂全挂”的方案，而是带容错的。
+你可以理解为：
 
----
+```text
+CDN = 加速访问层
+```
 
-## 4. 你现在真正要填的 .env 配置
+### 项目推荐架构
 
-当前项目已经改成从 `.env` 读取 COS 配置。
+```text
+Flask 后端上传图片到 COS
+浏览器访问 CDN HTTPS 图片地址
+CDN 回源到 COS 取文件
+```
 
-你只需要看这几项：
+也就是：
+
+```text
+用户浏览器 -> https://aiimg.86969678.xyz/xxx.jpg -> CDN -> COS
+```
+
+## 3. 项目需要的 .env 配置
+
+项目读取下面 5 个环境变量：
 
 ```env
-# Tencent COS / CDN
-COS_SECRET_ID=你的COS密钥ID
-COS_SECRET_KEY=你的COS密钥Key
+COS_SECRET_ID=你的腾讯云SecretId
+COS_SECRET_KEY=你的腾讯云SecretKey
 COS_REGION=ap-guangzhou
-COS_BUCKET=你的桶名
-COS_CDN_DOMAIN=你的CDN域名
+COS_BUCKET=你的COS桶名
+COS_CDN_DOMAIN=你的CDN加速域名
 ```
 
-下面逐个解释。
-
-### COS_SECRET_ID
-腾讯云 API 密钥里的 SecretId。
-
-作用：
-- 让后端有权限把图片上传到 COS
-
-### COS_SECRET_KEY
-腾讯云 API 密钥里的 SecretKey。
-
-作用：
-- 和 SecretId 配套使用
-- 相当于更敏感的密码
-
-注意：
-- 只能放后端 `.env`
-- 绝对不要写进前端 JS
-- 绝对不要提交到公开仓库
-
-### COS_REGION
-桶所在地域。
-
-例如你现在用的是：
+你当前这套配置格式类似：
 
 ```env
+COS_SECRET_ID=你的腾讯云SecretId
+COS_SECRET_KEY=你的腾讯云SecretKey
 COS_REGION=ap-guangzhou
-```
-
-如果地域填错，常见现象就是：
-- 上传失败
-- 返回签名错误
-- 或者访问地址不对
-
-### COS_BUCKET
-COS 桶名。
-
-例如：
-
-```env
 COS_BUCKET=aiimg-1318449123
-```
-
-它不是你随便写的名字，必须和腾讯云后台创建出来的桶名完全一致。
-
-### COS_CDN_DOMAIN
-你绑定的 CDN 加速域名。
-
-例如：
-
-```env
 COS_CDN_DOMAIN=aiimg.86969678.xyz
 ```
 
-有这个值时，项目会优先返回：
+注意：
+
+- `COS_SECRET_ID` 和 `COS_SECRET_KEY` 是敏感密钥，只能放在后端 `.env`。
+- 不要把密钥写到前端 JS。
+- 不要把真实密钥提交到公开仓库。
+- `.env` 修改后需要重启 Flask 或容器，运行中的 Python 进程不会自动重新读取旧文件。
+
+## 4. 当前代码如何读取 .env
+
+COS 配置读取位置是 [cos_utils.py](file:///c:/Users/zhou/Desktop/aiimagenew/cos_utils.py)。
+
+当前逻辑是：
 
 ```text
-https://aiimg.86969678.xyz/xxxxxx
+1. cos_utils.py 启动时先加载项目根目录 .env
+2. 从 .env 读取 COS_SECRET_ID
+3. 从 .env 读取 COS_SECRET_KEY
+4. 从 .env 读取 COS_REGION
+5. 从 .env 读取 COS_BUCKET
+6. 从 .env 读取 COS_CDN_DOMAIN
+7. 初始化腾讯云 COS 客户端
+8. 上传成功后拼接 HTTPS 图片 URL
 ```
 
-没有这个值时，会回退到 COS 原始域名。
-
----
-
-## 5. 项目代码现在是怎么读这些配置的
-
-当前读取逻辑在这里：
-
-- [cos_utils.py](file:///c:/Users/zs/Desktop/aiimagenew/cos_utils.py)
-
-核心逻辑是：
-
-1. 从 `.env` 读 `COS_SECRET_ID`
-2. 从 `.env` 读 `COS_SECRET_KEY`
-3. 从 `.env` 读 `COS_REGION`
-4. 从 `.env` 读 `COS_BUCKET`
-5. 从 `.env` 读 `COS_CDN_DOMAIN`
-6. 如果有 CDN 域名，就优先拼 CDN 地址
-7. 如果没有，就用 COS 默认访问域名
-
-也就是说，你以后改 COS/CDN，基本只需要改 `.env`。
-
----
-
-## 6. COS 和 CDN 在你项目里的作用分工
-
-### COS 负责这几件事
-
-- 存生成后的图片
-- 存参考图
-- 提供真实文件来源
-
-### CDN 负责这几件事
-
-- 加速图片访问
-- 加速前端展示
-- 加速图片下载
-
-你可以这样记：
-
-- **COS = 仓库**
-- **CDN = 快递网络**
-
-仓库负责把货放好，快递网络负责更快送到用户手里。
-
----
-
-## 7. 腾讯云后台要怎么配
-
-这里按小白能照着点的方式写。
-
-### 第一步：创建 COS 桶
-
-去腾讯云后台，找到对象存储 COS。
-
-创建桶时注意：
-
-- 地域选对，比如 `广州`
-- 桶名记下来
-- 访问权限建议按你当前方案配置为适合公开读图的方式
-
-你当前项目实际方案更接近：
-
-- 后端负责上传
-- 用户前端需要直接看图和下载
-- 所以对象访问需要能被前端打开
-
-在你现在的实现里，上传对象时会设置：
+关键点：
 
 ```text
-ACL = public-read
+COS_CDN_DOMAIN 有值：返回 https://COS_CDN_DOMAIN/文件路径
+COS_CDN_DOMAIN 为空：返回 https://COS_BUCKET.cos.COS_REGION.myqcloud.com/文件路径
 ```
 
-这意味着：
-- 文件上传后是可以公开读取的
-- 前端才能直接显示图片
-- 用户也才能直接下载
-
-### 第二步：创建 API 密钥
-
-去腾讯云访问管理，创建一组 API 密钥。
-
-你会拿到：
-
-- SecretId
-- SecretKey
-
-把它们写进 `.env`。
-
-### 第三步：绑定 CDN 域名
-
-去腾讯云 CDN 后台：
-
-1. 添加加速域名
-2. 源站指向你的 COS 桶
-3. 等待部署完成
-4. 确认域名能正常访问图片
-
-成功后，把这个域名填到：
-
-```env
-COS_CDN_DOMAIN=你的域名
-```
-
----
-
-## 8. 前端为什么能直接显示图片
-
-因为现在前端拿到的是完整图片 URL。
-
-如果是 CDN 模式，通常类似这样：
+所以只要 `COS_CDN_DOMAIN=aiimg.86969678.xyz`，返回的图片地址就是：
 
 ```text
 https://aiimg.86969678.xyz/generated/202604/taskid/01-main.jpg
 ```
 
-前端 `<img src="这个地址">` 就能直接显示。
+## 5. 腾讯云 COS 从 0 到 1 配置教程
 
-之前你项目里有个问题，是前端会把 COS 地址错误改写成本地 `/generated/...`，后来已经修过了。
+### 第一步：创建 COS 存储桶
 
-所以现在逻辑是：
-
-- 如果后端返回的是 `http://` 或 `https://` 开头
-- 前端就直接用
-- 不再瞎替换
-
----
-
-## 9. ZIP 下载为什么现在更省服务器
-
-现在项目做过优化。
-
-以前常见做法是：
+进入腾讯云控制台：
 
 ```text
-服务器先把多张图下载回来
-  -> 服务器打 ZIP
-  -> 再发给浏览器
+腾讯云控制台 -> 对象存储 COS -> 存储桶列表 -> 创建存储桶
 ```
 
-问题是：
-- 吃服务器带宽
-- 吃服务器 CPU
-- 图片越多越慢
-
-现在你的项目已经改成更轻的方式：
+建议填写：
 
 ```text
-浏览器直接请求 COS/CDN 图片
-  -> 浏览器本地打包 ZIP
-  -> 用户下载
+所属地域：广州
+地域代码：ap-guangzhou
+存储桶名称：例如 aiimg
+访问权限：按项目需要配置为可公开读图
 ```
 
-好处：
-- 更省服务器流量
-- 更省服务器磁盘
-- 用户下载大批量图片时更轻松
+创建后腾讯云会生成完整桶名，通常格式是：
 
----
+```text
+aiimg-1318449123
+```
 
-## 10. 常见问题排查
+这个完整桶名要写入 `.env`：
 
-### 问题 1：图片生成成功，但页面打不开图
-先检查：
+```env
+COS_BUCKET=aiimg-1318449123
+```
 
-1. `COS_CDN_DOMAIN` 是否填对
-2. CDN 是否已经部署完成
-3. COS 文件是否真的上传成功
-4. 对象权限是否允许读取
+### 第二步：确认地域代码
 
-常见现象：
-- 404：一般是路径不对、源站配置不对、CDN 还没生效
-- 403：一般是权限问题，文件不可读，或 CDN / COS 配置限制了访问
+COS 地域必须和桶所在地域一致。
 
-### 问题 2：后端上传失败
-先检查：
+常见地域示例：
 
-1. `COS_SECRET_ID` 对不对
-2. `COS_SECRET_KEY` 对不对
-3. `COS_REGION` 对不对
-4. `COS_BUCKET` 对不对
+```text
+广州：ap-guangzhou
+上海：ap-shanghai
+北京：ap-beijing
+南京：ap-nanjing
+成都：ap-chengdu
+中国香港：ap-hongkong
+新加坡：ap-singapore
+```
 
-这四个只要有一个错，基本就会失败。
+如果桶在广州，就写：
 
-### 问题 3：明明配了 CDN，但返回的还是 COS 原始域名
+```env
+COS_REGION=ap-guangzhou
+```
+
+地域写错时，常见报错是：
+
+```text
+签名错误
+桶不存在
+上传失败
+403 / 404
+```
+
+### 第三步：创建 API 密钥
+
+进入腾讯云控制台：
+
+```text
+右上角账号 -> 访问管理 CAM -> 访问密钥 -> API 密钥管理 -> 新建密钥
+```
+
+你会拿到：
+
+```text
+SecretId
+SecretKey
+```
+
+写入 `.env`：
+
+```env
+COS_SECRET_ID=你的SecretId
+COS_SECRET_KEY=你的SecretKey
+```
+
+建议：
+
+- 正式环境最好使用子账号密钥。
+- 子账号只授予当前 COS 桶的上传、读取、删除权限。
+- 不建议长期使用主账号全权限密钥。
+
+### 第四步：配置对象读取权限
+
+项目上传图片时会设置对象 ACL 为：
+
+```text
+public-read
+```
+
+这样前端才能通过图片 URL 直接展示图片。
+
+如果你希望更严格，也可以在腾讯云里用“私有桶 + CDN 鉴权”的方式，但那会增加签名 URL、鉴权配置和过期时间控制，当前项目默认走公开读图方案，简单稳定。
+
+## 6. CDN 从 0 到 1 配置教程
+
+### 第一步：准备 CDN 域名
+
+你需要准备一个图片域名，例如：
+
+```text
+aiimg.86969678.xyz
+```
+
+建议用子域名，不要直接用主站域名。
+
+例如：
+
+```text
+主站：www.86969678.xyz
+图片 CDN：aiimg.86969678.xyz
+```
+
+### 第二步：添加 CDN 加速域名
+
+进入腾讯云控制台：
+
+```text
+腾讯云控制台 -> 内容分发网络 CDN -> 域名管理 -> 添加域名
+```
+
+建议配置：
+
+```text
+加速域名：aiimg.86969678.xyz
+业务类型：静态加速
+源站类型：COS 源
+源站：选择你的 COS 桶 aiimg-1318449123
+回源协议：HTTPS 或协议跟随
+```
+
+如果控制台没有直接选择 COS 源，也可以使用 COS 原始域名作为源站：
+
+```text
+aiimg-1318449123.cos.ap-guangzhou.myqcloud.com
+```
+
+### 第三步：配置 DNS 解析
+
+CDN 添加成功后，腾讯云会给你一个 CNAME 地址，类似：
+
+```text
+aiimg.86969678.xyz.cdn.dnsv1.com
+```
+
+然后去你的域名 DNS 控制台添加解析：
+
+```text
+主机记录：aiimg
+记录类型：CNAME
+记录值：腾讯云 CDN 提供的 CNAME 地址
+```
+
+配置后等待 DNS 生效。
+
+### 第四步：开启 HTTPS
+
+为了避免浏览器提示不安全，CDN 域名必须开启 HTTPS。
+
+进入：
+
+```text
+腾讯云 CDN -> 域名管理 -> aiimg.86969678.xyz -> HTTPS 配置
+```
+
+推荐开启：
+
+```text
+HTTPS：开启
+证书：申请免费证书或上传已有证书
+HTTP/2：开启
+强制 HTTPS：开启
+HTTP 跳转 HTTPS：开启
+```
+
+开启后，图片应该使用：
+
+```text
+https://aiimg.86969678.xyz/文件路径
+```
+
+而不是：
+
+```text
+http://aiimg.86969678.xyz/文件路径
+```
+
+### 第五步：配置 CDN 回源和缓存
+
+推荐配置：
+
+```text
+回源 Host：COS 桶默认域名或腾讯云自动设置
+回源协议：HTTPS
+缓存规则：图片文件缓存 30 天或更长
+```
+
+常见图片后缀：
+
+```text
+jpg jpeg png webp gif bmp
+```
+
+可以设置较长缓存，因为项目生成图片路径里包含任务 ID，不容易出现同名覆盖。
+
+### 第六步：配置 CORS
+
+如果前端需要直接下载图片、浏览器本地打包 ZIP，建议在 COS 或 CDN 允许跨域。
+
+COS CORS 推荐配置：
+
+```text
+来源 Origin：*
+允许方法：GET, HEAD
+允许 Header：*
+暴露 Header：ETag, Content-Length, Content-Type
+缓存时间 MaxAgeSeconds：600
+```
+
+如果你只想允许自己的站点访问，可以把 `*` 改成你的主站域名：
+
+```text
+https://你的主站域名
+```
+
+## 7. 把 CDN 域名写回项目
+
+CDN 配好以后，把域名写到 `.env`：
+
+```env
+COS_CDN_DOMAIN=aiimg.86969678.xyz
+```
+
+不要写协议头：
+
+```env
+COS_CDN_DOMAIN=https://aiimg.86969678.xyz
+```
+
+上面这种不推荐，因为代码会自动补 `https://`。
+
+正确写法是：
+
+```env
+COS_CDN_DOMAIN=aiimg.86969678.xyz
+```
+
+项目最终返回：
+
+```text
+https://aiimg.86969678.xyz/文件路径
+```
+
+## 8. 如何测试 COS 是否正常
+
+### 测试 1：检查 Python SDK 是否安装
+
+```bash
+python -c "import qcloud_cos; print('qcloud_cos ok')"
+```
+
+如果缺少依赖，执行：
+
+```bash
+python -m pip install -r requirements.txt
+```
+
+### 测试 2：检查是否从 .env 读取
+
+```bash
+python -c "import cos_utils; print(cos_utils.is_cos_enabled()); print(cos_utils.COS_URL_PREFIX); print(cos_utils.COS_BUCKET); print(cos_utils.COS_REGION)"
+```
+
+正常应该看到：
+
+```text
+True
+https://aiimg.86969678.xyz
+aiimg-1318449123
+ap-guangzhou
+```
+
+### 测试 3：上传并删除测试文件
+
+```bash
+python -c "import cos_utils; key='trae-cos-test/healthcheck.txt'; url=cos_utils.upload_to_cos(b'cos env healthcheck', key, 'text/plain'); print(url); cos_utils.delete_from_cos(key); print('deleted')"
+```
+
+正常结果：
+
+```text
+https://aiimg.86969678.xyz/trae-cos-test/healthcheck.txt
+deleted
+```
+
+这个测试会上传一个很小的文本文件，然后马上删除。
+
+## 9. 本次实测结果
+
+本地已完成一次连通性测试：
+
+```text
+COS enabled: True
+URL prefix: https://aiimg.86969678.xyz
+Bucket: aiimg-1318449123
+Region: ap-guangzhou
+Upload: success
+Delete: success
+```
+
+说明：
+
+```text
+.env 读取正常
+COS 客户端初始化正常
+上传权限正常
+删除权限正常
+CDN HTTPS URL 拼接正常
+```
+
+## 10. 前端为什么能直接显示图片
+
+前端图片处理逻辑在 [workspace.js](file:///c:/Users/zhou/Desktop/aiimagenew/static/js/workspace.js)。
+
+当前逻辑是：
+
+```text
+如果后端返回 http:// 或 https:// 开头的完整图片 URL
+前端直接使用这个 URL
+不会再强制改成本地 /generated/ 路径
+```
+
+所以后端返回：
+
+```text
+https://aiimg.86969678.xyz/generated/202604/taskid/01-main.jpg
+```
+
+前端就会直接：
+
+```html
+<img src="https://aiimg.86969678.xyz/generated/202604/taskid/01-main.jpg">
+```
+
+## 11. ZIP 下载说明
+
+项目支持批量下载图片。
+
+当前逻辑兼容两种情况：
+
+```text
+1. 图片在本地 generated-suites 目录：直接从本地打包
+2. 图片在 COS/CDN：通过 HTTPS 图片地址读取后打包
+```
+
+如果浏览器直接访问 CDN 图片并打包 ZIP，需要注意 CORS。
+
+如果出现前端下载失败，重点检查：
+
+```text
+COS 是否允许 GET
+CDN 是否开启 HTTPS
+CDN 是否允许跨域
+图片 URL 是否能在浏览器新标签页直接打开
+```
+
+## 12. 常见问题排查
+
+### 图片上传失败
+
+重点检查：
+
+```text
+COS_SECRET_ID 是否正确
+COS_SECRET_KEY 是否正确
+COS_REGION 是否和桶地域一致
+COS_BUCKET 是否是完整桶名
+cos-python-sdk-v5 是否安装
+```
+
+### 图片返回的是 COS 原始域名，不是 CDN 域名
+
 检查：
 
 ```env
 COS_CDN_DOMAIN=
 ```
 
-是不是空了。
+如果这里为空，项目会回退到 COS 原始域名。
 
-只要 `COS_CDN_DOMAIN` 有值，项目就会优先走 CDN 域名。
+填入 CDN 域名后重启 Flask：
 
-### 问题 4：本地改了 .env 但没有生效
-因为很多 Python 项目启动后会把环境变量读进内存。
-
-所以你改完 `.env` 后，通常要：
-
-- 重启 Flask
-- 或重启容器
-
-否则旧值可能还在。
-
-### 问题 5：前端能看到图，但用户下载失败
-一般重点查这几个：
-
-1. 对象是否 public-read
-2. CDN 是否允许访问
-3. 浏览器控制台有没有跨域报错
-4. COS / CDN 是否配置了 CORS
-
-如果你要浏览器直接抓图再本地打 ZIP，**CORS 很重要**。
-
----
-
-## 11. 推荐你现在的最稳配置
-
-如果你这个站是公开给用户用的，当前最稳的思路就是：
-
-- 图片生成后上传 COS
-- 对象允许公开读
-- 前面挂 CDN
-- 前端直接显示 CDN URL
-- 批量下载走浏览器本地 ZIP
-
-这也是你项目现在基本已经跑通的方案。
-
----
-
-## 12. 这个项目里和 COS 相关的主要代码位置
-
-如果以后你要找代码，大概看这几个地方：
-
-### 后端
-- [cos_utils.py](file:///c:/Users/zs/Desktop/aiimagenew/cos_utils.py)  
-  COS 初始化、上传、URL 生成都在这里
-
-- [app.py](file:///c:/Users/zs/Desktop/aiimagenew/app.py)  
-  生成图保存、参考图保存、图片访问回退逻辑在这里
-
-### 前端
-- [workspace.js](file:///c:/Users/zs/Desktop/aiimagenew/static/js/workspace.js)  
-  图片 URL 处理、ZIP 下载逻辑在这里
-
----
-
-## 13. 一句话总结
-
-如果你还是记不住，就记这一句：
-
-```text
-COS 负责存图，CDN 负责加速，前端直接用返回的图片地址显示和下载。
+```env
+COS_CDN_DOMAIN=aiimg.86969678.xyz
 ```
 
-这就是你当前项目里 COS / CDN 的核心逻辑。
+### 浏览器显示不安全
+
+原因一般是访问了 `http://`。
+
+图片域名要确保：
+
+```text
+CDN 已开启 HTTPS
+CDN 已开启 HTTP 自动跳转 HTTPS
+项目返回的是 https:// 开头图片地址
+```
+
+主站也要用 HTTPS 访问：
+
+```text
+https://你的主站域名
+```
+
+不要让用户访问：
+
+```text
+http://你的主站域名
+http://服务器IP:端口
+```
+
+### 图片 403
+
+一般是权限问题：
+
+```text
+对象不是 public-read
+桶策略禁止访问
+CDN 鉴权开启但 URL 没带签名
+Referer 防盗链配置拦截
+```
+
+### 图片 404
+
+一般是路径或源站问题：
+
+```text
+文件没有上传成功
+CDN 源站指错桶
+COS_REGION 写错
+COS_BUCKET 写错
+CDN 缓存了旧 404
+```
+
+可以先在 COS 控制台确认文件是否存在，再刷新 CDN 缓存。
+
+### 修改 .env 后不生效
+
+修改 `.env` 后需要重启：
+
+```text
+Flask 开发服务
+生产环境进程
+Docker 容器
+宝塔/1Panel 里的 Python 服务
+```
+
+## 13. 推荐上线配置清单
+
+上线前建议逐项确认：
+
+```text
+COS_BUCKET 使用完整桶名
+COS_REGION 和桶地域一致
+COS_SECRET_ID / COS_SECRET_KEY 有上传、读取、删除权限
+COS_CDN_DOMAIN 只写域名，不写 https://
+CDN 源站指向正确 COS 桶
+CDN HTTPS 已开启
+CDN HTTP 跳转 HTTPS 已开启
+COS 或 CDN CORS 已配置
+主站也使用 HTTPS 域名访问
+.env 没有提交到公开仓库
+```
+
+## 14. 一句话总结
+
+```text
+COS 负责存图，CDN 负责 HTTPS 加速访问，项目从 .env 读取配置，上传后返回 https://CDN域名/文件路径 给前端直接展示。
+```

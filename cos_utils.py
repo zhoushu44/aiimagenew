@@ -1,8 +1,12 @@
 import os
 import logging
 from datetime import datetime
+from pathlib import Path
 
+from dotenv import load_dotenv
 from qcloud_cos import CosConfig, CosS3Client
+
+load_dotenv(Path(__file__).resolve().parent / '.env')
 
 logger = logging.getLogger(__name__)
 
