@@ -9,12 +9,13 @@
 | `user_points_balances`     | 是 | 用户积分余额主表 |
 | `user_points_transactions` | 是 | 用户积分流水表，用于记录积分增减明细 |
 | `user_profiles`            | 是 | 用户扩展资料，包含管理员标识和会员到期时间 |
+| `vip_plan_config`          | 是 | VIP 会员套餐配置表，前端展示套餐和后端创建支付订单都会读取 |
 | `zpay_transactions`        | 是 | ZPay 支付订单和订阅订单记录 |
 | `generation_tasks`         | 是 | 生成任务状态表，支持页面刷新后恢复结果 |
 
 ## 已清理旧表
 
-以下 5 项旧表/旧思路当前项目代码未使用：
+以下 4 项旧表/旧思路当前项目代码未使用：
 
 | 项目 | 原用途 | 当前替代方案 | 当前状态 |
 | --- | --- | --- | --- |
@@ -22,16 +23,14 @@
 | `users` | 旧版自建用户表 | Supabase Auth | 已废弃 |
 | `verification_codes` | 旧版短信验证码表 | Supabase Auth OTP | 已废弃 |
 | `api_settings` | 旧版后台配置表 | `.env` | 已删除 |
-| `vip_plan_config` | 旧版套餐配置表 | `SUBSCRIPTION_PRODUCT_DAYS_JSON` | 已删除 |
 
-当前本地后端连接的是项目实际使用的 Supabase REST API：`https://spb-kemqk3h0a423q1q5.supabase.opentrust.net`。REST API 可以清空数据，但不能执行 `drop table` 这类 DDL。若要从 Supabase 后台完全删除表结构，请在该项目的 SQL Editor 执行：
+当前本地后端连接的是项目实际使用的 Supabase REST API：`https://spb-kemqk3h0a423q1q5.supabase.opentrust.net`。REST API 可以清空数据，但不能执行 `drop table` 这类 DDL。若要从 Supabase 后台完全删除旧表结构，请在该项目的 SQL Editor 执行：
 
 ```sql
 drop table if exists public.verification_codes cascade;
 drop table if exists public.user_points cascade;
 drop table if exists public.users cascade;
 drop table if exists public.api_settings cascade;
-drop table if exists public.vip_plan_config cascade;
 ```
 
 ## 表结构说明和建表 SQL
@@ -244,65 +243,120 @@ using (true)
 with check (true);
 ```
 
-### vip\_plan\_config（已删除，以下仅保留历史结构参考）
+### vip\_plan\_config
 
-用途：旧版会员套餐配置表。当前项目已经改为从 `.env` 的 `SUBSCRIPTION_PRODUCT_DAYS_JSON` 读取套餐时长，不再使用这张表。
+用途：VIP 会员套餐配置表。当前项目仍在使用这张表：前端账号面板读取它来展示套餐卡片，后端创建支付订单时读取它来校验套餐价格、支付类型、赠送积分和订阅天数。
 
-| 列名                 | 类型          | 含义                 |
-| ------------------ | ----------- | ------------------ |
-| `id`               | bigint      | 主键，自增 ID           |
-| `config_key`       | text        | 配置键，当前使用 `default` |
-| `plan_name_1`      | text        | 套餐 1 名称            |
-| `discount_price_1` | text        | 套餐 1 优惠价展示文本       |
-| `original_price_1` | text        | 套餐 1 原价展示文本        |
-| `price_note_1`     | text        | 套餐 1 价格说明          |
-| `points_1`         | integer     | 套餐 1 赠送积分数         |
-| `badge_1`          | text        | 套餐 1 角标文案          |
-| `trial_text_1`     | text        | 套餐 1 试用或赠送说明       |
-| `plan_name_2`      | text        | 套餐 2 名称            |
-| `discount_price_2` | text        | 套餐 2 优惠价展示文本       |
-| `original_price_2` | text        | 套餐 2 原价展示文本        |
-| `price_note_2`     | text        | 套餐 2 价格说明          |
-| `points_2`         | integer     | 套餐 2 赠送积分数         |
-| `badge_2`          | text        | 套餐 2 角标文案          |
-| `trial_text_2`     | text        | 套餐 2 试用或赠送说明       |
-| `plan_name_3`      | text        | 套餐 3 名称            |
-| `discount_price_3` | text        | 套餐 3 优惠价展示文本       |
-| `original_price_3` | text        | 套餐 3 原价展示文本        |
-| `price_note_3`     | text        | 套餐 3 价格说明          |
-| `points_3`         | integer     | 套餐 3 赠送积分数         |
-| `badge_3`          | text        | 套餐 3 角标文案          |
-| `trial_text_3`     | text        | 套餐 3 试用或赠送说明       |
-| `updated_at`       | timestamptz | 更新时间               |
+当前代码读取 `config_key = default` 的单行配置，并支持 `plan_1`、`plan_2`、`plan_3` 三个套餐。
+
+| 列名                     | 类型          | 含义                                                  |
+| ---------------------- | ----------- | --------------------------------------------------- |
+| `id`                   | bigint      | 主键，自增 ID                                           |
+| `config_key`           | text        | 配置键，当前使用 `default`                               |
+| `default_plan`         | text        | 默认选中套餐，可填 `plan_1`、`plan_2`、`plan_3`             |
+| `default_plan_key`     | text        | 默认选中套餐备用字段                                       |
+| `default_product_id`   | text        | 默认商品 ID 备用字段                                      |
+| `selected_plan`        | text        | 默认选中套餐备用字段                                       |
+| `recommended_plan`     | text        | 推荐套餐备用字段                                         |
+| `plan_name_1`          | text        | 套餐 1 名称                                            |
+| `discount_price_1`     | text        | 套餐 1 实付价格，后端会按金额解析并校验                         |
+| `original_price_1`     | text        | 套餐 1 原价展示文本                                      |
+| `price_note_1`         | text        | 套餐 1 价格说明，例如 `/月`                               |
+| `points_1`             | integer     | 套餐 1 支付成功后赠送积分数                                |
+| `pay_type_1`           | text        | 套餐 1 支付类型，支持 `one_time` 或 `subscribe`             |
+| `validity_days_1`      | integer     | 套餐 1 订阅有效天数                                      |
+| `duration_days_1`      | integer     | 套餐 1 订阅有效天数备用字段                                 |
+| `subscription_days_1`  | integer     | 套餐 1 订阅有效天数备用字段                                 |
+| `badge_1`              | text        | 套餐 1 角标文案                                        |
+| `trial_text_1`         | text        | 套餐 1 试用或赠送说明                                     |
+| `plan_name_2`          | text        | 套餐 2 名称                                            |
+| `discount_price_2`     | text        | 套餐 2 实付价格                                         |
+| `original_price_2`     | text        | 套餐 2 原价展示文本                                      |
+| `price_note_2`         | text        | 套餐 2 价格说明                                         |
+| `points_2`             | integer     | 套餐 2 支付成功后赠送积分数                                |
+| `pay_type_2`           | text        | 套餐 2 支付类型                                         |
+| `validity_days_2`      | integer     | 套餐 2 订阅有效天数                                      |
+| `duration_days_2`      | integer     | 套餐 2 订阅有效天数备用字段                                 |
+| `subscription_days_2`  | integer     | 套餐 2 订阅有效天数备用字段                                 |
+| `badge_2`              | text        | 套餐 2 角标文案                                        |
+| `trial_text_2`         | text        | 套餐 2 试用或赠送说明                                     |
+| `plan_name_3`          | text        | 套餐 3 名称                                            |
+| `discount_price_3`     | text        | 套餐 3 实付价格                                         |
+| `original_price_3`     | text        | 套餐 3 原价展示文本                                      |
+| `price_note_3`         | text        | 套餐 3 价格说明                                         |
+| `points_3`             | integer     | 套餐 3 支付成功后赠送积分数                                |
+| `pay_type_3`           | text        | 套餐 3 支付类型                                         |
+| `validity_days_3`      | integer     | 套餐 3 订阅有效天数                                      |
+| `duration_days_3`      | integer     | 套餐 3 订阅有效天数备用字段                                 |
+| `subscription_days_3`  | integer     | 套餐 3 订阅有效天数备用字段                                 |
+| `badge_3`              | text        | 套餐 3 角标文案                                        |
+| `trial_text_3`         | text        | 套餐 3 试用或赠送说明                                     |
+| `updated_at`           | timestamptz | 更新时间                                                |
 
 ```sql
 create table if not exists public.vip_plan_config (
   id bigint generated by default as identity primary key,
   config_key text not null default 'default',
+  default_plan text,
+  default_plan_key text,
+  default_product_id text,
+  selected_plan text,
+  recommended_plan text,
   plan_name_1 text,
   discount_price_1 text,
   original_price_1 text,
   price_note_1 text,
-  points_1 integer,
+  points_1 integer not null default 0,
+  pay_type_1 text,
+  validity_days_1 integer not null default 0,
+  duration_days_1 integer not null default 0,
+  subscription_days_1 integer not null default 0,
   badge_1 text,
   trial_text_1 text,
   plan_name_2 text,
   discount_price_2 text,
   original_price_2 text,
   price_note_2 text,
-  points_2 integer,
+  points_2 integer not null default 0,
+  pay_type_2 text,
+  validity_days_2 integer not null default 0,
+  duration_days_2 integer not null default 0,
+  subscription_days_2 integer not null default 0,
   badge_2 text,
   trial_text_2 text,
   plan_name_3 text,
   discount_price_3 text,
   original_price_3 text,
   price_note_3 text,
-  points_3 integer,
+  points_3 integer not null default 0,
+  pay_type_3 text,
+  validity_days_3 integer not null default 0,
+  duration_days_3 integer not null default 0,
+  subscription_days_3 integer not null default 0,
   badge_3 text,
   trial_text_3 text,
   updated_at timestamptz not null default now(),
-  constraint vip_plan_config_key_unique unique (config_key)
+  constraint vip_plan_config_key_unique unique (config_key),
+  constraint vip_plan_config_pay_type_1_check check (pay_type_1 is null or pay_type_1 in ('one_time', 'subscribe')),
+  constraint vip_plan_config_pay_type_2_check check (pay_type_2 is null or pay_type_2 in ('one_time', 'subscribe')),
+  constraint vip_plan_config_pay_type_3_check check (pay_type_3 is null or pay_type_3 in ('one_time', 'subscribe'))
 );
+
+create or replace function public.set_vip_plan_config_updated_at()
+returns trigger
+language plpgsql
+as $$
+begin
+  new.updated_at = now();
+  return new;
+end;
+$$;
+
+drop trigger if exists vip_plan_config_updated_at on public.vip_plan_config;
+create trigger vip_plan_config_updated_at
+before update on public.vip_plan_config
+for each row
+execute function public.set_vip_plan_config_updated_at();
 
 alter table public.vip_plan_config enable row level security;
 
@@ -320,6 +374,99 @@ for all
 to service_role
 using (true)
 with check (true);
+```
+
+示例初始化数据：
+
+```sql
+insert into public.vip_plan_config (
+  config_key,
+  recommended_plan,
+  plan_name_1,
+  discount_price_1,
+  original_price_1,
+  price_note_1,
+  points_1,
+  pay_type_1,
+  badge_1,
+  trial_text_1,
+  plan_name_2,
+  discount_price_2,
+  original_price_2,
+  price_note_2,
+  points_2,
+  pay_type_2,
+  validity_days_2,
+  badge_2,
+  trial_text_2,
+  plan_name_3,
+  discount_price_3,
+  original_price_3,
+  price_note_3,
+  points_3,
+  pay_type_3,
+  validity_days_3,
+  badge_3,
+  trial_text_3
+) values (
+  'default',
+  'plan_2',
+  '体验包',
+  '9.90',
+  '19.90',
+  '一次性购买',
+  100,
+  'one_time',
+  '',
+  '适合体验',
+  '月度会员',
+  '29.90',
+  '59.90',
+  '/月',
+  300,
+  'subscribe',
+  30,
+  '推荐',
+  '会员权益 30 天',
+  '季度会员',
+  '79.90',
+  '179.90',
+  '/季',
+  1000,
+  'subscribe',
+  90,
+  '超值',
+  '会员权益 90 天'
+)
+on conflict (config_key) do update set
+  recommended_plan = excluded.recommended_plan,
+  plan_name_1 = excluded.plan_name_1,
+  discount_price_1 = excluded.discount_price_1,
+  original_price_1 = excluded.original_price_1,
+  price_note_1 = excluded.price_note_1,
+  points_1 = excluded.points_1,
+  pay_type_1 = excluded.pay_type_1,
+  badge_1 = excluded.badge_1,
+  trial_text_1 = excluded.trial_text_1,
+  plan_name_2 = excluded.plan_name_2,
+  discount_price_2 = excluded.discount_price_2,
+  original_price_2 = excluded.original_price_2,
+  price_note_2 = excluded.price_note_2,
+  points_2 = excluded.points_2,
+  pay_type_2 = excluded.pay_type_2,
+  validity_days_2 = excluded.validity_days_2,
+  badge_2 = excluded.badge_2,
+  trial_text_2 = excluded.trial_text_2,
+  plan_name_3 = excluded.plan_name_3,
+  discount_price_3 = excluded.discount_price_3,
+  original_price_3 = excluded.original_price_3,
+  price_note_3 = excluded.price_note_3,
+  points_3 = excluded.points_3,
+  pay_type_3 = excluded.pay_type_3,
+  validity_days_3 = excluded.validity_days_3,
+  badge_3 = excluded.badge_3,
+  trial_text_3 = excluded.trial_text_3,
+  updated_at = now();
 ```
 
 ### generation_tasks
@@ -438,7 +585,7 @@ with check (true);
 | 每日领取积分  | `user_points_balances` |
 | 生成图片扣积分 | `user_points_balances`、`user_points_transactions` |
 | 生成任务恢复   | `generation_tasks` |
-| 会员套餐配置  | `.env` 中的 `SUBSCRIPTION_PRODUCT_DAYS_JSON` |
+| 会员套餐配置  | `vip_plan_config` |
 | 支付订单    | `zpay_transactions` |
 | 会员到期状态  | `user_profiles.subscribe_expire`、`zpay_transactions.subscribe_expire` |
 
