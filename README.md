@@ -76,7 +76,7 @@ http://127.0.0.1:5078
 
 当前会同时推送同一个镜像的两个标签：
 
-- `7.4`
+- `8.0`
 - `latest`
 
 工作流文件：
@@ -98,6 +98,7 @@ http://127.0.0.1:5078
 HOST=0.0.0.0
 PORT=5078
 FLASK_DEBUG=false
+APP_MODE=mode3
 
 # OpenAI-compatible image generation provider
 OPENAI_API_KEY=你的 OpenAI 兼容接口 Key
@@ -162,6 +163,7 @@ SUBSCRIPTION_PRODUCT_DAYS_JSON={"plan_2":30,"plan_3":90}
 | `HOST` | 否 | Flask 监听地址，本地调试可用 `127.0.0.1`，FRP 穿透建议 `0.0.0.0` |
 | `PORT` | 否 | Flask 监听端口，当前项目默认使用 `5078` |
 | `FLASK_DEBUG` | 否 | 是否开启调试模式，生产环境建议 `false` |
+| `APP_MODE` | 否 | 应用模式，取值 `mode1`/`mode2`/`mode3`，默认 `mode1`。控制套图、A+ 等走对应生成链路。可通过 settings 页面实时切换 |
 
 ### AI 模型
 
@@ -198,14 +200,15 @@ SUBSCRIPTION_PRODUCT_DAYS_JSON={"plan_2":30,"plan_3":90}
 | --- | --- | --- |
 | `MODE3_OPENAI_API_KEY` | 是 | 图生图接口密钥 |
 | `MODE3_OPENAI_BASE_URL` | 是 | 图生图接口地址 |
-| `MODE3_IMAGE_EDIT_MODEL` | 是 | 图生图模型 |
+| `MODE3_IMAGE_MODEL` | 是 | 图生图模型，当前使用 `gpt-image-2` |
+| `MODE3_IMAGE_EDIT_SIZE` | 否 | 图生图尺寸，默认 `2048x2048` |
 | `MODE3_TIMEOUT_SECONDS` | 否 | 单次请求超时，默认 `180`，最小 `30` |
-| `MODE3_RETRY_ATTEMPTS` | 否 | 整批重试次数，默认 `2`，最小 `0` |
-| `MODE3_RETRY_DELAY_SECONDS` | 否 | 重试间隔，默认 `1.5`，最小 `0` |
-| `MODE3_SEQUENTIAL_GENERATION` | 否 | 串行生成策略，`on`/`true`/`1`/`yes`=强制串行，`off`/`false`/`0`/`no`=强制并行，`auto`=自动（>1张图时并行） |
-| `MODE3_PARALLEL_WORKERS` | 否 | 并行线程数，默认 `9`，最小 `1` |
-| `MODE3_SUITE_BATCH_SIZE` | 否 | 套图批次大小，默认 `1`，最小 `1` |
-| `MODE3_PARTIAL_RETRY_ATTEMPTS` | 否 | 部分失败后的补图重试次数，默认 `2`，最小 `0` |
+| `MODE3_RETRY_ATTEMPTS` | 否 | 单张图生成重试次数，默认 `2`，最小 `0` |
+| `MODE3_RETRY_DELAY_SECONDS` | 否 | 重试间隔秒数，默认 `1.5`，最小 `0` |
+| `MODE3_SEQUENTIAL_GENERATION` | 否 | 串行生成策略，`on`=强制串行，`off`=强制并行，`auto`=自动（>1张图时并行） |
+| `MODE3_PARALLEL_WORKERS` | 否 | 套图并发线程数，默认 `9`，最小 `1`。mode3 套图按每张图独立 prompt 并发，总耗时接近单张 |
+| `MODE3_PARTIAL_RETRY_ATTEMPTS` | 否 | 套图部分失败后的补图重试次数，默认 `2`，最小 `0` |
+| `MODE3_SUITE_BATCH_SIZE` | 否 | 套图批次大小，仅非 mode3 模式生效，mode3 已改为并发 |
 
 ### Supabase
 
@@ -549,6 +552,17 @@ SUPABASE_ANON_KEY=
 ```
 
 并确认页面是通过 Flask 返回的，不是直接用浏览器打开本地 HTML 文件。
+
+## 近期更新
+
+### 2026-04-30
+
+- **mode3 套图并发生成**：mode3 套图不再逐张串行，而是每张图独立 prompt 并发请求，9 张总耗时从 6-10 分钟降至约 1 分钟。并发数由 `MODE3_PARALLEL_WORKERS` 控制（默认 9）。
+- **三层断流重试**：高并发下的 SSL EOF、连接断流等瞬时网络错误现在可自动重试，覆盖 API 调用层、套图批量补图层、图片 URL 下载层。
+- **A+ 模块 524 回退**：当 nofx 源超时返回 524 时，自动重试后回退到 ARK Chat，避免 A+ 规划直接失败。
+- **Supabase 查询编码修复**：`cs.` JSONB 查询改用紧凑 JSON（无空格），修复 `+` 编码导致 PostgREST 400 的问题。
+- **Settings 页面 APP_MODE**：即使 `.env` 未配 `APP_MODE`，设置页也始终显示当前模式并可切换。
+- **`.env` 新增 `APP_MODE=mode3`**：默认启用 mode3 生图链路。
 
 ## 清理说明
 

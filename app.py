@@ -899,7 +899,7 @@ def grant_payment_points_once(order_row: dict) -> dict | None:
             'select': 'id',
             'user_id': f'eq.{user_id}',
             'transaction_type': 'eq.purchase',
-            'metadata': f"cs.{json.dumps({'order_no': order_no}, ensure_ascii=False)}",
+            'metadata': f"cs.{json.dumps({'order_no': order_no}, separators=(',', ':'), ensure_ascii=False)}",
             'limit': '1',
         },
         timeout=20,
@@ -3088,7 +3088,7 @@ def build_multimodal_content(prompt_text: str, image_files):
     return content
 
 
-CHAT_COMPLETION_RETRYABLE_STATUS_CODES = {429, 502, 503, 504}
+CHAT_COMPLETION_RETRYABLE_STATUS_CODES = {429, 502, 503, 504, 524}
 CHAT_COMPLETION_FALLBACK_ERROR_TOKENS = (
     'Your request was blocked',
     'AccountOverdueError',
@@ -3100,6 +3100,7 @@ CHAT_COMPLETION_FALLBACK_ERROR_TOKENS = (
     'SSLEOFError',
     'EOF occurred in violation of protocol',
     'Max retries exceeded',
+    '524',
 )
 
 
@@ -3171,7 +3172,7 @@ def should_enable_chat_fallback_to_ark() -> bool:
         return True
     if fallback_mode in {'off', 'false', '0', 'no'}:
         return False
-    return get_app_mode() != 'mode3'
+    return True
 
 
 def get_suite_plan_timeout_seconds() -> int:
@@ -5058,6 +5059,15 @@ def is_retryable_mode3_error(exc: Exception) -> bool:
         'temporarily unavailable',
         'upstream',
         '524',
+        'ssl',
+        'sslerror',
+        'decryption failed',
+        'bad record mac',
+        'max retries exceeded',
+        'connectionpool',
+        'protocolerror',
+        'eof',
+        'unexpected eof',
     )
     if any(fragment.lower() in message.lower() for fragment in retryable_fragments):
         return True
@@ -5366,10 +5376,35 @@ def pick_image_data_entry(data):
     return first_item
 
 
+def _download_image_url_with_retry(url: str, max_attempts: int = 3, base_delay: float = 1.0):
+    last_exc = None
+    for attempt in range(max_attempts):
+        try:
+            response = requests.get(url, timeout=120)
+            response.raise_for_status()
+            return response
+        except Exception as exc:
+            last_exc = exc
+            if attempt >= max_attempts - 1:
+                raise
+            message = str(exc or '').lower()
+            retryable = any(
+                frag in message
+                for frag in ('ssl', 'sslerror', 'eof', 'decryption failed', 'bad record mac',
+                             'connection aborted', 'connection reset', 'timed out', 'max retries exceeded',
+                             'connectionpool', 'protocolerror')
+            )
+            if not retryable:
+                raise
+            wait = base_delay * (attempt + 1)
+            app.logger.warning('Image URL download failed, retrying in %.2fs (%s/%s): %s', wait, attempt + 1, max_attempts - 1, exc)
+            time.sleep(wait)
+    raise last_exc
+
+
 def decode_generated_image(item: dict):
     if item.get('url'):
-        response = requests.get(item['url'], timeout=120)
-        response.raise_for_status()
+        response = _download_image_url_with_retry(item['url'])
         image_bytes = response.content
         header_mime_type = response.headers.get('Content-Type', 'image/png').split(';', 1)[0].strip()
         detected_mime_type = sniff_image_mime_type(image_bytes)
@@ -5658,13 +5693,105 @@ def call_image_generation(client: OpenAI, prompt: str, image_payloads, image_siz
     return collect_generated_images(response)
 
 
+def build_generated_suite_image_item(task_id: str, plan_item: dict, generated_item: dict):
+    image_bytes, mime_type = decode_generated_image(generated_item)
+    download_name, relative_path, image_url = save_generated_image(task_id, plan_item['sort'], plan_item['type'], image_bytes, mime_type)
+    return {
+        'sort': plan_item['sort'],
+        'kind': 'generated',
+        'type': plan_item['type'],
+        'type_tag': plan_item['type_tag'],
+        'title': plan_item['title'],
+        'keywords': plan_item['keywords'],
+        'prompt': plan_item['prompt'],
+        'module': plan_item.get('module', ''),
+        'story_role': plan_item.get('story_role', ''),
+        'decision_task': plan_item.get('decision_task', ''),
+        'info_density': plan_item.get('info_density', ''),
+        'layout_style': plan_item.get('layout_style', ''),
+        'font_style': plan_item.get('font_style', ''),
+        'color_scheme': plan_item.get('color_scheme', ''),
+        'decor_elements': plan_item.get('decor_elements', []),
+        'image_url': image_url,
+        'image_path': relative_path,
+        'download_name': download_name,
+    }
+
+
+def generate_mode3_suite_images_parallel(plan: dict, image_payloads, task_id: str, image_size_ratio: str, text_type: str, country: str, product_json=None, all_plan_types=None):
+    plan_items = list(plan.get('items') or [])
+    if not plan_items:
+        return []
+    workers = min(len(plan_items), get_mode3_parallel_workers())
+    partial_retry_attempts = get_mode3_partial_retry_attempts()
+    retry_delay_seconds = get_mode3_retry_delay_seconds()
+    results = []
+    failures = []
+
+    def run_one(plan_item: dict):
+        generated_item = call_mode3_single_image_with_retry(
+            build_enriched_image_prompt(
+                plan_item['prompt'],
+                image_size_ratio,
+                text_type,
+                country,
+                product_json,
+                plan_item['type'],
+                plan_item,
+                all_plan_types or [],
+            ),
+            image_payloads,
+            image_size_ratio,
+            text_type,
+            country,
+            product_json,
+            plan_item['type'],
+            plan_item,
+            all_plan_types,
+        )
+        return build_generated_suite_image_item(task_id, plan_item, generated_item)
+
+    pending_items = list(plan_items)
+    for attempt_index in range(partial_retry_attempts + 1):
+        if not pending_items:
+            break
+        batch_workers = min(len(pending_items), workers)
+        batch_results = []
+        batch_failures = []
+        with concurrent.futures.ThreadPoolExecutor(max_workers=batch_workers) as executor:
+            future_map = {executor.submit(run_one, item): item for item in pending_items}
+            for future in concurrent.futures.as_completed(future_map):
+                plan_item = future_map[future]
+                try:
+                    batch_results.append(future.result())
+                except Exception as exc:
+                    batch_failures.append((plan_item, f'{plan_item.get("type") or plan_item.get("title") or plan_item.get("sort")}：{exc}'))
+        results.extend(batch_results)
+        pending_items = [item for item, _msg in batch_failures]
+        failures = [_msg for _item, _msg in batch_failures]
+        if pending_items and attempt_index < partial_retry_attempts:
+            app.logger.warning(
+                'Mode3 suite partial generation missing %s/%s images, retrying in %.2fs (%s/%s): %s',
+                len(pending_items), len(plan_items), retry_delay_seconds * (attempt_index + 1),
+                attempt_index + 1, partial_retry_attempts,
+                '; '.join(failures[:3]),
+            )
+            time.sleep(retry_delay_seconds * (attempt_index + 1))
+
+    if failures:
+        raise ValueError(f'mode3 套图部分生成失败：{"；".join(failures[:3])}')
+    return sorted(results, key=lambda item: item.get('sort') or 0)
+
+
 def generate_suite_images(plan: dict, image_payloads, task_id: str, image_size_ratio: str, text_type: str, country: str, product_json=None):
     client = get_ark_client()
     images = []
     all_plan_types = [str(item.get('type', '')).strip() for item in plan.get('items', []) if str(item.get('type', '')).strip()]
     plan_items = list(plan.get('items') or [])
     app_mode = get_app_mode()
-    batch_limit = max(get_mode3_suite_batch_size(), 1) if app_mode == 'mode3' else max(get_supabase_setting_int('ARK_SEQUENTIAL_MAX_IMAGES', get_optional_int_env('ARK_SEQUENTIAL_MAX_IMAGES', 1)), 1)
+    if app_mode == 'mode3':
+        return generate_mode3_suite_images_parallel(plan, image_payloads, task_id, image_size_ratio, text_type, country, product_json, all_plan_types)
+    batch_limit = max(get_supabase_setting_int('ARK_SEQUENTIAL_MAX_IMAGES', get_optional_int_env('ARK_SEQUENTIAL_MAX_IMAGES', 1)), 1)
     index = 0
 
     while index < len(plan_items):
@@ -5686,30 +5813,7 @@ def generate_suite_images(plan: dict, image_payloads, task_id: str, image_size_r
 
         consumed_count = 0
         for generated_item, plan_item in zip(generated_items, remaining_items):
-            image_bytes, mime_type = decode_generated_image(generated_item)
-            download_name, relative_path, image_url = save_generated_image(task_id, plan_item['sort'], plan_item['type'], image_bytes, mime_type)
-            images.append(
-                {
-                    'sort': plan_item['sort'],
-                    'kind': 'generated',
-                    'type': plan_item['type'],
-                    'type_tag': plan_item['type_tag'],
-                    'title': plan_item['title'],
-                    'keywords': plan_item['keywords'],
-                    'prompt': plan_item['prompt'],
-                    'module': plan_item.get('module', ''),
-                    'story_role': plan_item.get('story_role', ''),
-                    'decision_task': plan_item.get('decision_task', ''),
-                    'info_density': plan_item.get('info_density', ''),
-                    'layout_style': plan_item.get('layout_style', ''),
-                    'font_style': plan_item.get('font_style', ''),
-                    'color_scheme': plan_item.get('color_scheme', ''),
-                    'decor_elements': plan_item.get('decor_elements', []),
-                    'image_url': image_url,
-                    'image_path': relative_path,
-                    'download_name': download_name,
-                }
-            )
+            images.append(build_generated_suite_image_item(task_id, plan_item, generated_item))
             consumed_count += 1
 
         if consumed_count < 1:
@@ -6177,6 +6281,17 @@ def settings_list_api():
                 'description': '',
                 'updated_at': '',
             })
+    existing_keys = {r['setting_key'] for r in records}
+    if 'APP_MODE' not in existing_keys:
+        current_mode = get_app_mode()
+        records.append({
+            'scope': scope,
+            'setting_key': 'APP_MODE',
+            'setting_value': current_mode,
+            'value_preview': current_mode,
+            'description': '',
+            'updated_at': '',
+        })
     return jsonify({'success': True, 'scope': scope, 'records': records})
 
 
@@ -6226,7 +6341,7 @@ def find_refundable_spend_transaction(user_id: str, request_id: str, amount: int
     params = {
         'select': '*',
         'user_id': f'eq.{normalized_user_id}',
-        'metadata': f"cs.{json.dumps({'request_id': normalized_request_id}, ensure_ascii=False)}",
+        'metadata': f"cs.{json.dumps({'request_id': normalized_request_id}, separators=(',', ':'), ensure_ascii=False)}",
         'order': 'created_at.desc',
         'limit': '1',
     }
@@ -6257,7 +6372,7 @@ def find_refund_transaction_for_request(user_id: str, request_id: str) -> dict |
             'select': '*',
             'user_id': f'eq.{normalized_user_id}',
             'transaction_type': 'eq.refund',
-            'metadata': f"cs.{json.dumps({'request_id': normalized_request_id}, ensure_ascii=False)}",
+            'metadata': f"cs.{json.dumps({'request_id': normalized_request_id}, separators=(',', ':'), ensure_ascii=False)}",
             'limit': '1',
         },
         timeout=20,
