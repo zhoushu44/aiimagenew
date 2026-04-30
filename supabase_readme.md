@@ -4,24 +4,25 @@
 
 ## 当前表清单
 
-| 表名                         | 当前行数 | 项目是否使用 | 作用                        |
-| -------------------------- | ---: | ------ | ------------------------- |
-| `api_settings`             |   15 | 是      | 保存后台配置项，例如模型配置、积分规则、应用模式等 |
-| `user_points_balances`     |    4 | 是      | 用户积分余额主表                  |
-| `user_points_transactions` |    0 | 是      | 用户积分流水表，用于记录积分增减明细        |
-| `user_profiles`            |    2 | 是      | 用户扩展资料，包含管理员标识和会员到期时间     |
-| `vip_plan_config`          |    1 | 是      | 前端会员套餐弹窗配置                |
-| `zpay_transactions`        |   26 | 是      | ZPay 支付订单和订阅订单记录          |
+| 表名                         | 当前是否使用 | 作用 |
+| -------------------------- | ------ | --- |
+| `user_points_balances`     | 是 | 用户积分余额主表 |
+| `user_points_transactions` | 是 | 用户积分流水表，用于记录积分增减明细 |
+| `user_profiles`            | 是 | 用户扩展资料，包含管理员标识和会员到期时间 |
+| `zpay_transactions`        | 是 | ZPay 支付订单和订阅订单记录 |
+| `generation_tasks`         | 是 | 生成任务状态表，支持页面刷新后恢复结果 |
 
 ## 已清理旧表
 
-以下 3 张旧表当前项目代码未引用，且清理前行数均为 0：
+以下 5 项旧表/旧思路当前项目代码未使用：
 
-| 表名                   | 原用途      | 替代方案                   | 清理状态                                             |
-| -------------------- | -------- | ---------------------- | ------------------------------------------------ |
-| `user_points`        | 旧版积分余额表  | `user_points_balances` | 已通过 REST API 确认数据为空；表结构需在 Supabase SQL Editor 删除 |
-| `users`              | 旧版自建用户表  | Supabase Auth          | 已通过 REST API 确认数据为空；表结构需在 Supabase SQL Editor 删除 |
-| `verification_codes` | 旧版短信验证码表 | Supabase Auth OTP      | 已通过 REST API 确认数据为空；表结构需在 Supabase SQL Editor 删除 |
+| 项目 | 原用途 | 当前替代方案 | 当前状态 |
+| --- | --- | --- | --- |
+| `user_points` | 旧版积分余额表 | `user_points_balances` | 已废弃 |
+| `users` | 旧版自建用户表 | Supabase Auth | 已废弃 |
+| `verification_codes` | 旧版短信验证码表 | Supabase Auth OTP | 已废弃 |
+| `api_settings` | 旧版后台配置表 | `.env` | 已删除 |
+| `vip_plan_config` | 旧版套餐配置表 | `SUBSCRIPTION_PRODUCT_DAYS_JSON` | 已删除 |
 
 当前本地后端连接的是项目实际使用的 Supabase REST API：`https://spb-kemqk3h0a423q1q5.supabase.opentrust.net`。REST API 可以清空数据，但不能执行 `drop table` 这类 DDL。若要从 Supabase 后台完全删除表结构，请在该项目的 SQL Editor 执行：
 
@@ -29,13 +30,15 @@
 drop table if exists public.verification_codes cascade;
 drop table if exists public.user_points cascade;
 drop table if exists public.users cascade;
+drop table if exists public.api_settings cascade;
+drop table if exists public.vip_plan_config cascade;
 ```
 
 ## 表结构说明和建表 SQL
 
-### api\_settings
+### api\_settings（已删除，以下仅保留历史结构参考）
 
-用途：保存应用后台配置。后端通过 `scope + setting_key` 读取配置值，例如 API Key、模型名、积分赠送规则、应用模式等。
+用途：旧版后台配置表。当前项目已经改为直接读取 `.env`，不再使用这张表。
 
 | 列名              | 类型          | 含义                       |
 | --------------- | ----------- | ------------------------ |
@@ -241,9 +244,9 @@ using (true)
 with check (true);
 ```
 
-### vip\_plan\_config
+### vip\_plan\_config（已删除，以下仅保留历史结构参考）
 
-用途：会员套餐配置。前端 `shared-topbar.js` 通过 Supabase JS SDK 读取 `config_key = 'default'` 的记录，用于渲染会员弹窗套餐。
+用途：旧版会员套餐配置表。当前项目已经改为从 `.env` 的 `SUBSCRIPTION_PRODUCT_DAYS_JSON` 读取套餐时长，不再使用这张表。
 
 | 列名                 | 类型          | 含义                 |
 | ------------------ | ----------- | ------------------ |
@@ -427,15 +430,15 @@ with check (true);
 
 | 功能      | 主要表                                                                   |
 | ------- | --------------------------------------------------------------------- |
-| 后台设置页   | `api_settings`、`user_profiles`                                        |
-| 登录态     | Supabase Auth，不使用 public 自建用户表                                        |
-| 短信验证码   | Supabase Auth OTP，不使用 `verification_codes`                            |
-| 积分余额    | `user_points_balances`                                                |
-| 积分流水    | `user_points_transactions`                                            |
-| 每日领取积分  | `user_points_balances`                                                |
-| 生成图片扣积分 | `user_points_balances`、`user_points_transactions`                     |
-| 生成任务恢复   | `generation_tasks`                                                     |
-| 会员套餐弹窗  | `vip_plan_config`                                                     |
-| 支付订单    | `zpay_transactions`                                                   |
+| 后台设置页   | `.env`、`user_profiles` |
+| 登录态     | Supabase Auth，不使用 public 自建用户表 |
+| 短信验证码   | Supabase Auth OTP，不使用 `verification_codes` |
+| 积分余额    | `user_points_balances` |
+| 积分流水    | `user_points_transactions` |
+| 每日领取积分  | `user_points_balances` |
+| 生成图片扣积分 | `user_points_balances`、`user_points_transactions` |
+| 生成任务恢复   | `generation_tasks` |
+| 会员套餐配置  | `.env` 中的 `SUBSCRIPTION_PRODUCT_DAYS_JSON` |
+| 支付订单    | `zpay_transactions` |
 | 会员到期状态  | `user_profiles.subscribe_expire`、`zpay_transactions.subscribe_expire` |
 

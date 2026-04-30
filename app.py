@@ -28,6 +28,7 @@ from PIL import Image
 from requests.adapters import HTTPAdapter
 from urllib3.util.retry import Retry
 from werkzeug.exceptions import RequestEntityTooLarge
+from cos_utils import upload_to_cos, generate_cos_key, is_cos_enabled, COS_URL_PREFIX
 
 BASE_DIR = Path(__file__).resolve().parent
 CONFIG_FILE = BASE_DIR / 'config.json'
@@ -1857,10 +1858,27 @@ def normalize_points_rule(mode: str, rule_payload) -> dict:
     return normalized_rule
 
 
+def _get_env_points_rule_json(mode: str) -> dict | None:
+    setting_key = POINTS_RULE_SETTING_KEYS.get(mode)
+    if not setting_key:
+        return None
+    raw_value = os.getenv(setting_key, '').strip()
+    if not raw_value:
+        return None
+    try:
+        return json.loads(raw_value)
+    except json.JSONDecodeError:
+        return None
+
+
 def get_points_rules() -> dict[str, dict]:
     rules: dict[str, dict] = {}
-    for mode, setting_key in POINTS_RULE_SETTING_KEYS.items():
-        rules[mode] = normalize_points_rule(mode, get_supabase_setting_json(setting_key, DEFAULT_POINTS_RULES[mode]))
+    for mode in POINTS_RULE_SETTING_KEYS:
+        env_rule = _get_env_points_rule_json(mode)
+        if env_rule is not None:
+            rules[mode] = normalize_points_rule(mode, env_rule)
+        else:
+            rules[mode] = normalize_points_rule(mode, DEFAULT_POINTS_RULES[mode])
     return rules
 
 
@@ -5272,10 +5290,19 @@ def collect_generated_images(response):
 
 def save_generated_image(task_id: str, sort: int, image_type: str, image_bytes: bytes, mime_type: str):
     cleanup_generated_suites(active_task_id=task_id)
-    output_dir = GENERATED_SUITES_DIR / task_id
-    output_dir.mkdir(parents=True, exist_ok=True)
     extension = guess_extension(mime_type)
     filename = f'{sort:02d}-{sanitize_filename_part(image_type, "image")}{extension}'
+
+    if is_cos_enabled():
+        try:
+            cos_key = generate_cos_key(task_id, filename)
+            image_url = upload_to_cos(image_bytes, cos_key, mime_type)
+            return filename, cos_key, image_url
+        except Exception as exc:
+            app.logger.warning('COS upload failed, falling back to local: %s', exc)
+
+    output_dir = GENERATED_SUITES_DIR / task_id
+    output_dir.mkdir(parents=True, exist_ok=True)
     output_path = output_dir / filename
     output_path.write_bytes(image_bytes)
     relative_path = output_path.relative_to(GENERATED_SUITES_DIR).as_posix()
@@ -5284,12 +5311,21 @@ def save_generated_image(task_id: str, sort: int, image_type: str, image_bytes: 
 
 def save_reference_image(task_id: str, sort: int, filename: str, image_bytes: bytes, mime_type: str):
     cleanup_generated_suites(active_task_id=task_id)
-    output_dir = GENERATED_SUITES_DIR / task_id / 'references'
-    output_dir.mkdir(parents=True, exist_ok=True)
     extension = guess_extension(mime_type)
     source_stem = Path(filename or 'reference').stem
     safe_stem = sanitize_filename_part(source_stem, f'reference-{sort:02d}')
     output_name = f'{sort:02d}-{safe_stem}{extension}'
+
+    if is_cos_enabled():
+        try:
+            cos_key = generate_cos_key(task_id, f'references/{output_name}')
+            image_url = upload_to_cos(image_bytes, cos_key, mime_type)
+            return output_name, cos_key, image_url
+        except Exception as exc:
+            app.logger.warning('COS upload failed, falling back to local: %s', exc)
+
+    output_dir = GENERATED_SUITES_DIR / task_id / 'references'
+    output_dir.mkdir(parents=True, exist_ok=True)
     output_path = output_dir / output_name
     output_path.write_bytes(image_bytes)
     relative_path = output_path.relative_to(GENERATED_SUITES_DIR).as_posix()
@@ -5991,14 +6027,14 @@ def fashion_page():
 
 @app.get('/settings')
 def settings_page():
-    admin_session = g.get('admin_session') or get_admin_session()
-    if not admin_session:
-        return redirect('/')
     return render_html_page('settings.html')
 
 
 @app.get('/generated/<path:path>')
 def serve_generated_file(path: str):
+    if is_cos_enabled() and not (GENERATED_SUITES_DIR / path).is_file():
+        cos_url = f"{COS_URL_PREFIX}/{path}"
+        return redirect(cos_url)
     return send_from_directory(GENERATED_SUITES_DIR, path)
 
 
@@ -6393,24 +6429,64 @@ def download_zip():
                 relative_path = str(raw_path or '').strip().replace('\\', '/').lstrip('/')
                 if not relative_path:
                     continue
+
+                if relative_path.startswith('http://') or relative_path.startswith('https://'):
+                    try:
+                        img_resp = requests.get(relative_path, timeout=30)
+                        img_resp.raise_for_status()
+                        img_bytes = img_resp.content
+                        url_path = urlparse(relative_path).path
+                        base_name = Path(url_path).name or f'image-{index:02d}.jpg'
+                        stem = Path(base_name).stem or f'image-{index:02d}'
+                        suffix = Path(base_name).suffix or '.jpg'
+                        archive_name = f'{stem}{suffix}'
+                        duplicate_index = 2
+                        while archive_name in used_names:
+                            archive_name = f'{stem}-{duplicate_index}{suffix}'
+                            duplicate_index += 1
+                        used_names.add(archive_name)
+                        archive.writestr(archive_name, img_bytes)
+                    except Exception as exc:
+                        app.logger.warning('Failed to download COS image for zip: %s', exc)
+                    continue
+
                 file_path = (GENERATED_SUITES_DIR / relative_path).resolve()
                 try:
                     file_path.relative_to(GENERATED_SUITES_DIR.resolve())
                 except ValueError:
                     continue
-                if not file_path.is_file():
+                if file_path.is_file():
+                    base_name = Path(relative_path).name or f'image-{index:02d}{file_path.suffix or ".png"}'
+                    stem = Path(base_name).stem or f'image-{index:02d}'
+                    suffix = Path(base_name).suffix or file_path.suffix or '.png'
+                    archive_name = f'{stem}{suffix}'
+                    duplicate_index = 2
+                    while archive_name in used_names:
+                        archive_name = f'{stem}-{duplicate_index}{suffix}'
+                        duplicate_index += 1
+                    used_names.add(archive_name)
+                    archive.write(file_path, arcname=archive_name)
                     continue
 
-                base_name = Path(relative_path).name or f'image-{index:02d}{file_path.suffix or ".png"}'
-                stem = Path(base_name).stem or f'image-{index:02d}'
-                suffix = Path(base_name).suffix or file_path.suffix or '.png'
-                archive_name = f'{stem}{suffix}'
-                duplicate_index = 2
-                while archive_name in used_names:
-                    archive_name = f'{stem}-{duplicate_index}{suffix}'
-                    duplicate_index += 1
-                used_names.add(archive_name)
-                archive.write(file_path, arcname=archive_name)
+                if is_cos_enabled():
+                    try:
+                        cos_url = f"{COS_URL_PREFIX}/{relative_path}"
+                        img_resp = requests.get(cos_url, timeout=30)
+                        img_resp.raise_for_status()
+                        img_bytes = img_resp.content
+                        base_name = Path(relative_path).name or f'image-{index:02d}.jpg'
+                        stem = Path(base_name).stem or f'image-{index:02d}'
+                        suffix = Path(base_name).suffix or '.jpg'
+                        archive_name = f'{stem}{suffix}'
+                        duplicate_index = 2
+                        while archive_name in used_names:
+                            archive_name = f'{stem}-{duplicate_index}{suffix}'
+                            duplicate_index += 1
+                        used_names.add(archive_name)
+                        archive.writestr(archive_name, img_bytes)
+                    except Exception as exc:
+                        app.logger.warning('Failed to download COS image for zip: %s', exc)
+                    continue
 
         if not used_names:
             return jsonify({'success': False, 'error': '未找到可下载的图片文件'}), 404

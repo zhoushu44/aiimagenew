@@ -1,5 +1,7 @@
 # Environment and secrets
 .env
+.env.*
+config.json
 
 # Claude / local tooling
 .claude/

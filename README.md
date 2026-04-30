@@ -70,6 +70,25 @@ http://127.0.0.1:5078
 
 如果 `.env` 配置了 `HOST` 和 `PORT`，会以 `.env` 为准。
 
+## Docker 镜像发布
+
+当前项目通过 GitHub Action 自动构建并推送 Docker 镜像，不需要本地手动执行推送。
+
+当前会同时推送同一个镜像的两个标签：
+
+- `7.4`
+- `latest`
+
+工作流文件：
+
+- [docker-publish.yml](file:///c:/Users/zs/Desktop/aiimagenew/.github/workflows/docker-publish.yml)
+
+说明：
+
+- 推送到 `main` 分支后会自动构建并推送镜像
+- 也可以在 GitHub Actions 页面手动触发
+- `.dockerignore` 已继续排除 `.env` 和 `.env.*`，不会把本地环境变量打进镜像
+
 ## .env 配置完整版
 
 项目从 `.env` 读取配置。当前 `.env` 已按模块分组：
@@ -116,7 +135,10 @@ SUPABASE_SETTINGS_ALLOWED_EMAILS=
 # Points
 POINTS_SIGNUP_BONUS=100
 POINTS_DAILY_FREE=10
-POINTS_IMAGE_GENERATION_COST=1
+POINTS_RULE_SUITE={"key":"suite","label":"套图","unit_cost":4,"minimum_cost":4,"metric":"output_count"}
+POINTS_RULE_MODE2={"key":"mode2","label":"AI 生图","unit_cost":4,"minimum_cost":4,"metric":"output_count"}
+POINTS_RULE_APLUS={"key":"aplus","label":"A+ 模块","unit_cost":4,"minimum_cost":4,"metric":"selected_modules_count"}
+POINTS_RULE_FASHION={"key":"fashion","label":"服饰场景","unit_cost":4,"minimum_cost":4,"metric":"selected_scene_count"}
 GENERATION_TASK_TTL_SECONDS=7200
 GENERATION_TASK_POLL_RETENTION_SECONDS=86400
 GENERATION_TASK_WORKERS=2
@@ -192,8 +214,8 @@ SUBSCRIPTION_PRODUCT_DAYS_JSON={"plan_2":30,"plan_3":90}
 | `SUPABASE_URL` | 是 | Supabase 项目 URL |
 | `SUPABASE_ANON_KEY` | 是 | 前端登录用 anon key，可公开，但仍建议由后端注入页面配置 |
 | `SUPABASE_SERVICE_ROLE_KEY` | 是 | 后端管理员 key，只能放后端 `.env`，严禁写入前端 JS |
-| `ADMIN_ALLOWED_EMAIL` | 否 | 允许访问配置管理的单个邮箱 |
-| `ADMIN_ALLOWED_EMAILS` | 否 | 允许访问配置管理的多个邮箱，英文逗号分隔 |
+| `SUPABASE_SETTINGS_ALLOWED_EMAIL` | 否 | 允许访问配置管理的单个邮箱 |
+| `SUPABASE_SETTINGS_ALLOWED_EMAILS` | 否 | 允许访问配置管理的多个邮箱，英文逗号分隔 |
 
 ### 积分与生成任务
 
@@ -201,7 +223,10 @@ SUBSCRIPTION_PRODUCT_DAYS_JSON={"plan_2":30,"plan_3":90}
 | --- | --- | --- |
 | `POINTS_SIGNUP_BONUS` | 否 | 注册赠送积分 |
 | `POINTS_DAILY_FREE` | 否 | 每日免费积分 |
-| `POINTS_IMAGE_GENERATION_COST` | 否 | 生成图片消耗积分 |
+| `POINTS_RULE_SUITE` | 否 | 套图模式积分规则 JSON，当前按输出张数计费 |
+| `POINTS_RULE_MODE2` | 否 | mode2 生图积分规则 JSON，当前按输出张数计费 |
+| `POINTS_RULE_APLUS` | 否 | A+ 模块积分规则 JSON，当前按所选模块数计费 |
+| `POINTS_RULE_FASHION` | 否 | 服饰场景积分规则 JSON，当前按所选场景数计费 |
 | `GENERATION_TASK_TTL_SECONDS` | 否 | 内存生成任务清理时间，默认 `7200` 秒，最小 `300` 秒 |
 | `GENERATION_TASK_POLL_RETENTION_SECONDS` | 否 | 前端可轮询恢复的任务保留时间，默认 `86400` 秒，最小 `3600` 秒 |
 | `GENERATION_TASK_WORKERS` | 否 | 后端生成任务线程数，默认 `2` |
@@ -253,8 +278,6 @@ SUBSCRIPTION_PRODUCT_DAYS_JSON={"plan_2":30,"plan_3":90}
 - `user_profiles`
 - `user_points_balances`
 - `user_points_transactions`
-- `api_settings`
-- `vip_plan_config`
 - `zpay_transactions`
 - `generation_tasks`
 
@@ -324,22 +347,21 @@ POST /api/generation-tasks/<task_id>/cancel
 - `pending`：已创建，未支付或未成功回调
 - `success`：支付成功并已处理权益
 
-### VIP 套餐配置
+### 会员套餐配置
 
-前端 VIP 弹窗会从 Supabase 的 `vip_plan_config` 表读取套餐配置。常见字段包括：
+当前项目的套餐时长配置来自后端环境变量：
 
-- `config_key`
-- `title_1` / `title_2` / `title_3`
-- `discount_price_1` / `discount_price_2` / `discount_price_3`
-- `origin_price_1` / `origin_price_2` / `origin_price_3`
-- `trial_1` / `trial_2` / `trial_3`
-- `points_1` / `points_2` / `points_3`
-
-默认读取：
-
-```text
-config_key = default
+```env
+SUBSCRIPTION_PRODUCT_DAYS_JSON={"plan_2":30,"plan_3":90}
 ```
+
+也就是说：
+
+- 当前不再依赖 Supabase 的 `vip_plan_config` 表
+- 套餐天数由 `.env` 管理
+- 支付成功后仍然会更新 `user_profiles.subscribe_expire`
+
+如果以后你需要做前端可视化套餐管理，再单独加表会更合适。
 
 ## 支付链路说明
 

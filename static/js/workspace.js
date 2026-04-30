@@ -595,11 +595,12 @@ document.addEventListener('DOMContentLoaded', () => {
     };
 
     const restoreControlValues = (values = {}) => {
+      const safeValues = values && typeof values === 'object' && !Array.isArray(values) ? values : {};
       [sellingInput, platformSelect, countrySelect, textTypeSelect, imageSizeSelect].forEach((element) => {
-        if (!element?.id || !(element.id in values)) {
+        if (!element?.id || !(element.id in safeValues)) {
           return;
         }
-        setElementValue(element, values[element.id]);
+        setElementValue(element, safeValues[element.id]);
       });
     };
 
@@ -1892,6 +1893,9 @@ document.addEventListener('DOMContentLoaded', () => {
 
     const normalizeImageUrl = (item = {}) => {
       const rawUrl = typeof item.image_url === 'string' ? item.image_url.trim() : '';
+      if (rawUrl.startsWith('http://') || rawUrl.startsWith('https://')) {
+        return rawUrl;
+      }
       const imagePath = normalizeImagePath(item.image_path);
       if (imagePath) {
         const expectedUrl = `/generated/${imagePath.split('/').map(encodeURIComponent).join('/')}`;
@@ -1961,10 +1965,76 @@ document.addEventListener('DOMContentLoaded', () => {
       if (!downloadableItems.length) {
         throw new Error('未找到可下载的图片文件');
       }
-      const zipSourceItems = downloadableItems.filter((item) => item.image_path);
+      const zipSourceItems = downloadableItems.filter((item) => item.image_path || item.image_url);
       if (!zipSourceItems.length) {
         throw new Error('当前图片缺少下载路径，请重新生成后再试');
       }
+
+      const cosItems = zipSourceItems.filter((item) => {
+        const url = typeof item.image_url === 'string' ? item.image_url.trim() : '';
+        return url.startsWith('http://') || url.startsWith('https://');
+      });
+
+      if (typeof JSZip !== 'undefined' && cosItems.length > 0) {
+        try {
+          const zip = new JSZip();
+          const usedNames = new Set();
+          let addedCount = 0;
+
+          for (const item of zipSourceItems) {
+            const rawUrl = typeof item.image_url === 'string' ? item.image_url.trim() : '';
+            let imageUrl = rawUrl;
+            if (!imageUrl.startsWith('http://') && !imageUrl.startsWith('https://')) {
+              const imagePath = normalizeImagePath(item.image_path);
+              if (imagePath) {
+                imageUrl = `/generated/${imagePath.split('/').map(encodeURIComponent).join('/')}`;
+              }
+            }
+            if (!imageUrl) continue;
+
+            const baseName = item.download_name || (item.image_path || '').split('/').pop() || 'image.jpg';
+            let stem = baseName.replace(/\.[^.]+$/, '') || 'image';
+            let suffix = baseName.match(/\.[^.]+$/)?.[0] || '.jpg';
+            let archiveName = `${stem}${suffix}`;
+            let dupIdx = 2;
+            while (usedNames.has(archiveName)) {
+              archiveName = `${stem}-${dupIdx}${suffix}`;
+              dupIdx++;
+            }
+            usedNames.add(archiveName);
+
+            try {
+              const resp = await fetch(imageUrl);
+              if (!resp.ok) continue;
+              const blob = await resp.blob();
+              zip.file(archiveName, blob);
+              addedCount++;
+            } catch (err) {
+              console.warn('Failed to fetch image for zip:', imageUrl, err);
+            }
+          }
+
+          if (addedCount === 0) {
+            throw new Error('未能下载任何图片');
+          }
+
+          const zipBlob = await zip.generateAsync({ type: 'blob' });
+          const timestamp = new Date().toISOString().replace(/[:.]/g, '-').slice(0, 19);
+          const downloadName = `ai-images-${timestamp}.zip`;
+          const objectUrl = URL.createObjectURL(zipBlob);
+          const link = document.createElement('a');
+          link.href = objectUrl;
+          link.download = downloadName;
+          document.body.appendChild(link);
+          link.click();
+          link.remove();
+          window.setTimeout(() => URL.revokeObjectURL(objectUrl), 1000);
+          return true;
+        } catch (err) {
+          console.warn('Client-side zip failed, falling back to server:', err);
+        }
+      }
+
       const response = await fetch('/api/download-zip', {
         method: 'POST',
         headers: {
