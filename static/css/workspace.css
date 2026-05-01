@@ -1041,7 +1041,8 @@ body.fashion-page .fashion-model-preview {
 body.fashion-page .fashion-model-preview img {
   width: 100%;
   height: 100%;
-  object-fit: cover;
+  object-fit: contain;
+  object-position: center center;
   display: block;
 }
 body.fashion-page .fashion-model-card-placeholder {
@@ -1357,6 +1358,29 @@ body.fashion-page .result-view.active {
 .result-status-message {
   min-height: 20px;
   display: block;
+}
+.progress-bar {
+  width: 100%;
+  height: 3px;
+  margin-top: 8px;
+  background: rgba(59, 130, 246, 0.12);
+  border-radius: 999px;
+  overflow: hidden;
+}
+.progress-bar-fill {
+  height: 100%;
+  width: 0%;
+  background: linear-gradient(90deg, #3b82f6, #6366f1);
+  border-radius: 999px;
+  transition: width 0.6s ease-out;
+}
+.progress-bar.is-active .progress-bar-fill {
+  animation: progress-pulse 1.8s ease-in-out infinite;
+}
+@keyframes progress-pulse {
+  0% { opacity: 0.6; }
+  50% { opacity: 1; }
+  100% { opacity: 0.6; }
 }
 .toolbar {
   flex-wrap: wrap;

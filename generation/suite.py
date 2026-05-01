@@ -197,7 +197,6 @@ def generate_suite_images(plan: dict, image_payloads, task_id: str, image_size_r
         call_app_mode_image_generation,
     )
     log = _logger or logger
-    client = get_ark_client()
     images = []
     all_plan_types = [str(item.get('type', '')).strip() for item in plan.get('items', []) if str(item.get('type', '')).strip()]
     plan_items = list(plan.get('items') or [])
@@ -209,6 +208,7 @@ def generate_suite_images(plan: dict, image_payloads, task_id: str, image_size_r
     if app_mode == 'mode3':
         return generate_mode3_suite_images_parallel(plan, image_payloads, task_id, image_size_ratio, text_type, country, product_json, all_plan_types, _logger=log)
     batch_limit = max(get_supabase_setting_int('ARK_SEQUENTIAL_MAX_IMAGES', get_optional_int_env('ARK_SEQUENTIAL_MAX_IMAGES', 1)), 1)
+    client = get_ark_client()
     index = 0
 
     while index < len(plan_items):

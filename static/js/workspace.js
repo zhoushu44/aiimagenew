@@ -5,6 +5,8 @@ document.addEventListener('DOMContentLoaded', () => {
     const resultGrid = document.getElementById('resultGrid');
     const resultMeta = document.getElementById('resultMeta');
     const resultStatusMessage = document.getElementById('resultStatusMessage');
+    const generationProgressBar = document.getElementById('generationProgressBar');
+    const generationProgressFill = generationProgressBar ? generationProgressBar.querySelector('.progress-bar-fill') : null;
     const taskSummaryLine = document.getElementById('taskSummaryLine');
     const taskOutputCount = document.getElementById('taskOutputCount');
     const taskSelectedCount = document.getElementById('taskSelectedCount');
@@ -179,6 +181,7 @@ document.addEventListener('DOMContentLoaded', () => {
         defaultPrefix: '正在分析套图方案，请稍候…',
         imageProgress: '正在生成套图，请稍候…',
         outputStatLabel: '输出张数',
+        estimatedSeconds: 130,
       },
       mode2: {
         heroEyebrow: '01 / Multi Image Lab',
@@ -205,6 +208,7 @@ document.addEventListener('DOMContentLoaded', () => {
         defaultPrefix: '正在准备模式2生成，请稍候…',
         imageProgress: '模式2正在生成，请稍候…',
         outputStatLabel: '输出张数',
+        estimatedSeconds: 40,
       },
       aplus: {
         heroEyebrow: '01 / Module Console',
@@ -231,6 +235,7 @@ document.addEventListener('DOMContentLoaded', () => {
         defaultPrefix: '正在分析 A+ 模块方案，请稍候…',
         imageProgress: '正在生成 A+ 模块，请稍候…',
         outputStatLabel: '模块数量',
+        estimatedSeconds: 90,
       },
       fashion: {
         heroEyebrow: '01 / Styling Intro',
@@ -257,6 +262,7 @@ document.addEventListener('DOMContentLoaded', () => {
         defaultPrefix: '正在分析服饰穿搭方案，请稍候…',
         imageProgress: '正在生成服饰穿戴图，请稍候…',
         outputStatLabel: '输出张数',
+        estimatedSeconds: 150,
       },
     };
     const defaultStyleBtnLabel = '开始分析';
@@ -1249,6 +1255,7 @@ document.addEventListener('DOMContentLoaded', () => {
     };
 
     const completePendingGenerationTask = (task) => {
+      stopGenerationProgress();
       const result = task?.result;
       if (!result || !Array.isArray(result.images)) {
         return false;
@@ -1288,6 +1295,7 @@ document.addEventListener('DOMContentLoaded', () => {
         const staleTask = pendingGenerationTask;
         stopPendingGenerationPolling();
         pendingGenerationTask = null;
+        stopGenerationProgress();
         setResultStatus('生成任务等待超时，请重新发起生成；如已扣分但没有结果，请联系客服核查。', 'error');
         if (staleTask?.mode === 'fashion') {
           syncFashionState({ fashionFlowStep: 'scene' });
@@ -1334,6 +1342,7 @@ document.addEventListener('DOMContentLoaded', () => {
     };
 
     const savePendingGenerationTask = (taskId, spendRecord, mode = PAGE_MODE) => {
+      startGenerationProgress();
       pendingGenerationTask = {
         taskId,
         mode,
@@ -1540,6 +1549,7 @@ document.addEventListener('DOMContentLoaded', () => {
       });
       showIntroView();
       setResultStatus('正在生成推荐场景...', '');
+      startGenerationProgress(60);
 
       try {
         const formData = buildFashionGenerateFormData();
@@ -1569,6 +1579,7 @@ document.addEventListener('DOMContentLoaded', () => {
           fashionSceneError: '',
           fashionScenePlanRaw: scenePlan,
         });
+        stopGenerationProgress();
         setResultStatus(scenePlan.summary || '推荐场景已生成，请继续选择姿态、景别与视角。', 'success');
       } catch (error) {
         syncFashionState({
@@ -1582,6 +1593,7 @@ document.addEventListener('DOMContentLoaded', () => {
           fashionScenePlanRaw: null,
           fashionSceneError: error.message || '推荐场景生成失败，请稍后重试',
         });
+        stopGenerationProgress();
         setResultStatus(error.message || '推荐场景生成失败，请稍后重试', 'error');
       }
     };
@@ -1688,6 +1700,7 @@ document.addEventListener('DOMContentLoaded', () => {
       generateBtn.disabled = true;
       updateGenerateButtonLabel(config.planLoadingLabel);
       setResultStatus(`正在校验积分并生成，预计消耗 ${pointsCost} 积分`);
+      startGenerationProgress(config.estimatedSeconds || 120, selectedSceneCount);
       renderLoadingResultCards(selectedSceneCount);
       showResultView();
       syncFashionState({ fashionFlowStep: 'result' });
@@ -2345,6 +2358,7 @@ document.addEventListener('DOMContentLoaded', () => {
     };
 
     const resetResultStatus = () => {
+      hideGenerationProgress();
       if (!resultStatusMessage) {
         return;
       }
@@ -2352,8 +2366,76 @@ document.addEventListener('DOMContentLoaded', () => {
       resultStatusMessage.className = 'result-status-message';
     };
 
+    let progressTimer = null;
+    let progressHideTimer = null;
+    let progressStartTime = 0;
+    let progressEstimatedSeconds = 0;
+
+    const hideGenerationProgress = () => {
+      if (!generationProgressBar || !generationProgressFill) {
+        return;
+      }
+      if (progressTimer) {
+        clearInterval(progressTimer);
+        progressTimer = null;
+      }
+      if (progressHideTimer) {
+        clearTimeout(progressHideTimer);
+        progressHideTimer = null;
+      }
+      generationProgressBar.hidden = true;
+      generationProgressBar.classList.remove('is-active');
+      generationProgressFill.style.width = '0%';
+    };
+
+    const startGenerationProgress = (estimatedSeconds, outputCount = 0) => {
+      if (!generationProgressBar || !generationProgressFill) {
+        return;
+      }
+      if (progressTimer) {
+        clearInterval(progressTimer);
+        progressTimer = null;
+      }
+      if (progressHideTimer) {
+        clearTimeout(progressHideTimer);
+        progressHideTimer = null;
+      }
+      progressEstimatedSeconds = estimatedSeconds || getCurrentModeConfig().estimatedSeconds || 120;
+      progressStartTime = Date.now();
+      generationProgressBar.hidden = false;
+      generationProgressBar.classList.add('is-active');
+      generationProgressFill.style.width = '2%';
+      progressTimer = setInterval(() => {
+        const elapsed = (Date.now() - progressStartTime) / 1000;
+        const pct = Math.min(Math.max((elapsed / progressEstimatedSeconds) * 95, 2), 92);
+        generationProgressFill.style.width = pct + '%';
+      }, 400);
+    };
+
+    const stopGenerationProgress = () => {
+      if (!generationProgressBar || !generationProgressFill) {
+        return;
+      }
+      if (progressTimer) {
+        clearInterval(progressTimer);
+        progressTimer = null;
+      }
+      if (progressHideTimer) {
+        clearTimeout(progressHideTimer);
+        progressHideTimer = null;
+      }
+      generationProgressFill.style.width = '100%';
+      generationProgressBar.classList.remove('is-active');
+      progressHideTimer = setTimeout(() => {
+        generationProgressBar.hidden = true;
+        generationProgressFill.style.width = '0%';
+        progressHideTimer = null;
+      }, 500);
+    };
+
     const resetResultState = () => {
       stopPendingGenerationPolling();
+      hideGenerationProgress();
       pendingGenerationTask = null;
       const config = getCurrentModeConfig();
       currentResult = null;
@@ -2933,6 +3015,7 @@ document.addEventListener('DOMContentLoaded', () => {
         generateBtn.disabled = true;
         updateGenerateButtonLabel(config.planLoadingLabel);
         setResultStatus(`正在校验积分并生成，预计消耗 ${pointsCost} 积分`);
+        startGenerationProgress();
         showResultView();
         renderLoadingResultCards(plannedOutputCount);
         persistState();
@@ -2999,6 +3082,7 @@ document.addEventListener('DOMContentLoaded', () => {
           selectedResultKeys = new Set();
           updateTaskSummary(result);
           renderResultCards(currentResultItems);
+          stopGenerationProgress();
           setResultStatus(`${result.plan?.summary || config.successFallback.replace('{count}', String(getCurrentOutputMetric(result)))}，已消耗 ${pointsCost} 积分`, 'success');
           saveStateToLocalStorage();
         } catch (error) {

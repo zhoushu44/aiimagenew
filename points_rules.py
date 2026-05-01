@@ -76,10 +76,12 @@ def normalize_points_rule(mode: str, rule_payload) -> dict:
 
 
 def _get_env_points_rule_json(mode: str) -> dict | None:
+    raw_value = ''
     setting_key = POINTS_RULE_SETTING_KEYS.get(mode)
-    if not setting_key:
-        return None
-    raw_value = os.getenv(setting_key, '').strip()
+    if setting_key:
+        raw_value = os.getenv(setting_key, '').strip()
+    if not raw_value:
+        raw_value = os.getenv('POINTS_RULE', '').strip()
     if not raw_value:
         return None
     try:

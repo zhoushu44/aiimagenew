@@ -64,9 +64,16 @@ from generation import (
     generate_mode3_suite_images_parallel,
     generate_aplus_images,
     _get_parallel_config,
+    get_suite_plan_timeout_seconds,
     call_chat_completion, call_chat_json_with_repair,
-    parse_selected_style, parse_product_json_payload,
-    parse_fashion_selected_model_payload_from_data,
+    parse_style_analysis, get_suite_type_rules, parse_selected_modules,
+    parse_selected_style, build_style_reference_text,
+    parse_product_json, parse_product_json_payload,
+    build_suite_plan, build_aplus_plan,
+    parse_fashion_selected_model_payload_from_data, build_fashion_scene_plan,
+    build_fashion_model_prompt, parse_fashion_scene_plan_payload,
+    parse_fashion_scene_selections, parse_fashion_pose_camera_settings,
+    build_fashion_generation_prompts, verify_fashion_generated_output,
     extract_product_json_from_image_payloads,
     get_request_value,
     PRODUCT_JSON_FALLBACK, PRODUCT_JSON_PROMPT_TEMPLATE,
@@ -2238,7 +2245,7 @@ def generate_fashion_model():
         task_id = uuid.uuid4().hex
         prompt = build_fashion_model_prompt(gender, age, ethnicity, body_type, appearance_details)
         generated_item = call_app_mode_image_generation(
-            get_ark_client(),
+            None,
             prompt,
             [],
             image_size_ratio,
@@ -2688,7 +2695,7 @@ def build_generation_result_from_payload(form_payload: dict, file_payloads: dict
             mime_type = 'image/png'
             for attempt in range(1, max_verify_attempts + 1):
                 generated_items = call_app_mode_image_generation(
-                    get_ark_client(),
+                    None,
                     prompt_entry['prompt'],
                     fashion_generation_payloads,
                     image_size_ratio,

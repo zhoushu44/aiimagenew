@@ -88,8 +88,8 @@ python app.py
 
 | 触发条件 | 标签 |
 |----------|------|
-| 推送到 `main` 分支 | `9.4` + `latest` |
-| GitHub Actions 手动触发 | `9.4` + `latest` |
+| 推送到 `main` 分支 | `9.5` + `latest` |
+| GitHub Actions 手动触发 | `9.5` + `latest` |
 
 - 构建平台：`linux/amd64` + `linux/arm64`
 - `.dockerignore` 已排除 `.env` 和 `.env.*`
@@ -111,6 +111,10 @@ GitHub 仓库需要配置 Secrets：
 | `PORT` | `5078` | 监听端口 |
 | `FLASK_DEBUG` | `false` | 调试模式 |
 | `APP_MODE` | `mode1` | 生图模式：`mode1` / `mode2` / `mode3`（可在 Settings 页面切换） |
+| `UPLOAD_MAX_BYTES` | `15728640` | 上传总大小限制（15MB），可以在 Settings 页面调整 |
+| `UPLOAD_MAX_FILE_BYTES` | `8388608` | 单张图片大小限制（8MB） |
+| `GENERATED_SUITE_RETENTION_DAYS` | `7` | 生成图片保留天数 |
+| `GENERATED_SUITE_RETENTION_COUNT` | `20` | 最多保留的任务目录数 |
 
 ### OpenAI 兼容接口（Chat / 套图规划 / 风格分析）
 
@@ -125,64 +129,60 @@ GitHub 仓库需要配置 Secrets：
 | `ARK_CHAT_MODEL` | 否 | 备选 Ark Chat 模型 |
 | `SUITE_PLAN_TIMEOUT_SECONDS` | 否 | 套图规划超时秒数（默认 `180`，最小 `60`） |
 
-### Ark 图片生成（mode1 / 默认通用模式）
+### Mode1 图片生成（Ark 豆包）
 
 | 配置项 | 默认值 | 说明 |
 |--------|--------|------|
-| `ARK_API_KEY` | — | Ark 密钥 |
-| `ARK_BASE_URL` | `https://ark.cn-beijing.volces.com/api/v3` | Ark 地址 |
-| `ARK_IMAGE_MODEL` | `doubao-seedream-5-0-260128` | 生图模型 |
-| `ARK_IMAGE_SIZE` | `2048x2048` | 默认尺寸 |
-| `ARK_IMAGE_WATERMARK` | `false` | 水印 |
-| `ARK_SEQUENTIAL_IMAGE_GENERATION` | `auto` | 多图顺序策略 |
-| `ARK_SEQUENTIAL_MAX_IMAGES` | `1` | 顺序最大张数 |
+| `MODE1_IMAGE_API_KEY` | — | API 密钥 |
+| `MODE1_IMAGE_BASE_URL` | `https://ark.cn-beijing.volces.com/api/v3` | 接口地址 |
+| `MODE1_IMAGE_MODEL` | `doubao-seedream-5-0-260128` | 生图模型 |
 
-### Mode1 并行配置
+### Mode2 图片生成（即梦）
 
 | 配置项 | 默认值 | 说明 |
 |--------|--------|------|
-| `MODE1_RETRY_ATTEMPTS` | `2` | 单张重试 |
-| `MODE1_RETRY_DELAY_SECONDS` | `0.5` | 重试间隔 |
-| `MODE1_PARALLEL_WORKERS` | `3` | 并发数 |
-| `MODE1_PARTIAL_RETRY_ATTEMPTS` | `2` | 补图轮次 |
-| `MODE1_TIMEOUT_SECONDS` | `180` | 超时秒数 |
-| `MODE1_SEQUENTIAL_GENERATION` | `auto` | 串行策略 |
-
-### Mode2 图片编辑
-
-| 配置项 | 默认值 | 说明 |
-|--------|--------|------|
-| `MODE2_OPENAI_API_KEY` | — | 密钥 |
-| `MODE2_OPENAI_BASE_URL` | `https://ark.cn-beijing.volces.com/api/v3` | 地址 |
-| `MODE2_IMAGE_EDIT_MODEL` | `doubao-seedream-5-0-260128` | 图生图模型 |
-| `MODE2_TEXT2IMAGE_MODEL` | `doubao-seedream-5-0-260128` | 文生图模型 |
-| `MODE2_DEFAULT_RATIO` | `1:1` | 默认比例 |
-| `MODE2_DEFAULT_RESOLUTION` | `2048x2048` | 默认分辨率 |
-| `MODE2_DEFAULT_SAMPLE_STRENGTH` | `0.65` | 参考图强度 |
+| `MODE2_IMAGE_API_KEY` | `any-value` | API 密钥 |
+| `MODE2_IMAGE_BASE_URL` | — | 接口地址 |
+| `MODE2_IMAGE_MODEL` | `jimeng-4.6` | 生图模型 |
+| `MODE2_SAMPLE_STRENGTH` | `0.65` | 参考图强度 |
 | `MODE2_ALLOWED_IMAGE_HOSTS` | — | 远程图片域名白名单 |
 
-Mode2 并行/重试参数同 mode1（以 `MODE2_` 前缀独立控制）。
-
-### Mode3 图生图
+### Mode3 图片生成（gpt-image-2）
 
 | 配置项 | 默认值 | 说明 |
 |--------|--------|------|
-| `MODE3_OPENAI_API_KEY` | — | 密钥 |
-| `MODE3_OPENAI_BASE_URL` | `https://code.ciyuanapi.xyz/v1` | 地址 |
-| `MODE3_IMAGE_MODEL` | `gpt-image-2` | 模型 |
-| `MODE3_IMAGE_EDIT_SIZE` | `2048x2048` | 尺寸 |
-| `MODE3_IMAGE_WATERMARK` | `false` | 水印 |
-| `MODE3_IMAGE_QUALITY` | — | 画质参数（可选） |
+| `MODE3_IMAGE_API_KEY` | — | API 密钥 |
+| `MODE3_IMAGE_BASE_URL` | `https://code.ciyuanapi.xyz/v1` | 接口地址 |
+| `MODE3_IMAGE_MODEL` | `gpt-image-2` | 生图模型 |
 
-Mode3 并行/重试参数同 mode1（以 `MODE3_` 前缀独立控制）。
+以上均支持 fallback 到 `IMAGE_API_KEY` / `IMAGE_BASE_URL` / `IMAGE_MODEL`（通用配置），即只需要在对应 mode 不同时才写 `MODE?_` 前缀。
+
+### 并行生成（所有 mode 通用）
+
+`PARALLEL_WORKERS`、`RETRY_ATTEMPTS`、`RETRY_DELAY_SECONDS`、`PARTIAL_RETRY_ATTEMPTS`、`SEQUENTIAL_GENERATION`、`TIMEOUT_SECONDS` 对所有 mode 生效。如需单独覆盖，在对应 env var 前加 `MODE1_`/`MODE2_`/`MODE3_` 前缀，优先级：`MODE3_PARALLEL_WORKERS` > `PARALLEL_WORKERS` > 默认值 3。
+
+| 配置项 | 默认值 | 说明 |
+|--------|--------|------|
+| `PARALLEL_WORKERS` | `3` | 并发线程数 |
+| `RETRY_ATTEMPTS` | `2` | 单张重试次数 |
+| `RETRY_DELAY_SECONDS` | `0.5` | 重试间隔秒数 |
+| `PARTIAL_RETRY_ATTEMPTS` | `2` | 部分失败补图轮次 |
+| `SEQUENTIAL_GENERATION` | `auto` | 串行/并行策略 |
+| `TIMEOUT_SECONDS` | `180` | 单次请求超时秒数 |
+
+### 服饰成图质检
+
+| 配置项 | 默认值 | 说明 |
+|--------|--------|------|
+| `FASHION_OUTPUT_MAX_VERIFY_ATTEMPTS` | `3` | 成图质检最大重试次数 |
 
 ### Supabase
 
 | 配置项 | 必填 | 说明 |
 |--------|------|------|
-| `SUPABASE_URL` | 是 | 项目 URL |
-| `SUPABASE_ANON_KEY` | 是 | 前端 anon key |
-| `SUPABASE_SERVICE_ROLE_KEY` | 是 | 后端 service role key（严禁暴露） |
+| `SUPABASE_URL` | 是 | 项目 URL（也可用 `SUPABASE_PROJECT_URL`） |
+| `SUPABASE_ANON_KEY` | 是 | 前端 anon key（也可用 `SUPABASE_PUBLISHABLE_KEY`） |
+| `SUPABASE_SERVICE_ROLE_KEY` | 是 | 后端 service role key，严禁暴露（也可用 `SUPABASE_SERVICE_KEY`） |
 
 ### 积分
 
@@ -230,6 +230,13 @@ Mode3 并行/重试参数同 mode1（以 `MODE3_` 前缀独立控制）。
 | `COS_REGION` | 否 | 地域（如 `ap-guangzhou`） |
 | `COS_BUCKET` | 否 | 存储桶名 |
 | `COS_CDN_DOMAIN` | 否 | CDN 域名（不带协议头） |
+
+### 管理员
+
+| 配置项 | 默认值 | 说明 |
+|--------|--------|------|
+| `ADMIN_PASSWORD` | — | 管理员登录密码 |
+| `ADMIN_ALLOWED_PHONE` | — | 允许登录管理后台的手机号 |
 
 ---
 

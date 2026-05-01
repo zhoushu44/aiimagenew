@@ -9,7 +9,6 @@ logger = logging.getLogger(__name__)
 
 def generate_aplus_images(plan: dict, image_payloads, task_id: str, image_size_ratio: str, text_type: str, country: str, product_json=None, _logger: logging.Logger | None = None):
     from generation.modes import (
-        get_ark_client,
         call_app_mode_image_generation,
         _get_parallel_config,
     )
@@ -28,7 +27,7 @@ def generate_aplus_images(plan: dict, image_payloads, task_id: str, image_size_r
 
     def run_one(plan_item: dict):
         generated_items = call_app_mode_image_generation(
-            get_ark_client(),
+            None,
             plan_item['prompt'],
             image_payloads,
             image_size_ratio,

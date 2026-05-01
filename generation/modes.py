@@ -64,15 +64,36 @@ def collect_generated_images(response):
     return [_normalize_generated_image_item(item) for item in data]
 
 
+def _common_image_api_key(default: str = '') -> str:
+    return get_supabase_setting('IMAGE_API_KEY', get_optional_env('IMAGE_API_KEY', default))
+
+
+def _common_image_base_url(default: str = '') -> str:
+    return get_supabase_setting('IMAGE_BASE_URL', get_optional_env('IMAGE_BASE_URL', default)).rstrip('/')
+
+
+def _common_image_model(default: str = '') -> str:
+    return get_supabase_setting('IMAGE_MODEL', get_optional_env('IMAGE_MODEL', default))
+
+
 def get_mode1_api_key() -> str:
-    api_key = get_supabase_setting('ARK_API_KEY', get_optional_env('ARK_API_KEY', ''))
+    api_key = get_supabase_setting('MODE1_IMAGE_API_KEY', get_optional_env('MODE1_IMAGE_API_KEY', ''))
+    if not api_key:
+        api_key = _common_image_api_key('')
+    if not api_key:
+        api_key = get_supabase_setting('ARK_API_KEY', get_optional_env('ARK_API_KEY', ''))
     if not api_key:
         api_key = get_supabase_setting('OPENAI_API_KEY', get_optional_env('OPENAI_API_KEY', ''))
     return api_key
 
 
 def get_mode1_base_url() -> str:
-    return get_supabase_setting('ARK_BASE_URL', get_optional_env('ARK_BASE_URL', 'https://ark.cn-beijing.volces.com/api/v3')).rstrip('/')
+    url = get_supabase_setting('MODE1_IMAGE_BASE_URL', get_optional_env('MODE1_IMAGE_BASE_URL', '')).rstrip('/')
+    if not url:
+        url = _common_image_base_url('')
+    if not url:
+        url = get_supabase_setting('ARK_BASE_URL', get_optional_env('ARK_BASE_URL', 'https://ark.cn-beijing.volces.com/api/v3')).rstrip('/')
+    return url
 
 
 def get_mode1_client() -> OpenAI:
@@ -83,11 +104,17 @@ def get_mode1_client() -> OpenAI:
 
 
 def get_mode2_api_key() -> str:
-    return get_supabase_setting('MODE2_OPENAI_API_KEY', get_optional_env('MODE2_OPENAI_API_KEY', 'any-value'))
+    api_key = get_supabase_setting('MODE2_IMAGE_API_KEY', get_optional_env('MODE2_IMAGE_API_KEY', ''))
+    if not api_key:
+        api_key = _common_image_api_key('any-value')
+    return api_key
 
 
 def get_mode2_base_url() -> str:
-    return get_supabase_setting('MODE2_OPENAI_BASE_URL', get_optional_env('MODE2_OPENAI_BASE_URL', 'https://ark.cn-beijing.volces.com/api/v3')).rstrip('/')
+    url = get_supabase_setting('MODE2_IMAGE_BASE_URL', get_optional_env('MODE2_IMAGE_BASE_URL', '')).rstrip('/')
+    if not url:
+        url = _common_image_base_url('https://ark.cn-beijing.volces.com/api/v3')
+    return url
 
 
 def get_mode2_client() -> OpenAI:
@@ -98,14 +125,19 @@ def get_mode2_client() -> OpenAI:
 
 
 def get_mode3_api_key() -> str:
-    api_key = get_supabase_setting('MODE3_OPENAI_API_KEY', get_optional_env('MODE3_OPENAI_API_KEY', ''))
+    api_key = get_supabase_setting('MODE3_IMAGE_API_KEY', get_optional_env('MODE3_IMAGE_API_KEY', ''))
+    if not api_key:
+        api_key = _common_image_api_key('')
     if not api_key:
         api_key = get_supabase_setting('OPENAI_API_KEY', get_optional_env('OPENAI_API_KEY', ''))
     return api_key
 
 
 def get_mode3_base_url() -> str:
-    return get_supabase_setting('MODE3_OPENAI_BASE_URL', get_optional_env('MODE3_OPENAI_BASE_URL', 'https://code.ciyuanapi.xyz/v1')).rstrip('/')
+    url = get_supabase_setting('MODE3_IMAGE_BASE_URL', get_optional_env('MODE3_IMAGE_BASE_URL', '')).rstrip('/')
+    if not url:
+        url = _common_image_base_url('https://code.ciyuanapi.xyz/v1')
+    return url
 
 
 def get_mode3_client() -> OpenAI:
@@ -125,44 +157,32 @@ def get_ark_client() -> OpenAI:
     )
 
 
-def get_mode2_retry_attempts() -> int:
-    return max(get_supabase_setting_int('MODE2_RETRY_ATTEMPTS', get_optional_int_env('MODE2_RETRY_ATTEMPTS', 2)), 0)
+def _common_parallel_workers() -> int:
+    return max(get_supabase_setting_int('PARALLEL_WORKERS', get_optional_int_env('PARALLEL_WORKERS', 3)), 1)
 
 
-def get_mode2_retry_delay_seconds() -> float:
-    raw_value = get_supabase_setting('MODE2_RETRY_DELAY_SECONDS', get_optional_env('MODE2_RETRY_DELAY_SECONDS', '0.5'))
+def _common_retry_attempts() -> int:
+    return max(get_supabase_setting_int('RETRY_ATTEMPTS', get_optional_int_env('RETRY_ATTEMPTS', 2)), 0)
+
+
+def _common_retry_delay_seconds() -> float:
+    raw_value = get_supabase_setting('RETRY_DELAY_SECONDS', get_optional_env('RETRY_DELAY_SECONDS', '0.5'))
     try:
         return max(float(raw_value), 0.0)
     except ValueError:
         return 0.5
 
 
-def get_mode3_retry_attempts() -> int:
-    return max(get_supabase_setting_int('MODE3_RETRY_ATTEMPTS', get_optional_int_env('MODE3_RETRY_ATTEMPTS', 2)), 0)
+def _common_partial_retry_attempts() -> int:
+    return max(get_supabase_setting_int('PARTIAL_RETRY_ATTEMPTS', get_optional_int_env('PARTIAL_RETRY_ATTEMPTS', 2)), 0)
 
 
-def get_mode3_retry_delay_seconds() -> float:
-    raw_value = get_supabase_setting('MODE3_RETRY_DELAY_SECONDS', get_optional_env('MODE3_RETRY_DELAY_SECONDS', '0.5'))
-    try:
-        return max(float(raw_value), 0.0)
-    except ValueError:
-        return 0.5
+def _common_timeout_seconds() -> int:
+    return max(get_supabase_setting_int('TIMEOUT_SECONDS', get_optional_int_env('TIMEOUT_SECONDS', 180)), 30)
 
 
-def get_mode3_parallel_workers() -> int:
-    return max(get_supabase_setting_int('MODE3_PARALLEL_WORKERS', get_optional_int_env('MODE3_PARALLEL_WORKERS', 3)), 1)
-
-
-def get_mode3_partial_retry_attempts() -> int:
-    return max(get_supabase_setting_int('MODE3_PARTIAL_RETRY_ATTEMPTS', get_optional_int_env('MODE3_PARTIAL_RETRY_ATTEMPTS', 2)), 0)
-
-
-def get_mode3_timeout_seconds() -> int:
-    return max(get_supabase_setting_int('MODE3_TIMEOUT_SECONDS', get_optional_int_env('MODE3_TIMEOUT_SECONDS', 180)), 30)
-
-
-def should_mode3_use_sequential_generation(target_count: int, image_payloads) -> bool:
-    mode = str(get_supabase_setting('MODE3_SEQUENTIAL_GENERATION', get_optional_env('MODE3_SEQUENTIAL_GENERATION', 'auto')) or 'auto').strip().lower()
+def _common_sequential_generation(target_count: int, image_payloads) -> bool:
+    mode = str(get_supabase_setting('SEQUENTIAL_GENERATION', get_optional_env('SEQUENTIAL_GENERATION', 'auto')) or 'auto').strip().lower()
     if mode in {'on', 'true', '1', 'yes'}:
         return True
     if mode in {'off', 'false', '0', 'no'}:
@@ -171,23 +191,23 @@ def should_mode3_use_sequential_generation(target_count: int, image_payloads) ->
 
 
 def get_mode1_retry_attempts() -> int:
-    return max(get_supabase_setting_int('MODE1_RETRY_ATTEMPTS', get_optional_int_env('MODE1_RETRY_ATTEMPTS', 2)), 0)
+    return max(get_supabase_setting_int('MODE1_RETRY_ATTEMPTS', get_optional_int_env('MODE1_RETRY_ATTEMPTS', _common_retry_attempts())), 0)
 
 
 def get_mode1_retry_delay_seconds() -> float:
-    raw_value = get_supabase_setting('MODE1_RETRY_DELAY_SECONDS', get_optional_env('MODE1_RETRY_DELAY_SECONDS', '0.5'))
+    raw_value = get_supabase_setting('MODE1_RETRY_DELAY_SECONDS', get_optional_env('MODE1_RETRY_DELAY_SECONDS', str(_common_retry_delay_seconds())))
     try:
         return max(float(raw_value), 0.0)
     except ValueError:
-        return 0.5
+        return _common_retry_delay_seconds()
 
 
 def get_mode1_parallel_workers() -> int:
-    return max(get_supabase_setting_int('MODE1_PARALLEL_WORKERS', get_optional_int_env('MODE1_PARALLEL_WORKERS', 3)), 1)
+    return max(get_supabase_setting_int('MODE1_PARALLEL_WORKERS', get_optional_int_env('MODE1_PARALLEL_WORKERS', _common_parallel_workers())), 1)
 
 
 def get_mode1_partial_retry_attempts() -> int:
-    return max(get_supabase_setting_int('MODE1_PARTIAL_RETRY_ATTEMPTS', get_optional_int_env('MODE1_PARTIAL_RETRY_ATTEMPTS', 2)), 0)
+    return max(get_supabase_setting_int('MODE1_PARTIAL_RETRY_ATTEMPTS', get_optional_int_env('MODE1_PARTIAL_RETRY_ATTEMPTS', _common_partial_retry_attempts())), 0)
 
 
 def should_mode1_use_sequential_generation(target_count: int, image_payloads) -> bool:
@@ -196,15 +216,27 @@ def should_mode1_use_sequential_generation(target_count: int, image_payloads) ->
         return True
     if mode in {'off', 'false', '0', 'no'}:
         return False
-    return int(target_count or 0) <= 1
+    return _common_sequential_generation(target_count, image_payloads)
+
+
+def get_mode2_retry_attempts() -> int:
+    return max(get_supabase_setting_int('MODE2_RETRY_ATTEMPTS', get_optional_int_env('MODE2_RETRY_ATTEMPTS', _common_retry_attempts())), 0)
+
+
+def get_mode2_retry_delay_seconds() -> float:
+    raw_value = get_supabase_setting('MODE2_RETRY_DELAY_SECONDS', get_optional_env('MODE2_RETRY_DELAY_SECONDS', str(_common_retry_delay_seconds())))
+    try:
+        return max(float(raw_value), 0.0)
+    except ValueError:
+        return _common_retry_delay_seconds()
 
 
 def get_mode2_parallel_workers() -> int:
-    return max(get_supabase_setting_int('MODE2_PARALLEL_WORKERS', get_optional_int_env('MODE2_PARALLEL_WORKERS', 3)), 1)
+    return max(get_supabase_setting_int('MODE2_PARALLEL_WORKERS', get_optional_int_env('MODE2_PARALLEL_WORKERS', _common_parallel_workers())), 1)
 
 
 def get_mode2_partial_retry_attempts() -> int:
-    return max(get_supabase_setting_int('MODE2_PARTIAL_RETRY_ATTEMPTS', get_optional_int_env('MODE2_PARTIAL_RETRY_ATTEMPTS', 2)), 0)
+    return max(get_supabase_setting_int('MODE2_PARTIAL_RETRY_ATTEMPTS', get_optional_int_env('MODE2_PARTIAL_RETRY_ATTEMPTS', _common_partial_retry_attempts())), 0)
 
 
 def should_mode2_use_sequential_generation(target_count: int, image_payloads) -> bool:
@@ -213,7 +245,40 @@ def should_mode2_use_sequential_generation(target_count: int, image_payloads) ->
         return True
     if mode in {'off', 'false', '0', 'no'}:
         return False
-    return int(target_count or 0) <= 1
+    return _common_sequential_generation(target_count, image_payloads)
+
+
+def get_mode3_retry_attempts() -> int:
+    return max(get_supabase_setting_int('MODE3_RETRY_ATTEMPTS', get_optional_int_env('MODE3_RETRY_ATTEMPTS', _common_retry_attempts())), 0)
+
+
+def get_mode3_retry_delay_seconds() -> float:
+    raw_value = get_supabase_setting('MODE3_RETRY_DELAY_SECONDS', get_optional_env('MODE3_RETRY_DELAY_SECONDS', str(_common_retry_delay_seconds())))
+    try:
+        return max(float(raw_value), 0.0)
+    except ValueError:
+        return _common_retry_delay_seconds()
+
+
+def get_mode3_parallel_workers() -> int:
+    return max(get_supabase_setting_int('MODE3_PARALLEL_WORKERS', get_optional_int_env('MODE3_PARALLEL_WORKERS', _common_parallel_workers())), 1)
+
+
+def get_mode3_partial_retry_attempts() -> int:
+    return max(get_supabase_setting_int('MODE3_PARTIAL_RETRY_ATTEMPTS', get_optional_int_env('MODE3_PARTIAL_RETRY_ATTEMPTS', _common_partial_retry_attempts())), 0)
+
+
+def get_mode3_timeout_seconds() -> int:
+    return max(get_supabase_setting_int('MODE3_TIMEOUT_SECONDS', get_optional_int_env('MODE3_TIMEOUT_SECONDS', _common_timeout_seconds())), 30)
+
+
+def should_mode3_use_sequential_generation(target_count: int, image_payloads) -> bool:
+    mode = str(get_supabase_setting('MODE3_SEQUENTIAL_GENERATION', get_optional_env('MODE3_SEQUENTIAL_GENERATION', 'auto')) or 'auto').strip().lower()
+    if mode in {'on', 'true', '1', 'yes'}:
+        return True
+    if mode in {'off', 'false', '0', 'no'}:
+        return False
+    return _common_sequential_generation(target_count, image_payloads)
 
 
 def get_mode2_sample_strength(sample_strength: str) -> float:

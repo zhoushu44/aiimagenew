@@ -1294,12 +1294,16 @@ def get_mode3_suite_batch_size() -> int:
     return max(get_supabase_setting_int('MODE3_SUITE_BATCH_SIZE', get_optional_int_env('MODE3_SUITE_BATCH_SIZE', 1)), 1)
 
 
+def _common_timeout_seconds() -> int:
+    return max(get_supabase_setting_int('TIMEOUT_SECONDS', get_optional_int_env('TIMEOUT_SECONDS', 180)), 30)
+
+
 def get_mode1_timeout_seconds() -> int:
-    return max(get_supabase_setting_int('MODE1_TIMEOUT_SECONDS', get_optional_int_env('MODE1_TIMEOUT_SECONDS', 180)), 30)
+    return max(get_supabase_setting_int('MODE1_TIMEOUT_SECONDS', get_optional_int_env('MODE1_TIMEOUT_SECONDS', _common_timeout_seconds())), 30)
 
 
 def get_mode2_timeout_seconds() -> int:
-    return max(get_supabase_setting_int('MODE2_TIMEOUT_SECONDS', get_optional_int_env('MODE2_TIMEOUT_SECONDS', 180)), 30)
+    return max(get_supabase_setting_int('MODE2_TIMEOUT_SECONDS', get_optional_int_env('MODE2_TIMEOUT_SECONDS', _common_timeout_seconds())), 30)
 
 
 def extract_generated_image_from_content(content):
