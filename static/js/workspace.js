@@ -70,6 +70,7 @@ document.addEventListener('DOMContentLoaded', () => {
     const emptyThumbsMarkup = buildEmptyThumbsMarkup();
     const emptyReferenceThumbsMarkup = buildEmptyThumbsMarkup('待上传参考图');
     const emptyProductThumbsMarkup = buildEmptyThumbsMarkup('待上传商品图');
+    const FASHION_SCENE_PLAN_REQUEST_TIMEOUT_MS = 180000;
     const APLUS_MODULE_META = {
       hero_value: {
         title: '首屏主视觉',

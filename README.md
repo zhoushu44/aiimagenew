@@ -76,7 +76,7 @@ http://127.0.0.1:5078
 
 当前会同时推送同一个镜像的两个标签：
 
-- `9.0`
+- `9.1`
 - `latest`
 
 工作流文件：
@@ -271,15 +271,41 @@ mode1 和 mode2 同样支持与 mode3 完全一致的并行生成与三层断流
 
 | 配置项 | 必填 | 说明 |
 | --- | --- | --- |
-| `POINTS_SIGNUP_BONUS` | 否 | 注册赠送积分 |
-| `POINTS_DAILY_FREE` | 否 | 每日免费积分 |
-| `POINTS_RULE_SUITE` | 否 | 套图模式积分规则 JSON，当前按输出张数计费 |
-| `POINTS_RULE_MODE2` | 否 | mode2 生图积分规则 JSON，当前按输出张数计费 |
-| `POINTS_RULE_APLUS` | 否 | A+ 模块积分规则 JSON，当前按所选模块数计费 |
-| `POINTS_RULE_FASHION` | 否 | 服饰场景积分规则 JSON，当前按所选场景数计费 |
+| `POINTS_SIGNUP_BONUS` | 否 | 注册赠送积分，默认 `100` |
+| `POINTS_DAILY_FREE` | 否 | 每日签到免费积分，默认 `10` |
+| `POINTS_RULE_SUITE` | 否 | 套图模式积分规则 JSON，默认 `unit_cost=1, minimum_cost=1, metric=output_count` |
+| `POINTS_RULE_MODE2` | 否 | mode2 生图积分规则 JSON，默认 `unit_cost=1, minimum_cost=1, metric=output_count` |
+| `POINTS_RULE_APLUS` | 否 | A+ 模块积分规则 JSON，默认 `unit_cost=1, minimum_cost=1, metric=selected_modules_count` |
+| `POINTS_RULE_FASHION` | 否 | 服饰场景积分规则 JSON，默认 `unit_cost=1, minimum_cost=1, metric=selected_scene_count` |
 | `GENERATION_TASK_TTL_SECONDS` | 否 | 内存生成任务清理时间，默认 `7200` 秒，最小 `300` 秒 |
 | `GENERATION_TASK_POLL_RETENTION_SECONDS` | 否 | 前端可轮询恢复的任务保留时间，默认 `86400` 秒，最小 `3600` 秒 |
 | `GENERATION_TASK_WORKERS` | 否 | 后端生成任务线程数，默认 `2` |
+
+#### 积分规则 JSON 字段说明
+
+每个 `POINTS_RULE_*` 的 JSON 采用统一结构：
+
+| 字段 | 类型 | 说明 |
+| --- | --- | --- |
+| `key` | string | 规则标识，对应模式名：`suite` / `mode2` / `aplus` / `fashion` |
+| `label` | string | 前端展示名称，如 `套图`、`AI 生图`、`A+ 模块`、`服饰场景` |
+| `unit_cost` | int | 每单位消耗积分数，例如每次生成时每张图 / 每个模块 / 每个场景扣几分 |
+| `minimum_cost` | int | 单次生成最低消耗积分数，低于此值按此值扣 |
+| `metric` | string | 计数方式：`output_count`（输出张数）、`selected_modules_count`（选中模块数）、`selected_scene_count`（选中场景数） |
+
+示例 — 套图每张 4 积分，最低扣 4 分：
+
+```env
+POINTS_RULE_SUITE={"key":"suite","label":"套图","unit_cost":4,"minimum_cost":4,"metric":"output_count"}
+```
+
+#### 积分读取优先级
+
+所有积分配置（包括 `POINTS_SIGNUP_BONUS`、`POINTS_DAILY_FREE` 和 `POINTS_RULE_*`）的读取优先级：
+
+1. Supabase `api_settings` 表（如果在 Supabase 后台配了对应 key）
+2. `.env` 环境变量
+3. 代码默认值（如上表）
 
 ### ZPay
 
@@ -604,12 +630,15 @@ SUPABASE_ANON_KEY=
 
 ### 2026-05-01 · v9.0
 
+- **商品套图信任模块**：最后一张固定图类型从"配件/售后图"改为"信任背书图"，不再生成包装清单、附赠配件或配件展示内容；信任方向改为真实反馈感、品牌可信线索、品质检查感与交付可靠感
+- **服饰穿戴场景规划**：修复前端 `FASHION_SCENE_PLAN_REQUEST_TIMEOUT_MS is not defined` 导致点击"生成推荐场景"直接失败的问题，补上 180 秒超时常量
+- **积分配置文档**：完善 README 中 `POINTS_RULE_*` 的 JSON 字段说明、默认值、读取优先级和示例
 - mode1/mode2 接入并行生成与三层断流重试，与 mode3 完全对称
 - Fashion 穿搭、A+ 模块改为并发生成
 - mode2 文生图改为白底 PNG → 图生图
 - 修复 Fashion 场景规划跨域 CORS 无法获取模特图片
 - 新增 `POST /api/generate-mode1-image-edit`、`/api/generate-mode1-text2image`
-- Docker 镜像版本 `9.0` + `latest`
+- Docker 镜像版本 `9.1` + `latest`
 
 ### 2026-04-30
 
