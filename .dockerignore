@@ -6,7 +6,4 @@ node_modules
 .github
 .trae
 supabase
-test-tools
 README.md
-supabase_readme.md
-NEXT_SESSION.md

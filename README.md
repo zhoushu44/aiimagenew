@@ -1,730 +1,392 @@
 # AI Image New
 
-一个基于 Flask 的 AI 图片生成与会员支付项目，包含 Supabase 登录、积分、会员套餐、ZPay 支付、支付回调、订阅续期和前端账号面板。
+基于 Flask 的 AI 图片生成与会员支付项目，支持 Supabase 登录、积分、会员套餐、ZPay 支付、支付回调、订阅续期和前端账号面板。
 
 ## 功能概览
 
-- Flask 2.x 后端服务
-- Supabase Auth 登录与后端 session 同步
-- httpOnly Cookie 登录态
-- 积分余额、注册奖励、每日奖励
-- AI 图片生成与图片编辑
-- 生成任务支持刷新恢复、状态轮询和失败自动返还积分
-- 配置从 .env 和本地 config.json 读取
-- ZPay 支付创建接口
-- ZPay 支付成功回调验签
-- 一次性购买和订阅购买
-- 订阅到期时间自动叠加
-- 会员状态在账号面板展示
-- FRP 内网穿透支持支付平台回调本地服务
+- Flask 2.x 后端，模块化代码结构（`app.py` 仅 3044 行）
+- Supabase Auth 登录与后端 session 同步（httpOnly Cookie）
+- 积分系统：注册奖励、每日签到、按量消费、失败自动退款
+- AI 图片生成：3 种 App Mode（mode1/mode2/mode3），支持文生图/图生图
+- 套图（Suite）生成：6 张电商详情页套图，LLM 规划 + 并行生成
+- A+ 详情页生成：结构化电商 A+ 模块图文
+- 服饰穿搭（Fashion）：AI 模特生成、场景规划、成图质检
+- 生成任务持久化：支持刷新恢复、状态轮询、失败自动返还积分
+- LLM Chat 双模式：Ark 直连为主，自动 fallback 到备选接口
+- ZPay 支付：创建订单、异步回调验签、一次性/订阅购买
+- 订阅续期自动叠加，会员状态实时展示
+- COS/CDN 图片存储，自动生成公网 URL
+- 配置支持 `.env` + 本地 `config.json`（Settings 页面实时编辑）
 
-## 目录说明
+## 目录结构
 
 ```text
 .
-├── app.py                         # Flask 主应用
-├── auth.html                      # 登录/注册页面
-├── index.html                     # 首页
-├── suite.html                     # 工作台页面
-├── requirements.txt               # Python 依赖
-├── .env                           # 本地环境变量，不要提交到公开仓库
+├── app.py                    # Flask 主应用（3044 行）
+├── config.py                 # 全局配置与环境变量
+├── supabase_client.py        # Supabase REST 操作（积分、支付、用户、任务）
+├── utils.py                  # 通用工具函数
+├── image_utils.py            # 图片处理、编解码、保存、上传
+├── prompts.py                # 所有 LLM System/User Prompt 模板
+├── points_rules.py           # 积分规则定义与计价
+├── cos_utils.py              # 腾讯云 COS 上传/管理
+├── requirements.txt          # Python 依赖
+├── Dockerfile                # Docker 镜像构建
+├── .dockerignore             # 排除 .env 等敏感文件
+│
+├── pages/                    # 前端 HTML 页面
+│   ├── landing.html          # 首页
+│   ├── auth.html             # 登录/注册页面
+│   ├── suite.html            # 套图工作台
+│   ├── aplus.html            # A+ 详情页工作台
+│   ├── fashion.html          # 服饰穿搭工作台
+│   └── settings.html         # 配置管理页面
+│
+├── generation/               # AI 生图模块
+│   ├── __init__.py           # 统一导出
+│   ├── modes.py              # mode1/2/3 客户端、并行/重试、图片编解码
+│   ├── planning.py           # LLM Chat、JSON 修复、Suite/Fashion/A+ 规划
+│   ├── suite.py              # 套图并行生成编排
+│   └── aplus.py              # A+ 模块生成编排
+│
 ├── static/
-│   ├── js/
-│   │   ├── shared-topbar.js        # 顶部栏、登录弹窗、账号面板、VIP 支付弹窗
-│   │   └── workspace.js            # 工作台交互
-│   └── ...
+│   ├── css/
+│   │   ├── landing.css       # 首页样式
+│   │   └── workspace.css     # 工作台样式
+│   └── js/
+│       ├── shared-topbar.js  # 顶部栏、登录弹窗、账号面板、VIP 支付
+│       └── workspace.js      # 工作台交互逻辑
+│
 ├── supabase/
-│   └── migrations/                # Supabase 表结构迁移 SQL
-└── test-tools/
-    └── frpc/
-        ├── frpc-built.exe          # 测试用 frpc 客户端
-        └── frpc.toml               # 测试用 FRP 客户端配置
+│   └── migrations/           # 数据库迁移 SQL
+│
+└── .github/
+    └── workflows/
+        └── docker-publish.yml # GitHub Action 自动构建推送镜像
 ```
 
 ## 环境要求
 
-- Windows / macOS / Linux
 - Python 3.10+
 - pip
 - 可访问 Supabase 项目
-- 可访问 ZPay 支付网关
-- 如需本地接收支付回调，需要公网地址或 FRP 内网穿透
+- 可访问 ZPay 支付网关（可选）
+- 需要公网地址或 FRP 内网穿透来接收支付回调（可选）
 
-## 安装依赖
+## 安装与启动
 
 ```bash
 pip install -r requirements.txt
-```
-
-## 启动项目
-
-```bash
 python app.py
 ```
 
-默认监听：
-
-```text
-http://127.0.0.1:5078
-```
-
-如果 `.env` 配置了 `HOST` 和 `PORT`，会以 `.env` 为准。
+默认监听 `http://127.0.0.1:5078`。可通过 `.env` 中 `HOST` / `PORT` 配置。
 
 ## Docker 镜像发布
 
-当前项目通过 GitHub Action 自动构建并推送 Docker 镜像，不需要本地手动执行推送。
+通过 GitHub Action 自动构建并推送 Docker 镜像，**不需要本地手动执行**。
 
-当前会同时推送同一个镜像的两个标签：
+| 触发条件 | 标签 |
+|----------|------|
+| 推送到 `main` 分支 | `9.4` + `latest` |
+| GitHub Actions 手动触发 | `9.4` + `latest` |
 
-- `9.3`
-- `latest`
+- 构建平台：`linux/amd64` + `linux/arm64`
+- `.dockerignore` 已排除 `.env` 和 `.env.*`
+- 工作流文件：[docker-publish.yml](.github/workflows/docker-publish.yml)
 
-工作流文件：
+GitHub 仓库需要配置 Secrets：
+- `DOCKER_HUB_USERNAME` — Docker Hub 用户名
+- `DOCKER_HUB_TOKEN` — Docker Hub Access Token
 
-- [docker-publish.yml](file:///c:/Users/zs/Desktop/aiimagenew/.github/workflows/docker-publish.yml)
+---
 
-说明：
-
-- 推送到 `main` 分支后会自动构建并推送镜像
-- 也可以在 GitHub Actions 页面手动触发
-- `.dockerignore` 已继续排除 `.env` 和 `.env.*`，不会把本地环境变量打进镜像
-
-## .env 配置完整版
-
-项目从 `.env` 读取配置。当前 `.env` 已按模块分组：
-
-```env
-# Flask
-HOST=0.0.0.0
-PORT=5078
-FLASK_DEBUG=false
-APP_MODE=mode3
-
-# OpenAI-compatible image generation provider
-OPENAI_API_KEY=你的 OpenAI 兼容接口 Key
-OPENAI_BASE_URL=https://api.example.com/v1
-OPENAI_MODEL=gpt-5.4-mini
-
-# Volcengine Ark image generation
-ARK_API_KEY=你的火山 Ark Key
-ARK_BASE_URL=https://ark.cn-beijing.volces.com/api/v3
-ARK_IMAGE_MODEL=doubao-seedream-5-0-260128
-ARK_IMAGE_SIZE=2048x2048
-ARK_IMAGE_QUALITY=
-ARK_IMAGE_WATERMARK=false
-ARK_SEQUENTIAL_IMAGE_GENERATION=auto
-ARK_SEQUENTIAL_MAX_IMAGES=1
-MODE1_RETRY_ATTEMPTS=2
-MODE1_RETRY_DELAY_SECONDS=1.5
-MODE1_PARALLEL_WORKERS=3
-MODE1_PARTIAL_RETRY_ATTEMPTS=2
-MODE1_TIMEOUT_SECONDS=180
-MODE1_SEQUENTIAL_GENERATION=auto
-
-# Mode 2 image edit / text-to-image
-MODE2_OPENAI_API_KEY=你的图片编辑 Key
-MODE2_OPENAI_BASE_URL=https://ark.cn-beijing.volces.com/api/v3
-MODE2_IMAGE_EDIT_MODEL=doubao-seedream-5-0-260128
-MODE2_TEXT2IMAGE_MODEL=doubao-seedream-5-0-260128
-MODE2_DEFAULT_RATIO=1:1
-MODE2_DEFAULT_RESOLUTION=2048x2048
-MODE2_DEFAULT_SAMPLE_STRENGTH=0.65
-MODE2_ALLOWED_IMAGE_HOSTS=
-MODE2_RETRY_ATTEMPTS=2
-MODE2_RETRY_DELAY_SECONDS=1.5
-MODE2_PARALLEL_WORKERS=3
-MODE2_PARTIAL_RETRY_ATTEMPTS=2
-MODE2_TIMEOUT_SECONDS=180
-MODE2_SEQUENTIAL_GENERATION=auto
-
-# Mode 3 image edit / text-to-image
-MODE3_OPENAI_API_KEY=你的图生图 Key
-MODE3_OPENAI_BASE_URL=https://api.example.com/v1
-MODE3_IMAGE_MODEL=gpt-image-2
-MODE3_IMAGE_EDIT_SIZE=2048x2048
-MODE3_RETRY_ATTEMPTS=2
-MODE3_RETRY_DELAY_SECONDS=1.5
-MODE3_PARALLEL_WORKERS=9
-MODE3_PARTIAL_RETRY_ATTEMPTS=2
-MODE3_SEQUENTIAL_GENERATION=off
-
-# Supabase
-SUPABASE_URL=https://你的项目.supabase.opentrust.net
-SUPABASE_ANON_KEY=你的 anon key
-SUPABASE_SERVICE_ROLE_KEY=你的 service role key
-SUPABASE_SETTINGS_SCOPE=global
-SUPABASE_SETTINGS_ALLOWED_EMAIL=
-SUPABASE_SETTINGS_ALLOWED_EMAILS=
-
-# Points
-POINTS_SIGNUP_BONUS=100
-POINTS_DAILY_FREE=10
-POINTS_RULE_SUITE={"key":"suite","label":"套图","unit_cost":4,"minimum_cost":4,"metric":"output_count"}
-POINTS_RULE_MODE2={"key":"mode2","label":"AI 生图","unit_cost":4,"minimum_cost":4,"metric":"output_count"}
-POINTS_RULE_APLUS={"key":"aplus","label":"A+ 模块","unit_cost":4,"minimum_cost":4,"metric":"selected_modules_count"}
-POINTS_RULE_FASHION={"key":"fashion","label":"服饰场景","unit_cost":4,"minimum_cost":4,"metric":"selected_scene_count"}
-GENERATION_TASK_TTL_SECONDS=7200
-GENERATION_TASK_POLL_RETENTION_SECONDS=86400
-GENERATION_TASK_WORKERS=2
-
-# ZPay
-ZPAY_PID=你的商户 PID
-ZPAY_KEY=你的 ZPay 密钥
-ZPAY_GATEWAY=https://zpayz.cn/submit.php
-ZPAY_NOTIFY_URL=http://你的公网地址/api/pay/notify
-ZPAY_RETURN_URL=http://你的公网地址/
-ZPAY_DEFAULT_CHANNEL=alipay
-SUBSCRIPTION_PRODUCT_DAYS_JSON={"plan_2":30,"plan_3":90}
-```
-
-## 关键配置说明
+## .env 配置参考
 
 ### Flask
 
-| 配置项 | 必填 | 说明 |
-| --- | --- | --- |
-| `HOST` | 否 | Flask 监听地址，本地调试可用 `127.0.0.1`，FRP 穿透建议 `0.0.0.0` |
-| `PORT` | 否 | Flask 监听端口，当前项目默认使用 `5078` |
-| `FLASK_DEBUG` | 否 | 是否开启调试模式，生产环境建议 `false` |
-| `APP_MODE` | 否 | 应用模式，取值 `mode1`/`mode2`/`mode3`，默认 `mode1`。控制套图、A+ 等走对应生成链路。可通过 settings 页面实时切换 |
+| 配置项 | 默认值 | 说明 |
+|--------|--------|------|
+| `HOST` | `0.0.0.0` | 监听地址 |
+| `PORT` | `5078` | 监听端口 |
+| `FLASK_DEBUG` | `false` | 调试模式 |
+| `APP_MODE` | `mode1` | 生图模式：`mode1` / `mode2` / `mode3`（可在 Settings 页面切换） |
 
-### AI 模型
-
-| 配置项 | 必填 | 说明 |
-| --- | --- | --- |
-| `OPENAI_API_KEY` | 是 | OpenAI 兼容接口密钥 |
-| `OPENAI_BASE_URL` | 是 | OpenAI 兼容接口地址 |
-| `OPENAI_MODEL` | 是 | 文生图/文本生成使用的模型名 |
-| `ARK_API_KEY` | 是 | 火山 Ark 图片生成接口密钥 |
-| `ARK_BASE_URL` | 否 | Ark 接口地址，默认 `https://ark.cn-beijing.volces.com/api/v3` |
-| `ARK_IMAGE_MODEL` | 是 | Ark 图片生成模型 |
-| `ARK_IMAGE_SIZE` | 否 | 默认图片尺寸 |
-| `ARK_IMAGE_QUALITY` | 否 | 图片质量参数，留空则不传 |
-| `ARK_IMAGE_WATERMARK` | 否 | 是否开启水印 |
-| `ARK_SEQUENTIAL_IMAGE_GENERATION` | 否 | 多图顺序生成策略，默认 `auto` |
-| `ARK_SEQUENTIAL_MAX_IMAGES` | 否 | 顺序生成最大图片数 |
-
-### Mode2 图片编辑
+### OpenAI 兼容接口（Chat / 套图规划 / 风格分析）
 
 | 配置项 | 必填 | 说明 |
-| --- | --- | --- |
-| `MODE2_OPENAI_API_KEY` | 是 | 图片编辑接口密钥 |
-| `MODE2_OPENAI_BASE_URL` | 是 | 图片编辑接口地址 |
-| `MODE2_IMAGE_EDIT_MODEL` | 是 | 图片编辑模型 |
-| `MODE2_TEXT2IMAGE_MODEL` | 是 | 文生图模型 |
-| `MODE2_DEFAULT_RATIO` | 否 | 默认比例，例如 `1:1` |
-| `MODE2_DEFAULT_RESOLUTION` | 否 | 默认分辨率，例如 `2048x2048` |
-| `MODE2_DEFAULT_SAMPLE_STRENGTH` | 否 | 参考图强度，默认 `0.65` |
-| `MODE2_ALLOWED_IMAGE_HOSTS` | 否 | 允许远程参考图的域名白名单，多个用英文逗号分隔 |
+|--------|------|------|
+| `OPENAI_API_KEY` | 是 | 接口密钥 |
+| `OPENAI_BASE_URL` | 是 | 接口地址 |
+| `OPENAI_MODEL` | 是 | 模型名 |
+| `CHAT_FALLBACK_TO_ARK` | 否 | 主接口失败时自动切 Ark（默认 `auto`） |
+| `ARK_CHAT_API_KEY` | 否 | 备选 Ark Chat 密钥 |
+| `ARK_CHAT_BASE_URL` | 否 | 备选 Ark Chat 地址 |
+| `ARK_CHAT_MODEL` | 否 | 备选 Ark Chat 模型 |
+| `SUITE_PLAN_TIMEOUT_SECONDS` | 否 | 套图规划超时秒数（默认 `180`，最小 `60`） |
 
-### Mode3 图生图
+### Ark 图片生成（mode1 / 默认通用模式）
 
-| 配置项 | 必填 | 说明 |
-| --- | --- | --- |
-| `MODE3_OPENAI_API_KEY` | 是 | 图生图接口密钥 |
-| `MODE3_OPENAI_BASE_URL` | 是 | 图生图接口地址 |
-| `MODE3_IMAGE_MODEL` | 是 | 图生图模型，当前使用 `gpt-image-2` |
-| `MODE3_IMAGE_EDIT_SIZE` | 否 | 图生图尺寸，默认 `2048x2048` |
-| `MODE3_TIMEOUT_SECONDS` | 否 | 单次请求超时，默认 `180`，最小 `30` |
-| `MODE3_RETRY_ATTEMPTS` | 否 | 单张图生成重试次数，默认 `2`，最小 `0` |
-| `MODE3_RETRY_DELAY_SECONDS` | 否 | 重试间隔秒数，默认 `1.5`，最小 `0` |
-| `MODE3_SEQUENTIAL_GENERATION` | 否 | 串行生成策略，`on`=强制串行，`off`=强制并行，`auto`=自动（>1张图时并行） |
-| `MODE3_PARALLEL_WORKERS` | 否 | 套图并发线程数，默认 `9`，最小 `1`。mode3 套图按每张图独立 prompt 并发，总耗时接近单张 |
-| `MODE3_PARTIAL_RETRY_ATTEMPTS` | 否 | 套图部分失败后的补图重试次数，默认 `2`，最小 `0` |
-| `MODE3_SUITE_BATCH_SIZE` | 否 | 套图批次大小，仅非 mode3 模式生效，mode3 已改为并发 |
-
-mode1 和 mode2 同样支持与 mode3 完全一致的并行生成与三层断流重试，各自通过对应的环境变量独立控制：
+| 配置项 | 默认值 | 说明 |
+|--------|--------|------|
+| `ARK_API_KEY` | — | Ark 密钥 |
+| `ARK_BASE_URL` | `https://ark.cn-beijing.volces.com/api/v3` | Ark 地址 |
+| `ARK_IMAGE_MODEL` | `doubao-seedream-5-0-260128` | 生图模型 |
+| `ARK_IMAGE_SIZE` | `2048x2048` | 默认尺寸 |
+| `ARK_IMAGE_WATERMARK` | `false` | 水印 |
+| `ARK_SEQUENTIAL_IMAGE_GENERATION` | `auto` | 多图顺序策略 |
+| `ARK_SEQUENTIAL_MAX_IMAGES` | `1` | 顺序最大张数 |
 
 ### Mode1 并行配置
 
 | 配置项 | 默认值 | 说明 |
-| --- | --- | --- |
-| `MODE1_RETRY_ATTEMPTS` | `2` | 单张图重试次数 |
-| `MODE1_RETRY_DELAY_SECONDS` | `1.5` | 重试间隔秒数 |
-| `MODE1_PARALLEL_WORKERS` | `3` | 并发线程数 |
-| `MODE1_PARTIAL_RETRY_ATTEMPTS` | `2` | 部分失败后补图轮次 |
-| `MODE1_TIMEOUT_SECONDS` | `180` | 单次请求超时秒数 |
-| `MODE1_SEQUENTIAL_GENERATION` | `auto` | 串行/并行策略 |
+|--------|--------|------|
+| `MODE1_RETRY_ATTEMPTS` | `2` | 单张重试 |
+| `MODE1_RETRY_DELAY_SECONDS` | `0.5` | 重试间隔 |
+| `MODE1_PARALLEL_WORKERS` | `3` | 并发数 |
+| `MODE1_PARTIAL_RETRY_ATTEMPTS` | `2` | 补图轮次 |
+| `MODE1_TIMEOUT_SECONDS` | `180` | 超时秒数 |
+| `MODE1_SEQUENTIAL_GENERATION` | `auto` | 串行策略 |
 
-### Mode2 并行配置
+### Mode2 图片编辑
 
 | 配置项 | 默认值 | 说明 |
-| --- | --- | --- |
-| `MODE2_RETRY_ATTEMPTS` | `2` | 单张图重试次数 |
-| `MODE2_RETRY_DELAY_SECONDS` | `1.5` | 重试间隔秒数 |
-| `MODE2_PARALLEL_WORKERS` | `3` | 并发线程数 |
-| `MODE2_PARTIAL_RETRY_ATTEMPTS` | `2` | 部分失败后补图轮次 |
-| `MODE2_TIMEOUT_SECONDS` | `180` | 单次请求超时秒数 |
-| `MODE2_SEQUENTIAL_GENERATION` | `auto` | 串行/并行策略 |
+|--------|--------|------|
+| `MODE2_OPENAI_API_KEY` | — | 密钥 |
+| `MODE2_OPENAI_BASE_URL` | `https://ark.cn-beijing.volces.com/api/v3` | 地址 |
+| `MODE2_IMAGE_EDIT_MODEL` | `doubao-seedream-5-0-260128` | 图生图模型 |
+| `MODE2_TEXT2IMAGE_MODEL` | `doubao-seedream-5-0-260128` | 文生图模型 |
+| `MODE2_DEFAULT_RATIO` | `1:1` | 默认比例 |
+| `MODE2_DEFAULT_RESOLUTION` | `2048x2048` | 默认分辨率 |
+| `MODE2_DEFAULT_SAMPLE_STRENGTH` | `0.65` | 参考图强度 |
+| `MODE2_ALLOWED_IMAGE_HOSTS` | — | 远程图片域名白名单 |
+
+Mode2 并行/重试参数同 mode1（以 `MODE2_` 前缀独立控制）。
+
+### Mode3 图生图
+
+| 配置项 | 默认值 | 说明 |
+|--------|--------|------|
+| `MODE3_OPENAI_API_KEY` | — | 密钥 |
+| `MODE3_OPENAI_BASE_URL` | `https://code.ciyuanapi.xyz/v1` | 地址 |
+| `MODE3_IMAGE_MODEL` | `gpt-image-2` | 模型 |
+| `MODE3_IMAGE_EDIT_SIZE` | `2048x2048` | 尺寸 |
+| `MODE3_IMAGE_WATERMARK` | `false` | 水印 |
+| `MODE3_IMAGE_QUALITY` | — | 画质参数（可选） |
+
+Mode3 并行/重试参数同 mode1（以 `MODE3_` 前缀独立控制）。
 
 ### Supabase
 
 | 配置项 | 必填 | 说明 |
-| --- | --- | --- |
-| `SUPABASE_URL` | 是 | Supabase 项目 URL |
-| `SUPABASE_ANON_KEY` | 是 | 前端登录用 anon key，可公开，但仍建议由后端注入页面配置 |
-| `SUPABASE_SERVICE_ROLE_KEY` | 是 | 后端管理员 key，只能放后端 `.env`，严禁写入前端 JS |
-| `SUPABASE_SETTINGS_ALLOWED_EMAIL` | 否 | 允许访问配置管理的单个邮箱 |
-| `SUPABASE_SETTINGS_ALLOWED_EMAILS` | 否 | 允许访问配置管理的多个邮箱，英文逗号分隔 |
+|--------|------|------|
+| `SUPABASE_URL` | 是 | 项目 URL |
+| `SUPABASE_ANON_KEY` | 是 | 前端 anon key |
+| `SUPABASE_SERVICE_ROLE_KEY` | 是 | 后端 service role key（严禁暴露） |
 
-### 积分与生成任务
+### 积分
 
-| 配置项 | 必填 | 说明 |
-| --- | --- | --- |
-| `POINTS_SIGNUP_BONUS` | 否 | 注册赠送积分，默认 `100` |
-| `POINTS_DAILY_FREE` | 否 | 每日签到免费积分，默认 `10` |
-| `POINTS_RULE_SUITE` | 否 | 套图模式积分规则 JSON，默认 `unit_cost=1, minimum_cost=1, metric=output_count` |
-| `POINTS_RULE_MODE2` | 否 | mode2 生图积分规则 JSON，默认 `unit_cost=1, minimum_cost=1, metric=output_count` |
-| `POINTS_RULE_APLUS` | 否 | A+ 模块积分规则 JSON，默认 `unit_cost=1, minimum_cost=1, metric=selected_modules_count` |
-| `POINTS_RULE_FASHION` | 否 | 服饰场景积分规则 JSON，默认 `unit_cost=1, minimum_cost=1, metric=selected_scene_count` |
-| `GENERATION_TASK_TTL_SECONDS` | 否 | 内存生成任务清理时间，默认 `7200` 秒，最小 `300` 秒 |
-| `GENERATION_TASK_POLL_RETENTION_SECONDS` | 否 | 前端可轮询恢复的任务保留时间，默认 `86400` 秒，最小 `3600` 秒 |
-| `GENERATION_TASK_WORKERS` | 否 | 后端生成任务线程数，默认 `2` |
+| 配置项 | 默认值 | 说明 |
+|--------|--------|------|
+| `POINTS_SIGNUP_BONUS` | `100` | 注册奖励 |
+| `POINTS_DAILY_FREE` | `10` | 每日签到 |
+| `POINTS_RULE_SUITE` | `{"key":"suite","label":"套图","unit_cost":4,"minimum_cost":4,"metric":"output_count"}` | 套图积分规则 |
+| `POINTS_RULE_MODE2` | `{"key":"mode2","label":"AI 生图","unit_cost":4,"minimum_cost":4,"metric":"output_count"}` | mode2 规则 |
+| `POINTS_RULE_APLUS` | `{"key":"aplus","label":"A+ 模块","unit_cost":4,"minimum_cost":4,"metric":"selected_modules_count"}` | A+ 规则 |
+| `POINTS_RULE_FASHION` | `{"key":"fashion","label":"服饰场景","unit_cost":4,"minimum_cost":4,"metric":"selected_scene_count"}` | 服饰规则 |
+| `GENERATION_TASK_TTL_SECONDS` | `7200` | 任务内存 TTL |
+| `GENERATION_TASK_POLL_RETENTION_SECONDS` | `86400` | 轮询保留时间 |
+| `GENERATION_TASK_WORKERS` | `2` | 异步任务线程数 |
 
-#### 积分规则 JSON 字段说明
-
-每个 `POINTS_RULE_*` 的 JSON 采用统一结构：
+#### 积分规则 JSON 字段
 
 | 字段 | 类型 | 说明 |
-| --- | --- | --- |
-| `key` | string | 规则标识，对应模式名：`suite` / `mode2` / `aplus` / `fashion` |
-| `label` | string | 前端展示名称，如 `套图`、`AI 生图`、`A+ 模块`、`服饰场景` |
-| `unit_cost` | int | 每单位消耗积分数，例如每次生成时每张图 / 每个模块 / 每个场景扣几分 |
-| `minimum_cost` | int | 单次生成最低消耗积分数，低于此值按此值扣 |
-| `metric` | string | 计数方式：`output_count`（输出张数）、`selected_modules_count`（选中模块数）、`selected_scene_count`（选中场景数） |
+|------|------|------|
+| `key` | string | 规则标识 |
+| `label` | string | 前端名称 |
+| `unit_cost` | int | 每单位消耗积分 |
+| `minimum_cost` | int | 最低消耗 |
+| `metric` | string | 计数方式 |
 
-示例 — 套图每张 4 积分，最低扣 4 分：
-
-```env
-POINTS_RULE_SUITE={"key":"suite","label":"套图","unit_cost":4,"minimum_cost":4,"metric":"output_count"}
-```
-
-#### 积分读取优先级
-
-所有积分配置（包括 `POINTS_SIGNUP_BONUS`、`POINTS_DAILY_FREE` 和 `POINTS_RULE_*`）的读取优先级：
-
-1. Supabase `api_settings` 表（如果在 Supabase 后台配了对应 key）
-2. `.env` 环境变量
-3. 代码默认值（如上表）
+积分读取优先级：Supabase `api_settings` 表 → `.env` → 代码默认值。
 
 ### ZPay
 
 | 配置项 | 必填 | 说明 |
-| --- | --- | --- |
-| `ZPAY_PID` | 是 | ZPay 商户 ID |
-| `ZPAY_KEY` | 是 | ZPay 签名密钥，只能放后端 |
-| `ZPAY_GATEWAY` | 是 | ZPay 支付提交地址 |
-| `ZPAY_NOTIFY_URL` | 是 | 支付平台异步回调地址，必须公网可访问 |
-| `ZPAY_RETURN_URL` | 是 | 用户支付完成后浏览器跳回地址 |
-| `ZPAY_DEFAULT_CHANNEL` | 否 | 默认支付通道，当前为 `alipay` |
-| `SUBSCRIPTION_PRODUCT_DAYS_JSON` | 是 | 订阅套餐天数配置，例如 `{"plan_2":30,"plan_3":90}` |
+|--------|------|------|
+| `ZPAY_PID` | 是 | 商户 ID |
+| `ZPAY_KEY` | 是 | 签名密钥 |
+| `ZPAY_GATEWAY` | 是 | 支付提交地址 |
+| `ZPAY_NOTIFY_URL` | 是 | 异步回调地址（公网可达） |
+| `ZPAY_RETURN_URL` | 是 | 支付完成跳转地址 |
+| `ZPAY_DEFAULT_CHANNEL` | 否 | 默认通道（`alipay`） |
 
-## 前端 Key 安全说明
+### COS
 
-项目已经清理了前端硬编码 Supabase key：
+| 配置项 | 必填 | 说明 |
+|--------|------|------|
+| `COS_SECRET_ID` | 否 | 腾讯云 SecretId |
+| `COS_SECRET_KEY` | 否 | 腾讯云 SecretKey |
+| `COS_REGION` | 否 | 地域（如 `ap-guangzhou`） |
+| `COS_BUCKET` | 否 | 存储桶名 |
+| `COS_CDN_DOMAIN` | 否 | CDN 域名（不带协议头） |
 
-- [shared-topbar.js](file:///c:/Users/zs/Desktop/aiimagenew/static/js/shared-topbar.js) 不再写死 `SUPABASE_URL` 和 `SUPABASE_ANON_KEY`
-- [auth.html](file:///c:/Users/zs/Desktop/aiimagenew/auth.html) 不再写死 `SUPABASE_URL` 和 `SUPABASE_ANON_KEY`
-- 后端会在渲染 HTML 时注入：
+---
 
-```html
-<script>window.AI_IMAGE_CONFIG = { ... };</script>
+## API 路由一览
+
+```
+  GET    /                                          landing 首页
+  GET    /suite           /aplus       /fashion     工作台页面
+  GET    /settings        /auth         /logout      页面 / 登录入口
+
+  GET    /api/app-mode                               当前模式查询
+  POST   /api/auth/login    /register                邮箱密码登录/注册
+  POST   /api/auth/session  /session-sync /logout    Session 管理
+  POST   /api/admin/login   /session /logout         管理员
+  GET    /api/points/balance /rules                  积分查询
+  POST   /api/points/daily-claim /quote /spend /refund  积分操作
+  POST   /api/generate-suite     /aplus    /fashion-model  套图/A+/模特
+  POST   /api/generate-mode{1,2,3}-text2image        单图文生图
+  POST   /api/generate-mode{1,2,3}-image-edit        单图图生图
+  POST   /api/style-analysis                         风格分析
+  POST   /api/ai-write                               文案生成
+  POST   /api/download-zip                           批量下载
+  GET    /api/generation-tasks/<id>                  任务查询
+  POST   /api/generation-tasks/<id>/cancel           任务取消
+  POST   /api/pay/create                             创建支付
+  GET|POST /api/pay/notify                           支付回调
+  GET|PATCH|POST /api/settings*                      配置管理
 ```
 
-前端只会拿到：
+---
 
-- `supabaseUrl`
-- `supabaseAnonKey`
+## 前端 Key 安全
 
-不会拿到：
+- 后端渲染 HTML 时注入 `window.AI_IMAGE_CONFIG = { supabaseUrl, supabaseAnonKey }`
+- 前端 JS 不再硬编码任何 Key
+- `SUPABASE_SERVICE_ROLE_KEY`、`ZPAY_KEY`、各 `API_KEY` 永远不在浏览器出现
 
-- `SUPABASE_SERVICE_ROLE_KEY`
-- `ZPAY_KEY`
-- `OPENAI_API_KEY`
-- `ARK_API_KEY`
+---
 
-注意：Supabase anon key 本身允许在浏览器使用，但要配合 RLS 策略和后端接口权限控制。service role key 永远不要暴露给浏览器。
-
-## Supabase 后台配置
+## Supabase 数据库
 
 ### 必需表
 
-项目依赖以下表或迁移：
+| 表名 | 作用 |
+|------|------|
+| `user_points_balances` | 积分余额 |
+| `user_points_transactions` | 积分流水 |
+| `user_profiles` | 用户扩展（管理员、会员到期） |
+| `zpay_transactions` | ZPay 订单 |
+| `vip_plan_config` | VIP 套餐配置 |
+| `generation_tasks` | 生成任务持久化 |
 
-- `user_profiles`
-- `user_points_balances`
-- `user_points_transactions`
-- `zpay_transactions`
-- `generation_tasks`
-
-迁移 SQL 位于：
-
-```text
-supabase/migrations/
-```
-
-### 会员字段
-
-`user_profiles` 需要包含：
-
-```sql
-subscribe_expire timestamptz
-```
-
-该字段用于判断用户会员是否有效。后端现在会判断：
-
-```text
-subscribe_expire > 当前时间
-```
-
-只有到期时间大于当前时间，才会返回 `membership_active = true`。
-
-### 生成任务表
-
-`generation_tasks` 用于保存用户生成任务状态，支持页面刷新后恢复生成结果。核心字段包括：
-
-- `id`：生成任务 ID
-- `user_id`：任务所属用户
-- `mode`：生成模式，例如 `suite`、`fashion`
-- `request_id`：积分扣减请求 ID，用于失败后返还积分
-- `status`：任务状态，取值 `pending`、`running`、`succeeded`、`failed`
-- `result`：生成成功后的结果 JSON
-- `error` / `details`：失败原因
-- `spend_record`：本次扣分记录
-- `refunded` / `refund_error`：自动退款结果
-
-相关接口：
-
-```http
-GET /api/generation-tasks/<task_id>
-POST /api/generation-tasks/<task_id>/cancel
-```
-
-注意：当前生成任务会写入 Supabase，并保留进程内缓存兜底。若线上容器在生成中被强制重启，正在运行的线程会中断；要做到完全任务续跑，需要额外接入队列 Worker 或定时重试机制。
-
-### 支付订单表
-
-`zpay_transactions` 用于存储支付订单，核心字段包括：
-
-- `out_trade_no`
-- `user_id`
-- `amount`
-- `status`
-- `type`
-- `product_id`
-- `trade_no`
-- `subscribe_start`
-- `subscribe_expire`
-- `created_at`
-- `updated_at`
-
-支付状态：
-
-- `pending`：已创建，未支付或未成功回调
-- `success`：支付成功并已处理权益
+迁移 SQL 位于 `supabase/migrations/`。
 
 ### 会员套餐配置
 
-当前项目的套餐时长配置来自后端环境变量：
+套餐配置从 Supabase `vip_plan_config` 表读取（`config_key = 'default'` 行）：
 
-```env
-SUBSCRIPTION_PRODUCT_DAYS_JSON={"plan_2":30,"plan_3":90}
+```sql
+insert into public.vip_plan_config (config_key, recommended_plan,
+  plan_name_1, discount_price_1, points_1, pay_type_1,
+  plan_name_2, discount_price_2, points_2, pay_type_2, validity_days_2, badge_2,
+  plan_name_3, discount_price_3, points_3, pay_type_3, validity_days_3, badge_3)
+values ('default', 'plan_2',
+  '体验包', '9.90', 100, 'one_time',
+  '月度会员', '29.90', 300, 'subscribe', 30, '推荐',
+  '季度会员', '79.90', 1000, 'subscribe', 90, '超值')
+on conflict (config_key) do update set ... ;
 ```
 
-也就是说：
+---
 
-- 当前不再依赖 Supabase 的 `vip_plan_config` 表
-- 套餐天数由 `.env` 管理
-- 支付成功后仍然会更新 `user_profiles.subscribe_expire`
+## 支付链路
 
-如果以后你需要做前端可视化套餐管理，再单独加表会更合适。
+1. **创建订单** `POST /api/pay/create`：校验登录态 → 校验套餐 → 写入 `zpay_transactions` → 签名 → 返回支付链接
+2. **支付回调** `GET|POST /api/pay/notify`：验签 → 查询订单 → 校验金额 → 防重 → 更新状态 → 发放积分/延长会员
+3. **订阅续期**：未过期从原到期日叠加，已过期从当前时间开始
 
-## 支付链路说明
+---
 
-### 创建订单
+## Mode3 技术参考
 
-接口：
+Mode3 使用 OpenAI-compatible 的 multipart `images/edits` 接口：
 
-```http
-POST /api/pay/create
+```
+POST {MODE3_OPENAI_BASE_URL}/images/edits
 ```
 
-要求：
+请求格式 `multipart/form-data`，返回 `{ data: [{ url: "..." }] }`。
 
-- 用户必须已登录
-- 后端从 httpOnly Cookie 中读取 session
-- 请求参数包括套餐、金额、支付类型
+套图性能基准（6 张，mode3 并行）：
 
-后端会：
+| 阶段 | 耗时 | 说明 |
+|------|------|------|
+| LLM 套图规划 | ~86s | doubao-seed-2-0-mini，prompt ~2.6KB |
+| mode3 并行生成 | ~35s | 9 workers，单张 ~30s |
+| **总计** | **~121s** | 每张平摊 ~20s |
 
-1. 校验登录态
-2. 校验 `product_id`、`amount`、`pay_type`
-3. 生成唯一 `out_trade_no`
-4. 写入 `zpay_transactions`，状态为 `pending`
-5. 使用 `ZPAY_KEY` 生成签名
-6. 返回 ZPay 支付链接
-
-### 支付回调
-
-接口：
-
-```http
-GET/POST /api/pay/notify
-```
-
-支付平台回调后，后端会：
-
-1. 解析回调参数
-2. 使用 `ZPAY_KEY` 验签
-3. 查询订单
-4. 校验金额一致
-5. 防重复处理，订单已成功则直接返回 `success`
-6. 更新订单状态为 `success`
-7. 订阅订单更新 `user_profiles.subscribe_expire`
-8. 返回字符串 `success`
-
-### 订阅续期规则
-
-订阅订单会自动叠加：
-
-- 首次开通：从当前时间开始加套餐天数
-- 已过期：从当前时间开始加套餐天数
-- 未过期：从原到期时间继续叠加套餐天数
-
-套餐天数来自：
-
-```env
-SUBSCRIPTION_PRODUCT_DAYS_JSON={"plan_2":30,"plan_3":90}
-```
-
-## FRP 内网穿透测试配置
-
-FRPC 只用于本地测试支付回调，已单独放在测试工具目录，不属于正式业务代码。
-
-如果本地开发要接收 ZPay 回调，需要公网地址转发到本机 Flask。
-
-当前 FRP 客户端测试配置：
-
-```text
-test-tools/frpc/frpc.toml
-```
-
-示例：
-
-```toml
-serverAddr = "8.163.52.51"
-serverPort = 7000
-
-auth.method = "token"
-auth.token = "你的 frps token"
-
-[[proxies]]
-name = "aiimagenew-pay"
-type = "tcp"
-localIP = "127.0.0.1"
-localPort = 5078
-remotePort = 60009
-```
-
-启动：
-
-```powershell
-.\test-tools\frpc\frpc-built.exe -c .\test-tools\frpc\frpc.toml
-```
-
-对应 `.env`：
-
-```env
-ZPAY_NOTIFY_URL=http://8.163.52.51:60009/api/pay/notify
-ZPAY_RETURN_URL=http://8.163.52.51:60009/
-```
-
-## 登录与 session-sync
-
-前端登录成功后会调用：
-
-```http
-POST /api/auth/session-sync
-```
-
-后端会把 Supabase session 写入 httpOnly Cookie。之后受保护接口通过后端 Cookie 判断登录态。
-
-退出登录时调用：
-
-```http
-POST /api/auth/logout
-```
-
-后端会清理 Cookie，前端会清理 Supabase 本地 session。
-
-## 本地验证命令
-
-### Python 语法检查
-
-```bash
-python -m py_compile app.py
-```
-
-### Flask 应用导入检查
-
-```bash
-python -c "from app import app; print('routes', len(list(app.url_map.iter_rules())))"
-```
-
-### 前端 JS 语法检查
-
-```bash
-node --check static/js/shared-topbar.js
-node --check static/js/workspace.js
-```
-
-## 常见问题
-
-### 支付成功但订单仍是 pending
-
-重点检查：
-
-1. `ZPAY_NOTIFY_URL` 是否公网可访问
-2. FRP 是否正在运行
-3. Flask 是否监听在 `PORT=5078`
-4. `/api/pay/notify` 是否被登录守卫拦截
-5. `ZPAY_KEY` 是否和支付平台一致
-6. 回调金额是否和订单金额一致
-
-### 支付后跳回登录页
-
-重点检查：
-
-1. 登录后是否成功调用 `/api/auth/session-sync`
-2. 浏览器是否保留 Cookie
-3. `ZPAY_RETURN_URL` 是否跳回正确页面
-4. 前端是否能读取当前 Supabase session
-
-### 会员已过期但仍显示已开通
-
-当前版本已修复。后端会判断 `subscribe_expire` 是否大于当前时间，只有未过期才返回 `membership_active=true`。
-
-### 生成过程中刷新页面后看不到结果
-
-当前版本已修复。套图和服饰生成会先创建 `generation_tasks` 任务，前端保存 `task_id` 并轮询任务状态；刷新页面后会自动恢复未完成任务，生成成功后重新渲染结果。
-
-如果线上仍无法恢复，重点检查：
-
-1. Supabase 是否已执行 `20260429_create_generation_tasks.sql`
-2. `SUPABASE_URL` 和 `SUPABASE_SERVICE_ROLE_KEY` 是否正确
-3. `/api/generation-tasks/<task_id>` 是否返回 401/403/404
-4. 容器是否在生成中被重启或强杀
-
-### 前端提示 Supabase 配置缺失
-
-检查 `.env`：
-
-```env
-SUPABASE_URL=
-SUPABASE_ANON_KEY=
-```
-
-并确认页面是通过 Flask 返回的，不是直接用浏览器打开本地 HTML 文件。
-
-## mode3 套图生成性能基准
-
-### 测试环境
-
-- APP_MODE=mode3 | 生图模型: gpt-image-2 | 并行度: 9 workers
-- 套图输出: 6 张 (Hero→Selling→Scene→Detail→Specs→Trust)
-- 套图模式无基准模特生成、无 LLM 质检验证，链路较短
-
-### 实测耗时分解（6 张套图，v9.3 优化后）
-
-| 阶段 | 耗时 | 占比 | 说明 |
-| --- | --- | --- | --- |
-| LLM 套图规划 (doubao) | ~86s | 71% | prompt 精简至 ~2.6KB，doubao-seed-2-0-mini |
-| mode3 并行生成 (6 张) | ~35s | 29% | ThreadPool workers=9，单张 gpt-image-2 约 30s |
-| **服务端总计** | **~121s** | 100% | 含规划 + 生成 + COS 存储 |
-
-### 性能优化历程（5 轮实测）
-
-| 轮次 | 配置 | 耗时 | 相比基线 |
-| --- | --- | --- | --- |
-| ① 基线 | gpt-5.4-mini + prompt 12KB | 165s | — |
-| ② 换模型 | doubao + prompt 12KB | 144s | -21s (-13%) |
-| ③ 精简prompt | gpt-5.4-mini + prompt 2.6KB | 131s | -34s (-21%) |
-| ④ 叠加b64 | doubao + prompt 2.6KB + b64_json | 149s | -16s (b64反而慢，已回退) |
-| **⑤ 最终** | **doubao + prompt 2.6KB + 重试0.5s** | **121s** | **-44s (-27%)** |
-
-### LLM 模型对比
-
-| 模型 | 规划耗时 | 单套成本 | 多模态 | 备注 |
-| --- | --- | --- | --- | --- |
-| **doubao-seed-2-0-mini** (Ark 直连) | ~86s | ¥0.008 | ✅ | **当前默认**，成本 < 1 分钱/套 |
-| gpt-5.4-mini (nofx 代理) | ~130s | 取决于代理 | ✅ | 已弃用，代理延迟高 |
-| DeepSeek V4 Flash | ~35s (估) | ¥0.012 | ❌ 纯文本 | 最快但不支持图片输入 |
-
-### 套图 vs 穿搭(fashion) 对比
-
-| 环节 | 套图(suite) | 穿搭(fashion) | 备注 |
-| --- | --- | --- | --- |
-| 基准模特生成 | ❌ 无 | ~30s | fashion 需先生成 AI 模特 |
-| 场景/套图规划 | ~86s (doubao) | ~19s (doubao) | suite prompt 远比 fashion 复杂 |
-| mode3 API 调用 | ~35s (6张并行) | ~40s/张 | fashion 串行无并行 |
-| LLM 质检验证 | ❌ 无 | ~18s/张 | fashion 需检模特一致性+穿搭正确性 |
-| **每张平摊耗时** | **~20s** | **~120s** | 套图效率高 6x |
-| **总耗时(6张)** | **~121s** | 不适用 | fashion 按张生成，6 张需 ~720s |
-
-### 进一步加速建议
-
-| 优先级 | 方案 | 难度 | 预估收益 |
-| --- | --- | --- | --- |
-| 🟡 P1 | 规划缓存 (同品类+同卖点复用) | 中 | -86s (命中时) |
-| 🟢 P2 | 前端超时 180s→120s ([workspace.js:73](file:///e:/360MoveData/Users/Administrator/Desktop/aiimagenew/static/js/workspace.js#L73)) | 低 | 体验提升 |
-| 🔵 P3 | 规划与生成流水线并行 | 高 | -10~20s |
+---
 
 ## 近期更新
 
+### 2026-05-01 · v9.4
+
+- **代码重构**：`app.py` 从 7326 行降至 3044 行（-58%），提取 `supabase_client.py`（887 行）和 `generation/` 包（2570 行）
+- `generation/modes.py`：mode1/2/3 客户端工厂、单图/并行生成、重试逻辑
+- `generation/planning.py`：LLM Chat、JSON 修复、Suite/Fashion/A+ 规划函数
+- `generation/suite.py` + `generation/aplus.py`：套图/A+ 并行编排
+- `app.logger` → 可注入 `logging.Logger`，所有模块独立日志
+- HTML 页面归入 `pages/` 目录
+- 删除 4 个旧测试文件，项目更整洁
+- **Docker 镜像 9.4 + latest**
+- 重构后全部 42 个路由回归测试通过，认证/积分/生图全链路正常
+
 ### 2026-05-01 · v9.3
 
-- **LLM 全模式切 doubao**：OPENAI_MODEL 从 gpt-5.4-mini (nofx 代理) 切到 doubao-seed-2-0-mini (Ark 直连)，套图/fashion/aplus/质检全部生效，成本 ¥0.008/套
-- **套图规划 prompt 精简 63%**：SUITE_PLAN_USER_PROMPT 从 ~7KB 压缩至 ~2.6KB，保留全部叙事规则与 JSON 结构约束，规划耗时减少 34s
-- **重试间隔全局减半**：mode1/mode2/mode3 重试间隔从 1.5s 降至 0.5s，代码默认值与 `.env` 同步更新
-- **b64_json 验证后回退**：实测 mode3 images/edits 用 b64_json 反而慢 17s（base64 膨胀 + API 编码开销 > CDN 下载），保持 url
-- **套图性能**：三轮优化后 6 张套图从 165s→121s (-27%)，每张平摊 ~20s
-- **Docker 镜像 9.3 + latest**
-
-### 2026-05-01 · v9.1
-
-- **mode3 套图性能基准**：实测 6 张套图全流程耗时 ~165s
-- **LLM 选型对比**：验证 doubao-seed-2-0-mini 可替代 gpt-5.4-mini
-- **商品套图信任模块**：最后一张图类型改为"信任背书图"
-- **服饰穿戴场景规划**：修复前端 `FASHION_SCENE_PLAN_REQUEST_TIMEOUT_MS is not defined`
-- **积分配置文档**：完善 `POINTS_RULE_*` 的 JSON 字段说明
-- mode1/mode2 接入并行生成与三层断流重试，与 mode3 完全对称
-- Fashion 穿搭、A+ 模块改为并发生成
+- LLM 全模式切 doubao-seed-2-0-mini（Ark 直连），成本 ¥0.008/套
+- 套图规划 prompt 精简 63%（7KB→2.6KB），规划耗时 -34s
+- 重试间隔全局减半（1.5s→0.5s）
+- b64_json 回退到 url（b64 反慢 17s）
+- 套图三轮优化：165s→121s（-27%）
 
 ### 2026-04-30
 
-- **mode3 套图并发生成**：mode3 套图不再逐张串行，而是每张图独立 prompt 并发请求，9 张总耗时从 6-10 分钟降至约 1 分钟。并发数由 `MODE3_PARALLEL_WORKERS` 控制（默认 9）。
-- **三层断流重试**：高并发下的 SSL EOF、连接断流等瞬时网络错误现在可自动重试，覆盖 API 调用层、套图批量补图层、图片 URL 下载层。
-- **A+ 模块 524 回退**：当 nofx 源超时返回 524 时，自动重试后回退到 ARK Chat，避免 A+ 规划直接失败。
-- **Supabase 查询编码修复**：`cs.` JSONB 查询改用紧凑 JSON（无空格），修复 `+` 编码导致 PostgREST 400 的问题。
-- **Settings 页面 APP_MODE**：即使 `.env` 未配 `APP_MODE`，设置页也始终显示当前模式并可切换。
-- **`.env` 新增 `APP_MODE=mode3`**：默认启用 mode3 生图链路。
+- mode3 套图并发生成（9 workers，9 张图 ~1 分钟）
+- 三层断流重试（API 层 + 补图层 + 下载层）
+- A+ 模块 524 自动回退 Ark Chat
+- Supabase JSONB 查询编码修复
 
-## 清理说明
+---
 
-本项目已清理：
+## 本地验证
 
-- 临时图片文件
-- 临时 base64 文件
-- 旧 SQL 辅助 Python 脚本
-- FRP 源码克隆目录
-- 运行日志
-- Python pycache
-- 无用 `/api/execute-sql` 路由
-- 前端硬编码 Supabase URL 和 anon key
+```bash
+# Python 语法检查
+python -m py_compile app.py
 
-保留为独立测试工具：
+# 全部模块导入
+python -c "import app; print(len(list(app.app.url_map.iter_rules())), 'routes')"
 
-- `test-tools/frpc/frpc-built.exe`
-- `test-tools/frpc/frpc.toml`
+# COS 连通性
+python -c "import cos_utils; print(cos_utils.is_cos_enabled())"
+```
 
-这两个文件仅用于本地支付回调穿透测试，不属于正式业务代码。
+---
+
+## 常见问题
+
+### 支付回调不生效
+1. `ZPAY_NOTIFY_URL` 是否公网可达
+2. `ZPAY_KEY` 是否正确
+3. `/api/pay/notify` 是否返回 `fail`（查看服务端日志中的 ZPAY 日志）
+
+### 生成后刷新页面看不到结果
+1. Supabase 是否执行了 `generation_tasks` 建表 SQL
+2. `SUPABASE_SERVICE_ROLE_KEY` 是否正确
+3. `/api/generation-tasks/<task_id>` 返回 401/404 表示未登录或任务过期
+
+### 前端提示 Supabase 配置缺失
+确保页面通过 Flask 返回（`http://127.0.0.1:5078/`），不是直接双击 HTML 文件。

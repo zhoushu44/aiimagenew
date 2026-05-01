@@ -30,28 +30,112 @@ from urllib3.util.retry import Retry
 from werkzeug.exceptions import RequestEntityTooLarge
 from cos_utils import upload_to_cos, generate_cos_key, is_cos_enabled, COS_URL_PREFIX
 
-BASE_DIR = Path(__file__).resolve().parent
-CONFIG_FILE = BASE_DIR / 'config.json'
-load_dotenv(BASE_DIR / '.env')
+from supabase_client import (
+    _fetch_user_points_row, _normalize_points_row, _build_legacy_points_balance_row,
+    _create_legacy_points_balance_row, _ensure_points_balance_row_direct,
+    _claim_daily_free_points_direct, _spend_user_points_direct, add_user_points_direct,
+    get_user_points_balance, fetch_vip_plan_config, grant_payment_points_once,
+    is_generation_task_persistence_enabled, build_generation_task_db_payload,
+    persist_generation_task, fetch_generation_task_row, normalize_generation_task_row,
+    fetch_latest_active_subscription, create_payment_order_record,
+    fetch_payment_order_by_out_trade_no, update_payment_order,
+    fetch_user_profile_by_user_id, upsert_user_subscription_profile,
+    _fetch_supabase_user_admin_flag,
+    find_refundable_spend_transaction, find_refund_transaction_for_request,
+    build_supabase_auth_headers, normalize_supabase_session,
+    refresh_supabase_session, supabase_logout_session, supabase_auth_password,
+)
+from generation import (
+    get_ark_client, get_mode1_client, get_mode2_client, get_mode3_client,
+    call_mode1_image_edit, call_mode1_text2image,
+    call_mode2_image_edit, call_mode2_text2image, call_mode2_images_generate_with_retry,
+    call_mode3_image_edit, call_mode3_text2image,
+    call_mode1_single_image, call_mode1_single_image_with_retry,
+    call_mode1_images_parallel_with_partial_retry,
+    call_mode2_single_image, call_mode2_single_image_with_retry,
+    call_mode2_images_parallel_with_partial_retry,
+    call_mode3_single_image, call_mode3_single_image_with_retry,
+    call_mode3_images_parallel_with_partial_retry,
+    call_app_mode_image_generation, call_image_generation,
+    create_mode1_blank_canvas_payload, create_mode2_blank_canvas_payload, create_mode3_blank_canvas_payload,
+    build_mode1_reference_anchor_prompt,
+    generate_suite_images,
+    generate_mode1_suite_images_parallel, generate_mode2_suite_images_parallel,
+    generate_mode3_suite_images_parallel,
+    generate_aplus_images,
+    _get_parallel_config,
+    call_chat_completion, call_chat_json_with_repair,
+    parse_selected_style, parse_product_json_payload,
+    parse_fashion_selected_model_payload_from_data,
+    extract_product_json_from_image_payloads,
+    get_request_value,
+    PRODUCT_JSON_FALLBACK, PRODUCT_JSON_PROMPT_TEMPLATE,
+    FASHION_SCENE_PLAN_MODEL_TIMEOUT_SECONDS, FASHION_MODEL_APPEARANCE_FALLBACK,
+)
+
+from config import (
+    BASE_DIR, CONFIG_FILE, LOCAL_CONFIG, load_local_config, save_local_config,
+    get_first_env, get_env_csv, get_supabase_setting, get_supabase_setting_int,
+    get_supabase_setting_float, get_supabase_setting_bool, get_supabase_setting_csv,
+    get_supabase_setting_json, get_optional_env, get_optional_int_env, get_optional_bool_env,
+    build_supabase_request_url, _get_supabase_user_id, _build_supabase_service_headers,
+    _post_supabase_rpc, get_mode2_allowed_image_hosts, get_settings_allowed_emails,
+    get_settings_allowed_phones, _normalize_supabase_setting_key, _supabase_setting_is_sensitive,
+    _mask_supabase_setting_value, get_admin_password, get_admin_session_secret,
+    _normalize_phone_identifier, _is_truthy_flag, normalize_app_mode, get_app_mode,
+    GENERATED_SUITES_DIR, SUPABASE_URL, SUPABASE_ANON_KEY, SUPABASE_SERVICE_ROLE_KEY,
+    SUPABASE_SESSION_COOKIE, SUPABASE_SESSION_SYNC_COOKIE, ADMIN_SESSION_COOKIE,
+    PROTECTED_PAGE_PATHS, PUBLIC_API_PREFIXES, PUBLIC_PATH_PREFIXES, PUBLIC_PATHS,
+    SUPABASE_USER_PROFILES_TABLE, SUPABASE_POINTS_TABLE, SUPABASE_PAYMENTS_TABLE,
+    SUPABASE_GENERATION_TASKS_TABLE, GENERATION_TASK_TTL_SECONDS,
+    GENERATION_TASK_POLL_RETENTION_SECONDS, GENERATION_TASKS, GENERATION_TASKS_LOCK,
+    GENERATION_TASK_EXECUTOR, ZPAY_PID, ZPAY_KEY, ZPAY_GATEWAY, ZPAY_NOTIFY_URL,
+    ZPAY_RETURN_URL, ZPAY_DEFAULT_CHANNEL, ZPAY_SUCCESS_STATUSES, VIP_PLAN_CONFIG_TABLE,
+    MAX_IMAGE_UPLOADS, ALLOWED_IMAGE_MIME_TYPES, ALLOWED_IMAGE_EXTENSIONS, IMAGE_SIGNATURES,
+)
+from utils import (
+    parse_money_amount, normalize_vip_plan_key, _resolve_configured_plan_key,
+    parse_iso_datetime, normalize_platform_label, build_task_name, build_generated_at,
+    resolve_image_size, parse_string_list, strip_code_fences, remove_trailing_json_commas,
+    parse_json_candidate, normalize_hex_color, parse_runtime_error, parse_ark_exception,
+    normalize_plan_short_text, normalize_plan_enum, normalize_plan_type_list,
+    parse_json_string_list, _extract_single_supabase_row, _safe_json_payload,
+)
+from image_utils import (
+    guess_extension, sanitize_filename_part, sniff_image_mime_type, validate_image_file,
+    cleanup_generated_suites, file_to_data_url, create_image_payload,
+    build_multimodal_content, is_private_ip_address, validate_mode2_remote_image_url,
+    build_remote_image_payload, _fetch_url_to_image_payload, _download_image_url_with_retry,
+    decode_generated_image, save_generated_image, save_reference_image,
+    build_reference_images, build_mode2_success_response, build_generated_suite_image_item,
+    build_fashion_model_summary, build_fashion_model_response,
+    normalize_product_json, serialize_product_json, build_product_json_prompt_text,
+    build_plan_control_prompt, build_enriched_image_prompt,
+)
+from points_rules import (
+    DEFAULT_POINTS_RULES, ALLOWED_POINTS_RULE_METRICS, POINTS_RULE_SETTING_KEYS,
+    normalize_points_rule, _get_env_points_rule_json, get_points_rules, get_points_rule,
+    calculate_points_cost, build_points_consume_payload,
+)
+from prompts import (
+    HEX_COLOR_PATTERN, SAFE_NAME_PATTERN,
+    SYSTEM_PROMPT, PRODUCT_JSON_SYSTEM_PROMPT, USER_PROMPT_TEMPLATE,
+    PRODUCT_JSON_USER_PROMPT_TEMPLATE, STYLE_ANALYSIS_SYSTEM_PROMPT,
+    STYLE_ANALYSIS_USER_PROMPT_TEMPLATE, FASHION_OUTPUT_VERIFIER_SYSTEM_PROMPT,
+    FASHION_OUTPUT_VERIFIER_USER_PROMPT_TEMPLATE, FASHION_OUTPUT_MAX_VERIFY_ATTEMPTS,
+    FASHION_SCENE_PLAN_SYSTEM_PROMPT, FASHION_SCENE_PLAN_USER_PROMPT_TEMPLATE,
+    SUITE_PLAN_SYSTEM_PROMPT, SUITE_PLAN_USER_PROMPT_TEMPLATE,
+    SUITE_TYPE_META, SUITE_TYPE_RULES,
+    APLUS_PLAN_SYSTEM_PROMPT, APLUS_PLAN_USER_PROMPT_TEMPLATE, APLUS_MODULE_META,
+    IMAGE_SIZE_RATIO_MAP,
+    FASHION_DEFAULT_PLATFORM, FASHION_DEFAULT_COUNTRY, FASHION_DEFAULT_TEXT_TYPE,
+    FASHION_DEFAULT_SELLING_TEXT, FASHION_DEFAULT_SELECTED_STYLE,
+    FASHION_SCENE_PLAN_MODEL_TIMEOUT_SECONDS, FASHION_MODEL_APPEARANCE_FALLBACK,
+)
 
 
-def load_local_config() -> dict[str, str]:
-    if not CONFIG_FILE.exists():
-        return {}
-    try:
-        with open(CONFIG_FILE, 'r', encoding='utf-8') as f:
-            data = json.load(f)
-            return data if isinstance(data, dict) else {}
-    except Exception:
-        return {}
-
-
-def save_local_config(config: dict[str, str]) -> None:
-    with open(CONFIG_FILE, 'w', encoding='utf-8') as f:
-        json.dump(config, f, ensure_ascii=False, indent=2)
-
-
-LOCAL_CONFIG = load_local_config()
+import logging
+logger = logging.getLogger(__name__)
 
 app = Flask(__name__, static_folder=str(BASE_DIR / 'static'), static_url_path='/static')
 app.config['SEND_FILE_MAX_AGE_DEFAULT'] = 0
@@ -76,247 +160,6 @@ def handle_request_entity_too_large(exc):
     return jsonify({'success': False, 'error': message}), 413
 
 
-def get_first_env(names: list[str]) -> str:
-    for name in names:
-        value = os.getenv(name, '').strip()
-        if value:
-            return value
-    raise ValueError(f'缺少环境变量：{" / ".join(names)}')
-
-MAX_IMAGE_UPLOADS = 3
-ALLOWED_IMAGE_MIME_TYPES = {
-    'image/jpeg',
-    'image/png',
-    'image/webp',
-    'image/gif',
-    'image/bmp',
-}
-ALLOWED_IMAGE_EXTENSIONS = {'.jpg', '.jpeg', '.png', '.webp', '.gif', '.bmp'}
-IMAGE_SIGNATURES = {
-    'image/jpeg': [b'\xff\xd8\xff'],
-    'image/png': [b'\x89PNG\r\n\x1a\n'],
-    'image/webp': [b'RIFF'],
-    'image/gif': [b'GIF87a', b'GIF89a'],
-    'image/bmp': [b'BM'],
-}
-GENERATED_SUITES_DIR = BASE_DIR / 'generated-suites'
-SUPABASE_SESSION_COOKIE = 'aiimagenew_supabase_session'
-SUPABASE_SESSION_SYNC_COOKIE = 'aiimagenew_supabase_session_sync'
-ADMIN_SESSION_COOKIE = 'aiimagenew_admin_session'
-PROTECTED_PAGE_PATHS = {'/suite', '/aplus', '/fashion', '/settings'}
-PUBLIC_API_PREFIXES = ('/api/auth/', '/api/admin/', '/api/app-mode', '/api/points/rules', '/api/points/quote', '/api/pay/notify')
-PUBLIC_PATH_PREFIXES = ('/static/', '/generated/')
-PUBLIC_PATHS = {'/', '/logout'}
-SUPABASE_URL = (os.getenv('SUPABASE_URL') or os.getenv('SUPABASE_PROJECT_URL') or '').strip()
-SUPABASE_ANON_KEY = (os.getenv('SUPABASE_ANON_KEY') or os.getenv('SUPABASE_PUBLISHABLE_KEY') or '').strip()
-SUPABASE_SERVICE_ROLE_KEY = (os.getenv('SUPABASE_SERVICE_ROLE_KEY') or os.getenv('SUPABASE_SERVICE_KEY') or '').strip()
-SUPABASE_USER_PROFILES_TABLE = 'user_profiles'
-SUPABASE_POINTS_TABLE = 'user_points_balances'
-SUPABASE_PAYMENTS_TABLE = 'zpay_transactions'
-SUPABASE_GENERATION_TASKS_TABLE = 'generation_tasks'
-GENERATION_TASK_TTL_SECONDS = max(int(os.getenv('GENERATION_TASK_TTL_SECONDS') or 7200), 300)
-GENERATION_TASK_POLL_RETENTION_SECONDS = max(int(os.getenv('GENERATION_TASK_POLL_RETENTION_SECONDS') or 86400), 3600)
-GENERATION_TASKS: dict[str, dict] = {}
-GENERATION_TASKS_LOCK = threading.Lock()
-GENERATION_TASK_EXECUTOR = concurrent.futures.ThreadPoolExecutor(max_workers=max(int(os.getenv('GENERATION_TASK_WORKERS') or 2), 1))
-ZPAY_PID = (os.getenv('ZPAY_PID') or '').strip()
-ZPAY_KEY = (os.getenv('ZPAY_KEY') or '').strip()
-ZPAY_GATEWAY = (os.getenv('ZPAY_GATEWAY') or 'https://zpayz.cn/submit.php').strip()
-ZPAY_NOTIFY_URL = (os.getenv('ZPAY_NOTIFY_URL') or '').strip()
-ZPAY_RETURN_URL = (os.getenv('ZPAY_RETURN_URL') or '').strip()
-ZPAY_DEFAULT_CHANNEL = (os.getenv('ZPAY_DEFAULT_CHANNEL') or 'alipay').strip()
-ZPAY_SUCCESS_STATUSES = {'TRADE_SUCCESS', 'TRADE_FINISHED', 'SUCCESS'}
-VIP_PLAN_CONFIG_TABLE = 'vip_plan_config'
-
-
-def build_supabase_request_url(path: str) -> str:
-    return f'{SUPABASE_URL.rstrip("/")}{path}'
-
-
-def _get_supabase_user_id(session_data: dict | None = None) -> str:
-    session_payload = session_data or g.get('supabase_session') or {}
-    user = session_payload.get('user') or {}
-    return str(user.get('id') or '').strip()
-
-
-def _build_supabase_service_headers() -> dict:
-    return {
-        'apikey': SUPABASE_SERVICE_ROLE_KEY,
-        'Authorization': f'Bearer {SUPABASE_SERVICE_ROLE_KEY}',
-        'Content-Type': 'application/json',
-    }
-
-
-def _post_supabase_rpc(function_name: str, payload: dict) -> dict:
-    if not SUPABASE_URL or not SUPABASE_SERVICE_ROLE_KEY:
-        raise RuntimeError('Supabase 服务配置缺失')
-
-    response = requests.post(
-        build_supabase_request_url(f'/rest/v1/rpc/{function_name}'),
-        headers={
-            **_build_supabase_service_headers(),
-            'Prefer': 'return=representation',
-        },
-        json=payload,
-        timeout=20,
-    )
-    response.raise_for_status()
-
-    try:
-        return response.json()
-    except ValueError as exc:
-        raise RuntimeError('Supabase RPC 返回了无效响应') from exc
-
-
-def _fetch_user_points_row(user_id: str) -> dict | None:
-    if not SUPABASE_URL or not SUPABASE_SERVICE_ROLE_KEY:
-        return None
-    normalized_user_id = str(user_id or '').strip()
-    if not normalized_user_id:
-        return None
-
-    response = requests.get(
-        build_supabase_request_url(f'/rest/v1/{SUPABASE_POINTS_TABLE}'),
-        headers=_build_supabase_service_headers(),
-        params={
-            'select': '*',
-            'user_id': f'eq.{normalized_user_id}',
-            'limit': '1',
-        },
-        timeout=20,
-    )
-    response.raise_for_status()
-    payload = response.json()
-    if not isinstance(payload, list) or not payload:
-        return None
-    row = payload[0]
-    return row if isinstance(row, dict) else None
-
-
-def _normalize_points_row(points_row: dict | None, user_id: str = '') -> dict:
-    payload = points_row if isinstance(points_row, dict) else {}
-    normalized_user_id = str(payload.get('user_id') or user_id or '').strip()
-    balance = payload.get('balance')
-    if balance is None:
-        balance = payload.get('points_balance')
-    total_earned = payload.get('total_earned')
-    total_spent = payload.get('total_spent')
-    return {
-        'user_id': normalized_user_id,
-        'balance': int(balance or 0),
-        'total_earned': int(total_earned or 0),
-        'total_spent': int(total_spent or 0),
-        'signup_bonus_awarded_at': payload.get('signup_bonus_awarded_at'),
-        'last_daily_claim_at': payload.get('last_daily_claim_at'),
-        'created_at': payload.get('created_at'),
-        'updated_at': payload.get('updated_at'),
-    }
-
-
-def _build_legacy_points_balance_row(user_id: str) -> dict:
-    normalized_user_id = str(user_id or '').strip()
-    timestamp = datetime.now(timezone.utc).isoformat()
-    return {
-        'user_id': normalized_user_id,
-        'balance': 0,
-        'total_earned': 0,
-        'total_spent': 0,
-        'signup_bonus_awarded_at': None,
-        'last_daily_claim_at': None,
-        'created_at': timestamp,
-        'updated_at': timestamp,
-    }
-
-
-def _create_legacy_points_balance_row(user_id: str) -> dict | None:
-    normalized_user_id = str(user_id or '').strip()
-    if not normalized_user_id or not SUPABASE_URL or not SUPABASE_SERVICE_ROLE_KEY:
-        return None
-    seed_row = _build_legacy_points_balance_row(normalized_user_id)
-    response = requests.post(
-        build_supabase_request_url(f'/rest/v1/{SUPABASE_POINTS_TABLE}'),
-        headers={
-            **_build_supabase_service_headers(),
-            'Prefer': 'resolution=merge-duplicates,return=representation',
-        },
-        json=seed_row,
-        timeout=20,
-    )
-    response.raise_for_status()
-    payload = response.json()
-    if isinstance(payload, list) and payload:
-        return _normalize_points_row(payload[0], normalized_user_id)
-    if isinstance(payload, dict):
-        return _normalize_points_row(payload, normalized_user_id)
-    return _normalize_points_row(seed_row, normalized_user_id)
-
-
-def _ensure_points_balance_row_direct(user_id: str) -> dict | None:
-    normalized_user_id = str(user_id or '').strip()
-    if not normalized_user_id:
-        return None
-    points_row = get_user_points_balance(normalized_user_id)
-    if points_row:
-        return _normalize_points_row(points_row, normalized_user_id)
-    try:
-        return _create_legacy_points_balance_row(normalized_user_id)
-    except requests.RequestException as exc:
-        app.logger.warning('Failed to create legacy points balance row for %s: %s', normalized_user_id, exc)
-        return _normalize_points_row(_build_legacy_points_balance_row(normalized_user_id), normalized_user_id)
-
-
-def _claim_daily_free_points_direct(user_id: str, amount: int) -> dict | None:
-    normalized_user_id = str(user_id or '').strip()
-    normalized_amount = max(int(amount or 0), 0)
-    if not normalized_user_id:
-        return None
-    points_row = _ensure_points_balance_row_direct(normalized_user_id)
-    if not points_row:
-        return None
-
-    last_claim_at = parse_iso_datetime(points_row.get('last_daily_claim_at'))
-    now = datetime.now(timezone.utc)
-    if last_claim_at and last_claim_at.astimezone(timezone.utc).date() >= now.date():
-        return {
-            'success': True,
-            'claimed': False,
-            'reason': 'already_claimed_today',
-            'balance_row': points_row,
-        }
-
-    updated_row = {
-        'balance': int(points_row.get('balance') or 0) + normalized_amount,
-        'total_earned': int(points_row.get('total_earned') or 0) + normalized_amount,
-        'last_daily_claim_at': now.isoformat(),
-        'updated_at': now.isoformat(),
-    }
-    response = requests.patch(
-        build_supabase_request_url(f'/rest/v1/{SUPABASE_POINTS_TABLE}'),
-        headers={
-            **_build_supabase_service_headers(),
-            'Prefer': 'return=representation',
-        },
-        params={
-            'user_id': f'eq.{normalized_user_id}',
-        },
-        json=updated_row,
-        timeout=20,
-    )
-    response.raise_for_status()
-    payload = response.json()
-    if isinstance(payload, list) and payload:
-        updated_points_row = _normalize_points_row(payload[0], normalized_user_id)
-    elif isinstance(payload, dict):
-        updated_points_row = _normalize_points_row(payload, normalized_user_id)
-    else:
-        updated_points_row = _normalize_points_row({**points_row, **updated_row}, normalized_user_id)
-    return {
-        'success': True,
-        'claimed': True,
-        'balance_row': updated_points_row,
-    }
-
-
 def ensure_user_points_balance(user_id: str) -> dict | None:
     normalized_user_id = str(user_id or '').strip()
     if not normalized_user_id:
@@ -327,9 +170,9 @@ def ensure_user_points_balance(user_id: str) -> dict | None:
             balance_row = payload.get('balance_row') if isinstance(payload.get('balance_row'), dict) else payload
             return _normalize_points_row(balance_row, normalized_user_id)
     except requests.RequestException as exc:
-        app.logger.warning('Failed to ensure user points balance for %s: %s', normalized_user_id, exc)
+        logger.warning('Failed to ensure user points balance for %s: %s', normalized_user_id, exc)
     except RuntimeError as exc:
-        app.logger.warning('Failed to ensure user points balance for %s: %s', normalized_user_id, exc)
+        logger.warning('Failed to ensure user points balance for %s: %s', normalized_user_id, exc)
     return _ensure_points_balance_row_direct(normalized_user_id)
 
 
@@ -340,10 +183,10 @@ def award_signup_bonus_points(user_id: str, amount: int) -> dict | None:
     try:
         payload = _post_supabase_rpc('award_signup_bonus_points', {'p_user_id': normalized_user_id, 'p_amount': int(amount)})
     except requests.RequestException as exc:
-        app.logger.warning('Failed to award signup bonus for %s: %s', normalized_user_id, exc)
+        logger.warning('Failed to award signup bonus for %s: %s', normalized_user_id, exc)
         return None
     except RuntimeError as exc:
-        app.logger.warning('Failed to award signup bonus for %s: %s', normalized_user_id, exc)
+        logger.warning('Failed to award signup bonus for %s: %s', normalized_user_id, exc)
         return None
     return payload if isinstance(payload, dict) else None
 
@@ -373,14 +216,14 @@ def claim_daily_free_points(user_id: str, amount: int) -> dict | None:
                     )
             except ValueError:
                 error_text = response.text or ''
-        app.logger.warning('Failed to claim daily points for %s: %s', normalized_user_id, exc)
+        logger.warning('Failed to claim daily points for %s: %s', normalized_user_id, exc)
         try:
             fallback_payload = _claim_daily_free_points_direct(normalized_user_id, amount)
             if fallback_payload:
-                app.logger.warning('Claim daily points fallback applied for %s after RPC HTTP failure', normalized_user_id)
+                logger.warning('Claim daily points fallback applied for %s after RPC HTTP failure', normalized_user_id)
                 return fallback_payload
         except requests.RequestException as fallback_exc:
-            app.logger.warning('Daily points fallback failed for %s: %s', normalized_user_id, fallback_exc)
+            logger.warning('Daily points fallback failed for %s: %s', normalized_user_id, fallback_exc)
         return {
             'success': False,
             'claimed': False,
@@ -388,14 +231,14 @@ def claim_daily_free_points(user_id: str, amount: int) -> dict | None:
             'balance_row': get_user_points_balance(normalized_user_id) or ensure_user_points_balance(normalized_user_id) or {},
         }
     except requests.RequestException as exc:
-        app.logger.warning('Failed to claim daily points for %s: %s', normalized_user_id, exc)
+        logger.warning('Failed to claim daily points for %s: %s', normalized_user_id, exc)
         try:
             fallback_payload = _claim_daily_free_points_direct(normalized_user_id, amount)
             if fallback_payload:
-                app.logger.warning('Claim daily points fallback applied for %s after RPC request failure', normalized_user_id)
+                logger.warning('Claim daily points fallback applied for %s after RPC request failure', normalized_user_id)
                 return fallback_payload
         except requests.RequestException as fallback_exc:
-            app.logger.warning('Daily points fallback failed for %s: %s', normalized_user_id, fallback_exc)
+            logger.warning('Daily points fallback failed for %s: %s', normalized_user_id, fallback_exc)
         return {
             'success': False,
             'claimed': False,
@@ -403,100 +246,20 @@ def claim_daily_free_points(user_id: str, amount: int) -> dict | None:
             'balance_row': get_user_points_balance(normalized_user_id) or ensure_user_points_balance(normalized_user_id) or {},
         }
     except RuntimeError as exc:
-        app.logger.warning('Failed to claim daily points for %s: %s', normalized_user_id, exc)
+        logger.warning('Failed to claim daily points for %s: %s', normalized_user_id, exc)
         try:
             fallback_payload = _claim_daily_free_points_direct(normalized_user_id, amount)
             if fallback_payload:
-                app.logger.warning('Claim daily points fallback applied for %s after RPC runtime failure', normalized_user_id)
+                logger.warning('Claim daily points fallback applied for %s after RPC runtime failure', normalized_user_id)
                 return fallback_payload
         except requests.RequestException as fallback_exc:
-            app.logger.warning('Daily points fallback failed for %s: %s', normalized_user_id, fallback_exc)
+            logger.warning('Daily points fallback failed for %s: %s', normalized_user_id, fallback_exc)
         return {
             'success': False,
             'claimed': False,
             'error': str(exc) or '领取失败，请稍后重试',
             'balance_row': get_user_points_balance(normalized_user_id) or ensure_user_points_balance(normalized_user_id) or {},
         }
-
-
-def _spend_user_points_direct(user_id: str, amount: int, transaction_type: str = 'consume', reason: str = '', metadata: dict | None = None) -> dict | None:
-    normalized_user_id = str(user_id or '').strip()
-    normalized_amount = int(amount)
-    if not normalized_user_id or normalized_amount <= 0:
-        return None
-    points_row = _ensure_points_balance_row_direct(normalized_user_id)
-    if not points_row:
-        return None
-    previous_balance = int(points_row.get('balance') or 0)
-    if previous_balance < normalized_amount:
-        return {
-            'success': False,
-            'spent': False,
-            'error': 'INSUFFICIENT_POINTS',
-            'balance_row': points_row,
-        }
-    updated_row = {
-        'balance': previous_balance - normalized_amount,
-        'total_spent': int(points_row.get('total_spent') or 0) + normalized_amount,
-        'updated_at': datetime.now(timezone.utc).isoformat(),
-    }
-    response = requests.patch(
-        build_supabase_request_url(f'/rest/v1/{SUPABASE_POINTS_TABLE}'),
-        headers={
-            **_build_supabase_service_headers(),
-            'Prefer': 'return=representation',
-        },
-        params={
-            'user_id': f'eq.{normalized_user_id}',
-            'balance': f'gte.{normalized_amount}',
-        },
-        json=updated_row,
-        timeout=20,
-    )
-    response.raise_for_status()
-    payload = response.json()
-    if not isinstance(payload, list) or not payload:
-        balance_row = get_user_points_balance(normalized_user_id) or points_row
-        return {
-            'success': False,
-            'spent': False,
-            'error': 'INSUFFICIENT_POINTS',
-            'balance_row': balance_row,
-        }
-    balance_row = _normalize_points_row(payload[0], normalized_user_id)
-    transaction_row = None
-    try:
-        transaction_response = requests.post(
-            build_supabase_request_url('/rest/v1/user_points_transactions'),
-            headers={
-                **_build_supabase_service_headers(),
-                'Prefer': 'return=representation',
-            },
-            json={
-                'user_id': normalized_user_id,
-                'amount': -normalized_amount,
-                'balance_before': previous_balance,
-                'balance_after': int(balance_row.get('balance') or 0),
-                'transaction_type': str(transaction_type or 'consume').strip() or 'consume',
-                'reason': str(reason or '').strip(),
-                'metadata': metadata if isinstance(metadata, dict) else {},
-            },
-            timeout=20,
-        )
-        transaction_response.raise_for_status()
-        transaction_payload = transaction_response.json()
-        if isinstance(transaction_payload, list) and transaction_payload:
-            transaction_row = transaction_payload[0]
-        elif isinstance(transaction_payload, dict):
-            transaction_row = transaction_payload
-    except requests.RequestException as exc:
-        app.logger.warning('Failed to insert direct spend transaction for %s: %s', normalized_user_id, exc)
-    return {
-        'success': True,
-        'spent': True,
-        'balance_row': balance_row,
-        'transaction_row': transaction_row,
-    }
 
 
 def spend_user_points(user_id: str, amount: int, transaction_type: str = 'consume', reason: str = '', metadata: dict | None = None) -> dict | None:
@@ -579,7 +342,7 @@ def spend_user_points(user_id: str, amount: int, transaction_type: str = 'consum
                     if isinstance(fallback_result, dict) and fallback_result.get('spent'):
                         return fallback_result
                 except requests.RequestException as fallback_exc:
-                    app.logger.warning('Direct spend user points fallback failed for %s: %s', normalized_user_id, fallback_exc)
+                    logger.warning('Direct spend user points fallback failed for %s: %s', normalized_user_id, fallback_exc)
                     return build_spend_failure(str(fallback_exc))
                 balance_row = get_user_points_balance(normalized_user_id) or ensure_user_points_balance(normalized_user_id) or {}
                 return {
@@ -594,89 +357,22 @@ def spend_user_points(user_id: str, amount: int, transaction_type: str = 'consum
                 try:
                     return _spend_user_points_direct(normalized_user_id, normalized_amount, normalized_transaction_type, normalized_reason, normalized_metadata)
                 except requests.RequestException as fallback_exc:
-                    app.logger.warning('Direct spend user points fallback failed for %s: %s', normalized_user_id, fallback_exc)
+                    logger.warning('Direct spend user points fallback failed for %s: %s', normalized_user_id, fallback_exc)
                     return build_spend_failure(str(fallback_exc))
-            app.logger.warning('Failed to spend user points for %s: %s', normalized_user_id, exc)
+            logger.warning('Failed to spend user points for %s: %s', normalized_user_id, exc)
             return build_spend_failure(error_text or str(exc))
         except requests.RequestException as exc:
-            app.logger.warning('Failed to spend user points for %s: %s', normalized_user_id, exc)
+            logger.warning('Failed to spend user points for %s: %s', normalized_user_id, exc)
             return build_spend_failure(str(exc))
         except RuntimeError as exc:
             last_exception = exc
             last_error_text = str(exc)
             if '返回了无效响应' in last_error_text:
                 continue
-            app.logger.warning('Failed to spend user points for %s: %s', normalized_user_id, exc)
+            logger.warning('Failed to spend user points for %s: %s', normalized_user_id, exc)
             return build_spend_failure(last_error_text)
-    app.logger.warning('Failed to spend user points for %s after trying compatible RPC payloads: %s', normalized_user_id, last_exception or last_error_text)
+    logger.warning('Failed to spend user points for %s after trying compatible RPC payloads: %s', normalized_user_id, last_exception or last_error_text)
     return build_spend_failure(last_error_text or str(last_exception or '扣减积分失败'))
-
-
-def add_user_points_direct(user_id: str, amount: int, transaction_type: str = 'refund', reason: str = '', metadata: dict | None = None, related_transaction_id=None) -> dict | None:
-    normalized_user_id = str(user_id or '').strip()
-    normalized_amount = max(int(amount), 0)
-    if not normalized_user_id or normalized_amount <= 0:
-        return None
-    points_row = _ensure_points_balance_row_direct(normalized_user_id)
-    if not points_row:
-        return None
-    previous_balance = int(points_row.get('balance') or 0)
-    updated_row = {
-        'balance': previous_balance + normalized_amount,
-        'total_earned': int(points_row.get('total_earned') or 0) + normalized_amount,
-        'updated_at': datetime.now(timezone.utc).isoformat(),
-    }
-    response = requests.patch(
-        build_supabase_request_url(f'/rest/v1/{SUPABASE_POINTS_TABLE}'),
-        headers={
-            **_build_supabase_service_headers(),
-            'Prefer': 'return=representation',
-        },
-        params={
-            'user_id': f'eq.{normalized_user_id}',
-        },
-        json=updated_row,
-        timeout=20,
-    )
-    response.raise_for_status()
-    payload = response.json()
-    if not isinstance(payload, list) or not payload:
-        return get_user_points_balance(normalized_user_id) or points_row
-    balance_row = _normalize_points_row(payload[0], normalized_user_id)
-    transaction_row = None
-    try:
-        transaction_response = requests.post(
-            build_supabase_request_url('/rest/v1/user_points_transactions'),
-            headers={
-                **_build_supabase_service_headers(),
-                'Prefer': 'return=representation',
-            },
-            json={
-                'user_id': normalized_user_id,
-                'amount': normalized_amount,
-                'balance_before': previous_balance,
-                'balance_after': int(balance_row.get('balance') or 0),
-                'transaction_type': str(transaction_type or 'refund').strip() or 'refund',
-                'reason': str(reason or '').strip(),
-                'metadata': metadata if isinstance(metadata, dict) else {},
-                'related_transaction_id': related_transaction_id,
-            },
-            timeout=20,
-        )
-        transaction_response.raise_for_status()
-        transaction_payload = transaction_response.json()
-        if isinstance(transaction_payload, list) and transaction_payload:
-            transaction_row = transaction_payload[0]
-        elif isinstance(transaction_payload, dict):
-            transaction_row = transaction_payload
-    except requests.RequestException as exc:
-        app.logger.warning('Failed to insert direct add transaction for %s: %s', normalized_user_id, exc)
-    return {
-        'success': True,
-        'added': True,
-        'balance_row': balance_row,
-        'transaction_row': transaction_row,
-    }
 
 
 def add_user_points(user_id: str, amount: int, transaction_type: str = 'refund', reason: str = '', metadata: dict | None = None, related_transaction_id=None) -> dict | None:
@@ -722,16 +418,16 @@ def add_user_points(user_id: str, amount: int, transaction_type: str = 'refund',
                     error_text = response.text or ''
             if response is not None and response.status_code == 404 and 'Could not find the function' in error_text:
                 continue
-            app.logger.warning('Failed to add user points for %s: %s', normalized_user_id, exc)
+            logger.warning('Failed to add user points for %s: %s', normalized_user_id, exc)
             break
         except (requests.RequestException, RuntimeError) as exc:
             last_exception = exc
-            app.logger.warning('Failed to add user points for %s: %s', normalized_user_id, exc)
+            logger.warning('Failed to add user points for %s: %s', normalized_user_id, exc)
             break
     try:
         return add_user_points_direct(normalized_user_id, normalized_amount, transaction_type, reason, normalized_metadata, related_transaction_id)
     except requests.RequestException as fallback_exc:
-        app.logger.warning('Direct add user points fallback failed for %s after %s: %s', normalized_user_id, last_exception, fallback_exc)
+        logger.warning('Direct add user points fallback failed for %s after %s: %s', normalized_user_id, last_exception, fallback_exc)
         return None
 
 
@@ -754,60 +450,10 @@ def serialize_points_payload(points_row: dict | None, user_profile_row: dict | N
     }
 
 
-def get_user_points_balance(user_id: str) -> dict | None:
-    normalized_user_id = str(user_id or '').strip()
-    if not normalized_user_id:
-        return None
-    try:
-        return _fetch_user_points_row(normalized_user_id)
-    except requests.RequestException as exc:
-        app.logger.warning('Failed to fetch user points balance for %s: %s', normalized_user_id, exc)
-        return None
 
 
-def parse_money_amount(value) -> Decimal:
-    try:
-        amount = Decimal(str(value)).quantize(Decimal('0.01'), rounding=ROUND_HALF_UP)
-    except (InvalidOperation, TypeError, ValueError) as exc:
-        raise ValueError('金额格式不正确') from exc
-    if amount <= Decimal('0.00'):
-        raise ValueError('金额必须大于 0')
-    return amount
 
 
-def normalize_vip_plan_key(product_id: str | None) -> str:
-    normalized_product_id = str(product_id or '').strip().lower()
-    if not normalized_product_id:
-        return ''
-    if normalized_product_id not in {'plan_1', 'plan_2', 'plan_3'}:
-        raise ValueError(f'无效的套餐标识: {normalized_product_id}')
-    return normalized_product_id
-
-
-def _resolve_configured_plan_key(value: str) -> str:
-    normalized_value = str(value or '').strip().lower()
-    return normalized_value if normalized_value in {'plan_1', 'plan_2', 'plan_3'} else ''
-
-
-def fetch_vip_plan_config() -> dict:
-    if not SUPABASE_URL or not SUPABASE_SERVICE_ROLE_KEY:
-        raise RuntimeError('Supabase 服务配置缺失')
-    response = requests.get(
-        build_supabase_request_url(f'/rest/v1/{VIP_PLAN_CONFIG_TABLE}'),
-        headers=_build_supabase_service_headers(),
-        params={
-            'select': '*',
-            'config_key': 'eq.default',
-            'limit': '1',
-        },
-        timeout=20,
-    )
-    response.raise_for_status()
-    payload = response.json()
-    row = _extract_single_supabase_row(payload)
-    if not isinstance(row, dict) or not row:
-        raise RuntimeError('未找到 Supabase vip_plan_config 套餐配置')
-    return row
 
 
 def _get_vip_plan_config_int(config: dict, field_name: str) -> int:
@@ -885,43 +531,6 @@ def get_payment_points_amount(package_id: str) -> int:
     return max(int(benefits.get('points') or 0), 0)
 
 
-def grant_payment_points_once(order_row: dict) -> dict | None:
-    user_id = str((order_row or {}).get('user_id') or '').strip()
-    order_no = get_payment_order_no(order_row)
-    package_id = get_payment_package_id(order_row)
-    points_amount = get_payment_points_amount(package_id)
-    if not user_id or not order_no or points_amount <= 0:
-        return None
-    existing_response = requests.get(
-        build_supabase_request_url('/rest/v1/user_points_transactions'),
-        headers=_build_supabase_service_headers(),
-        params={
-            'select': 'id',
-            'user_id': f'eq.{user_id}',
-            'transaction_type': 'eq.purchase',
-            'metadata': f"cs.{json.dumps({'order_no': order_no}, separators=(',', ':'), ensure_ascii=False)}",
-            'limit': '1',
-        },
-        timeout=20,
-    )
-    existing_response.raise_for_status()
-    existing_payload = existing_response.json()
-    if isinstance(existing_payload, list) and existing_payload:
-        return get_user_points_balance(user_id)
-    return add_user_points(
-        user_id,
-        points_amount,
-        'purchase',
-        '购买积分套餐入账',
-        {
-            'order_no': order_no,
-            'package_id': package_id,
-            'amount': str((order_row or {}).get('amount') or ''),
-            'zpay_trade_no': get_payment_trade_no(order_row),
-        },
-    )
-
-
 def get_subscription_days(product_id: str) -> int:
     benefits = get_vip_plan_benefits(product_id)
     subscription_days = max(int(benefits.get('subscription_days') or 0), 0)
@@ -935,122 +544,8 @@ def generate_payment_order_no() -> str:
     return f"{datetime.now(timezone.utc).strftime('%Y%m%d%H%M%S')}{uuid.uuid4().hex[:12]}"[:32]
 
 
-def _extract_single_supabase_row(payload, *, allow_empty: bool = False) -> dict | None:
-    if isinstance(payload, dict):
-        return payload
-    if isinstance(payload, list):
-        if not payload:
-            return {} if allow_empty else None
-        row = payload[0]
-        return row if isinstance(row, dict) else None
-    return None
 
 
-def _safe_json_payload(payload):
-    try:
-        return json.loads(json.dumps(payload, ensure_ascii=False, default=str))
-    except (TypeError, ValueError):
-        return None
-
-
-def is_generation_task_persistence_enabled() -> bool:
-    return bool(SUPABASE_URL and SUPABASE_SERVICE_ROLE_KEY)
-
-
-def build_generation_task_db_payload(task: dict) -> dict:
-    payload = task if isinstance(task, dict) else {}
-    return {
-        'id': payload.get('task_id'),
-        'user_id': payload.get('user_id'),
-        'mode': payload.get('mode') or 'suite',
-        'request_id': payload.get('request_id') or None,
-        'status': payload.get('status') or 'pending',
-        'result': _safe_json_payload(payload.get('result')),
-        'error': payload.get('error') or None,
-        'details': payload.get('details') or None,
-        'spend_record': _safe_json_payload(payload.get('spend_record')),
-        'refunded': bool(payload.get('refunded')),
-        'refund_error': payload.get('refund_error') or None,
-        'created_at': payload.get('created_at') or datetime.now(timezone.utc).isoformat(),
-        'updated_at': payload.get('updated_at') or datetime.now(timezone.utc).isoformat(),
-    }
-
-
-def normalize_generation_task_row(row: dict | None) -> dict | None:
-    if not isinstance(row, dict):
-        return None
-    task_id = str(row.get('id') or row.get('task_id') or '').strip()
-    if not task_id:
-        return None
-    return {
-        'task_id': task_id,
-        'user_id': str(row.get('user_id') or '').strip(),
-        'mode': row.get('mode') or 'suite',
-        'request_id': row.get('request_id') or '',
-        'spend_record': row.get('spend_record') if isinstance(row.get('spend_record'), dict) else None,
-        'status': row.get('status') or 'pending',
-        'result': row.get('result') if isinstance(row.get('result'), dict) else None,
-        'error': row.get('error') or '',
-        'details': row.get('details') or '',
-        'refunded': bool(row.get('refunded')),
-        'refund_error': row.get('refund_error') or '',
-        'created_at': row.get('created_at'),
-        'updated_at': row.get('updated_at'),
-        'created_at_ts': time.time(),
-        'updated_at_ts': time.time(),
-    }
-
-
-def persist_generation_task(task: dict) -> None:
-    if not is_generation_task_persistence_enabled():
-        return
-    db_payload = build_generation_task_db_payload(task)
-    if not db_payload.get('id') or not db_payload.get('user_id'):
-        return
-    try:
-        response = requests.post(
-            build_supabase_request_url(f'/rest/v1/{SUPABASE_GENERATION_TASKS_TABLE}'),
-            headers={
-                **_build_supabase_service_headers(),
-                'Prefer': 'resolution=merge-duplicates,return=minimal',
-            },
-            params={'on_conflict': 'id'},
-            json=db_payload,
-            timeout=20,
-        )
-        if response.status_code >= 400:
-            app.logger.warning('Failed to persist generation task %s: status=%s body=%s', db_payload.get('id'), response.status_code, response.text)
-            response.raise_for_status()
-    except Exception as exc:
-        app.logger.warning('Failed to persist generation task %s: %s', db_payload.get('id'), exc)
-
-
-def fetch_generation_task_row(task_id: str) -> dict | None:
-    if not is_generation_task_persistence_enabled():
-        return None
-    normalized_task_id = str(task_id or '').strip()
-    if not normalized_task_id:
-        return None
-    try:
-        response = requests.get(
-            build_supabase_request_url(f'/rest/v1/{SUPABASE_GENERATION_TASKS_TABLE}'),
-            headers=_build_supabase_service_headers(),
-            params={
-                'select': '*',
-                'id': f'eq.{normalized_task_id}',
-                'limit': '1',
-            },
-            timeout=20,
-        )
-        if response.status_code == 404:
-            return None
-        if response.status_code >= 400:
-            app.logger.warning('Failed to fetch generation task %s: status=%s body=%s', normalized_task_id, response.status_code, response.text)
-            return None
-        return _extract_single_supabase_row(response.json())
-    except Exception as exc:
-        app.logger.warning('Failed to fetch generation task %s: %s', normalized_task_id, exc)
-        return None
 
 
 def cache_generation_task(task: dict | None) -> None:
@@ -1191,7 +686,7 @@ def fail_generation_task_with_refund(task_id: str, error: str, details: str = ''
         )
         update_generation_task(task_id, refunded=True, refund_error='')
     except Exception as exc:
-        app.logger.warning('Failed to refund generation task %s: %s', task_id, exc)
+        logger.warning('Failed to refund generation task %s: %s', task_id, exc)
         update_generation_task(task_id, refund_error=str(exc))
 
 
@@ -1215,7 +710,7 @@ def run_generation_task(task_id: str, form_payload: dict, file_payloads: dict):
     except requests.RequestException as exc:
         fail_generation_task_with_refund(task_id, f'请求失败：{exc}', str(exc))
     except Exception as exc:
-        app.logger.exception('Generation task failed: %s', task_id)
+        logger.exception('Generation task failed: %s', task_id)
         fail_generation_task_with_refund(task_id, f'服务端异常：{exc}', str(exc))
 
 
@@ -1241,7 +736,6 @@ def get_payment_subscribe_start(order_row: dict | None) -> str:
 
 def get_payment_subscribe_expire(order_row: dict | None) -> str:
     return str((order_row or {}).get('subscribe_expire_at') or (order_row or {}).get('subscribe_expire') or '').strip()
-
 
 
 def build_legacy_payment_order_payload(order_payload: dict) -> dict:
@@ -1271,41 +765,6 @@ def build_legacy_payment_patch_payload(patch_payload: dict) -> dict:
     return legacy_payload
 
 
-
-def fetch_latest_active_subscription(user_id: str, product_id: str) -> dict | None:
-    normalized_user_id = str(user_id or '').strip()
-    normalized_product_id = normalize_vip_plan_key(product_id)
-    if not normalized_user_id or not normalized_product_id:
-        return None
-    if not SUPABASE_URL or not SUPABASE_SERVICE_ROLE_KEY:
-        raise RuntimeError('Supabase 服务配置缺失')
-    response = requests.get(
-        build_supabase_request_url(f'/rest/v1/{SUPABASE_PAYMENTS_TABLE}'),
-        headers=_build_supabase_service_headers(),
-        params={
-            'select': 'subscribe_expire',
-            'user_id': f'eq.{normalized_user_id}',
-            'product_id': f'eq.{normalized_product_id}',
-            'type': 'eq.subscription',
-            'status': 'in.(paid,success)',
-            'order': 'subscribe_expire.desc',
-            'limit': '1',
-        },
-        timeout=20,
-    )
-    response.raise_for_status()
-    payload = response.json()
-    return _extract_single_supabase_row(payload)
-
-
-def parse_iso_datetime(value: str | None) -> datetime | None:
-    raw_value = str(value or '').strip()
-    if not raw_value:
-        return None
-    try:
-        return datetime.fromisoformat(raw_value.replace('Z', '+00:00'))
-    except ValueError:
-        return None
 
 
 def compute_subscription_period(user_id: str, product_id: str) -> tuple[datetime, datetime, int]:
@@ -1363,133 +822,10 @@ def build_zpay_payment_url(*, out_trade_no: str, product_id: str, amount: Decima
     return f"{ZPAY_GATEWAY}?{urlencode(payment_params)}"
 
 
-def create_payment_order_record(order_payload: dict) -> dict:
-    if not SUPABASE_URL or not SUPABASE_SERVICE_ROLE_KEY:
-        raise RuntimeError('Supabase 服务配置缺失')
-    db_payload = build_legacy_payment_order_payload(order_payload)
-    response = requests.post(
-        build_supabase_request_url(f'/rest/v1/{SUPABASE_PAYMENTS_TABLE}'),
-        headers={
-            **_build_supabase_service_headers(),
-            'Prefer': 'return=representation',
-        },
-        json=db_payload,
-        timeout=20,
-    )
-    response.raise_for_status()
-    payload = response.json()
-    row = _extract_single_supabase_row(payload)
-    if not row:
-        raise RuntimeError('订单写入失败')
-    return row
 
 
-def fetch_payment_order_by_out_trade_no(out_trade_no: str) -> dict | None:
-    normalized_order_no = str(out_trade_no or '').strip()
-    if not normalized_order_no:
-        return None
-    response = requests.get(
-        build_supabase_request_url(f'/rest/v1/{SUPABASE_PAYMENTS_TABLE}'),
-        headers=_build_supabase_service_headers(),
-        params={
-            'select': '*',
-            'out_trade_no': f'eq.{normalized_order_no}',
-            'limit': '1',
-        },
-        timeout=20,
-    )
-    response.raise_for_status()
-    payload = response.json()
-    return _extract_single_supabase_row(payload)
 
 
-def fetch_user_profile_by_user_id(user_id: str) -> dict | None:
-    normalized_user_id = str(user_id or '').strip()
-    if not normalized_user_id:
-        return None
-    response = requests.get(
-        build_supabase_request_url(f'/rest/v1/{SUPABASE_USER_PROFILES_TABLE}'),
-        headers=_build_supabase_service_headers(),
-        params={
-            'select': '*',
-            'user_id': f'eq.{normalized_user_id}',
-            'limit': '1',
-        },
-        timeout=20,
-    )
-    response.raise_for_status()
-    payload = response.json()
-    return _extract_single_supabase_row(payload, allow_empty=True)
-
-
-def update_payment_order(out_trade_no: str, patch_payload: dict) -> dict:
-    normalized_order_no = str(out_trade_no or '').strip()
-    if not normalized_order_no:
-        raise ValueError('缺少 out_trade_no')
-    db_payload = build_legacy_payment_patch_payload(patch_payload)
-    response = requests.patch(
-        build_supabase_request_url(f'/rest/v1/{SUPABASE_PAYMENTS_TABLE}'),
-        headers={
-            **_build_supabase_service_headers(),
-            'Prefer': 'return=minimal',
-        },
-        params={
-            'out_trade_no': f'eq.{normalized_order_no}',
-        },
-        json=db_payload,
-        timeout=20,
-    )
-    if response.status_code >= 400:
-        app.logger.warning('Failed to patch payment order %s: status=%s body=%s', normalized_order_no, response.status_code, response.text)
-        response.raise_for_status()
-    row = fetch_payment_order_by_out_trade_no(normalized_order_no)
-    if not row:
-        raise RuntimeError('更新支付订单失败')
-    return row
-
-
-def upsert_user_subscription_profile(user_id: str, subscribe_expire: str | None) -> dict:
-    normalized_user_id = str(user_id or '').strip()
-    normalized_expire = str(subscribe_expire or '').strip()
-    if not normalized_user_id:
-        raise ValueError('缺少 user_id')
-    existing_row = fetch_user_profile_by_user_id(normalized_user_id)
-    if existing_row:
-        response = requests.patch(
-            build_supabase_request_url(f'/rest/v1/{SUPABASE_USER_PROFILES_TABLE}'),
-            headers={
-                **_build_supabase_service_headers(),
-                'Prefer': 'return=minimal',
-            },
-            params={'user_id': f'eq.{normalized_user_id}'},
-            json={
-                'subscribe_expire': normalized_expire or None,
-            },
-            timeout=20,
-        )
-        if response.status_code >= 400:
-            app.logger.warning('Failed to patch user subscription profile for %s: %s', normalized_user_id, response.text)
-            response.raise_for_status()
-        refreshed_row = fetch_user_profile_by_user_id(normalized_user_id)
-        return refreshed_row or {}
-    response = requests.post(
-        build_supabase_request_url(f'/rest/v1/{SUPABASE_USER_PROFILES_TABLE}'),
-        headers={
-            **_build_supabase_service_headers(),
-            'Prefer': 'return=representation',
-        },
-        json={
-            'user_id': normalized_user_id,
-            'subscribe_expire': normalized_expire or None,
-        },
-        timeout=20,
-    )
-    if response.status_code >= 400:
-        app.logger.warning('Failed to create user subscription profile for %s: %s', normalized_user_id, response.text)
-        response.raise_for_status()
-    payload = response.json()
-    row = _extract_single_supabase_row(payload, allow_empty=True)
-    return row or {}
 
 
 def verify_zpay_callback_signature(params: dict) -> bool:
@@ -1551,7 +887,7 @@ def process_success_payment(order_row: dict, callback_trade_no: str) -> dict:
     try:
         grant_payment_points_once(updated_row)
     except (requests.RequestException, RuntimeError, ValueError):
-        app.logger.exception('Failed to grant payment points after payment success: out_trade_no=%s', out_trade_no)
+        logger.exception('Failed to grant payment points after payment success: out_trade_no=%s', out_trade_no)
 
     if get_payment_pay_type(updated_row).lower() == 'subscription':
         user_id = str((updated_row or {}).get('user_id') or '').strip()
@@ -1560,7 +896,7 @@ def process_success_payment(order_row: dict, callback_trade_no: str) -> dict:
             try:
                 upsert_user_subscription_profile(user_id, subscribe_expire)
             except requests.RequestException:
-                app.logger.exception('Failed to sync subscription profile after payment success: out_trade_no=%s user_id=%s', out_trade_no, user_id)
+                logger.exception('Failed to sync subscription profile after payment success: out_trade_no=%s user_id=%s', out_trade_no, user_id)
     return updated_row
 
 
@@ -1583,40 +919,12 @@ def serialize_payment_order(order_row: dict, *, pay_type: str, subscription_days
     }
 
 
-def get_env_csv(name: str) -> set[str]:
-    raw_value = os.getenv(name, '').strip()
-    return {
-        value.strip().lower()
-        for value in raw_value.split(',')
-        if value.strip()
-    }
 
 
-def get_mode2_allowed_image_hosts() -> set[str]:
-    raw_value = get_supabase_setting('MODE2_ALLOWED_IMAGE_HOSTS', '')
-    if not raw_value:
-        raw_value = os.getenv('MODE2_ALLOWED_IMAGE_HOSTS', '').strip()
-    return {
-        host.strip().lower()
-        for host in raw_value.split(',')
-        if host.strip()
-    }
 
 
-def get_settings_allowed_emails() -> set[str]:
-    allowed_emails = get_env_csv('ADMIN_ALLOWED_EMAILS')
-    single_email = os.getenv('ADMIN_ALLOWED_EMAIL', '').strip().lower()
-    if single_email:
-        allowed_emails.add(single_email)
-    return allowed_emails
 
 
-def get_settings_allowed_phones() -> set[str]:
-    allowed_phones = get_env_csv('ADMIN_ALLOWED_PHONES')
-    single_phone = os.getenv('ADMIN_ALLOWED_PHONE', '').strip().lower()
-    if single_phone:
-        allowed_phones.add(single_phone)
-    return allowed_phones
 
 
 def _is_settings_user_allowed(session_data: dict | None = None) -> bool:
@@ -1630,34 +938,16 @@ def _is_settings_user_allowed(session_data: dict | None = None) -> bool:
     )
 
 
-def _normalize_supabase_setting_key(key: str) -> str:
-    return str(key or '').strip().upper()
 
 
-def _supabase_setting_is_sensitive(setting_key: str) -> bool:
-    normalized_key = _normalize_supabase_setting_key(setting_key)
-    return any(token in normalized_key for token in {'KEY', 'SECRET', 'TOKEN', 'PASSWORD', 'PASS', 'PRIVATE'})
 
 
-def _mask_supabase_setting_value(setting_value: str) -> str:
-    return '••••••••' if setting_value else ''
 
 
-def get_admin_password() -> str:
-    return os.getenv('ADMIN_PASSWORD', '').strip()
 
 
-def get_admin_session_secret() -> str:
-    return os.getenv('ADMIN_SESSION_SECRET', '').strip() or SUPABASE_SERVICE_ROLE_KEY or SUPABASE_ANON_KEY or 'aiimagenew-local-admin'
 
 
-def _normalize_phone_identifier(value: str | None) -> str:
-    normalized = str(value or '').strip().replace(' ', '').replace('-', '')
-    if normalized.startswith('+86') and len(normalized) == 14:
-        return normalized[3:]
-    if normalized.startswith('86') and len(normalized) == 13:
-        return normalized[2:]
-    return normalized
 
 
 def _get_supabase_user_email(session_data: dict | None = None) -> str:
@@ -1673,44 +963,6 @@ def _get_supabase_user_phone(session_data: dict | None = None) -> str:
     return _normalize_phone_identifier(user.get('phone') or metadata.get('phone') or metadata.get('phone_number'))
 
 
-def _is_truthy_flag(value) -> bool:
-    if isinstance(value, bool):
-        return value
-    if value is None:
-        return False
-    return str(value).strip().lower() in {'1', 'true', 'yes', 'on'}
-
-
-def _fetch_supabase_user_admin_flag(user_id: str) -> bool:
-    normalized_user_id = str(user_id or '').strip()
-    if not normalized_user_id or not SUPABASE_URL or not SUPABASE_SERVICE_ROLE_KEY:
-        return False
-
-    try:
-        response = requests.get(
-            build_supabase_request_url(f'/rest/v1/{SUPABASE_USER_PROFILES_TABLE}'),
-            headers=_build_supabase_service_headers(),
-            params={
-                'select': 'is_admin,user_id',
-                'user_id': f'eq.{normalized_user_id}',
-                'limit': '1',
-            },
-            timeout=20,
-        )
-        response.raise_for_status()
-        payload = response.json()
-    except (requests.RequestException, ValueError) as exc:
-        app.logger.warning('Failed to fetch admin flag for %s: %s', normalized_user_id, exc)
-        return False
-
-    if not isinstance(payload, list) or not payload:
-        return False
-
-    row = payload[0]
-    if not isinstance(row, dict):
-        return False
-
-    return _is_truthy_flag(row.get('is_admin'))
 
 
 def _is_supabase_admin_user(session_data: dict | None = None) -> bool:
@@ -1812,196 +1064,19 @@ def verify_admin_credentials(identifier: str, password: str) -> bool:
 
 
 
-def normalize_app_mode(value: str | None) -> str:
-    normalized_mode = str(value or '').strip().lower()
-    return normalized_mode if normalized_mode in {'mode1', 'mode2', 'mode3'} else 'mode1'
 
 
-def get_app_mode() -> str:
-    return normalize_app_mode(get_supabase_setting('APP_MODE', 'mode1'))
 
 
-def get_supabase_setting(name: str, default: str = '') -> str:
-    if name in LOCAL_CONFIG:
-        return str(LOCAL_CONFIG[name]).strip()
-    return os.getenv(name, default).strip()
 
 
-def get_supabase_setting_int(name: str, default: int) -> int:
-    raw_value = get_supabase_setting(name, str(default))
-    try:
-        return int(raw_value)
-    except ValueError as exc:
-        raise ValueError(f'环境变量 {name} 必须为整数') from exc
 
 
-def get_supabase_setting_float(name: str, default: float) -> float:
-    raw_value = get_supabase_setting(name, str(default))
-    try:
-        return float(raw_value)
-    except ValueError as exc:
-        raise ValueError(f'环境变量 {name} 必须为数字') from exc
 
 
-def get_supabase_setting_bool(name: str, default: bool = False) -> bool:
-    raw_value = get_supabase_setting(name, 'true' if default else 'false').lower()
-    return raw_value in {'1', 'true', 'yes', 'on'}
 
 
-def get_supabase_setting_csv(name: str) -> set[str]:
-    raw_value = get_supabase_setting(name, '')
-    return {
-        value.strip().lower()
-        for value in raw_value.split(',')
-        if value.strip()
-    }
 
-
-def get_supabase_setting_json(name: str, default=None):
-    raw_value = get_supabase_setting(name, '')
-    if not raw_value:
-        return default
-    try:
-        return json.loads(raw_value)
-    except json.JSONDecodeError as exc:
-        raise ValueError(f'环境变量 {name} 必须为合法 JSON') from exc
-
-
-DEFAULT_POINTS_RULES = {
-    'suite': {
-        'key': 'suite',
-        'label': '套图',
-        'unit_cost': 1,
-        'minimum_cost': 1,
-        'metric': 'output_count',
-    },
-    'mode2': {
-        'key': 'mode2',
-        'label': 'AI 生图',
-        'unit_cost': 1,
-        'minimum_cost': 1,
-        'metric': 'output_count',
-    },
-    'aplus': {
-        'key': 'aplus',
-        'label': 'A+ 模块',
-        'unit_cost': 1,
-        'minimum_cost': 1,
-        'metric': 'selected_modules_count',
-    },
-    'fashion': {
-        'key': 'fashion',
-        'label': '服饰场景',
-        'unit_cost': 1,
-        'minimum_cost': 1,
-        'metric': 'selected_scene_count',
-    },
-}
-
-
-ALLOWED_POINTS_RULE_METRICS = {
-    'output_count',
-    'selected_modules_count',
-    'selected_scene_count',
-}
-
-
-POINTS_RULE_SETTING_KEYS = {
-    'suite': 'POINTS_RULE_SUITE',
-    'mode2': 'POINTS_RULE_MODE2',
-    'aplus': 'POINTS_RULE_APLUS',
-    'fashion': 'POINTS_RULE_FASHION',
-}
-
-
-def normalize_points_rule(mode: str, rule_payload) -> dict:
-    default_rule = dict(DEFAULT_POINTS_RULES.get(mode, DEFAULT_POINTS_RULES['suite']))
-    if not isinstance(rule_payload, dict):
-        return default_rule
-
-    normalized_rule = dict(default_rule)
-    normalized_rule['key'] = str(rule_payload.get('key') or default_rule['key']).strip() or default_rule['key']
-    normalized_rule['label'] = str(rule_payload.get('label') or default_rule['label']).strip() or default_rule['label']
-
-    try:
-        normalized_rule['unit_cost'] = max(int(rule_payload.get('unit_cost', default_rule['unit_cost'])), 0)
-    except (TypeError, ValueError):
-        normalized_rule['unit_cost'] = default_rule['unit_cost']
-
-    try:
-        normalized_rule['minimum_cost'] = max(int(rule_payload.get('minimum_cost', default_rule['minimum_cost'])), 0)
-    except (TypeError, ValueError):
-        normalized_rule['minimum_cost'] = default_rule['minimum_cost']
-
-    metric = str(rule_payload.get('metric') or default_rule['metric']).strip()
-    normalized_rule['metric'] = metric if metric in ALLOWED_POINTS_RULE_METRICS else default_rule['metric']
-    return normalized_rule
-
-
-def _get_env_points_rule_json(mode: str) -> dict | None:
-    setting_key = POINTS_RULE_SETTING_KEYS.get(mode)
-    if not setting_key:
-        return None
-    raw_value = os.getenv(setting_key, '').strip()
-    if not raw_value:
-        return None
-    try:
-        return json.loads(raw_value)
-    except json.JSONDecodeError:
-        return None
-
-
-def get_points_rules() -> dict[str, dict]:
-    rules: dict[str, dict] = {}
-    for mode in POINTS_RULE_SETTING_KEYS:
-        env_rule = _get_env_points_rule_json(mode)
-        if env_rule is not None:
-            rules[mode] = normalize_points_rule(mode, env_rule)
-        else:
-            rules[mode] = normalize_points_rule(mode, DEFAULT_POINTS_RULES[mode])
-    return rules
-
-
-def get_points_rule(mode: str) -> dict:
-    normalized_mode = str(mode or '').strip().lower()
-    rules = get_points_rules()
-    return rules.get(normalized_mode, rules['suite'])
-
-
-def calculate_points_cost(mode: str, *, output_count: int = 0, selected_modules_count: int = 0, selected_scene_count: int = 0) -> tuple[int, dict]:
-    rule = get_points_rule(mode)
-    metrics = {
-        'output_count': max(int(output_count or 0), 0),
-        'selected_modules_count': max(int(selected_modules_count or 0), 0),
-        'selected_scene_count': max(int(selected_scene_count or 0), 0),
-    }
-    base_count = max(metrics.get(rule['metric'], 0), 1)
-    unit_cost = max(int(rule.get('unit_cost') or 0), 0)
-    minimum_cost = max(int(rule.get('minimum_cost') or 0), 0)
-    total_cost = max(base_count * unit_cost, minimum_cost)
-    return total_cost, {
-        **rule,
-        'base_count': base_count,
-        'cost': total_cost,
-        'metrics': metrics,
-    }
-
-
-def build_points_consume_payload(mode: str, *, output_count: int = 0, selected_modules_count: int = 0, selected_scene_count: int = 0, transaction_type: str = 'consume', reason: str = '', metadata: dict | None = None) -> dict:
-    total_cost, rule_payload = calculate_points_cost(
-        mode,
-        output_count=output_count,
-        selected_modules_count=selected_modules_count,
-        selected_scene_count=selected_scene_count,
-    )
-    return {
-        'amount': total_cost,
-        'mode': str(mode or '').strip().lower() or 'suite',
-        'type': str(transaction_type or 'consume').strip() or 'consume',
-        'reason': str(reason or '').strip(),
-        'metadata': metadata if isinstance(metadata, dict) else {},
-        'rule': rule_payload,
-    }
 
 
 UPLOAD_MAX_BYTES = max(get_supabase_setting_int('UPLOAD_MAX_BYTES', 15 * 1024 * 1024), 1)
@@ -2012,543 +1087,14 @@ POINTS_SIGNUP_BONUS = max(get_supabase_setting_int('POINTS_SIGNUP_BONUS', 100), 
 POINTS_DAILY_FREE = max(get_supabase_setting_int('POINTS_DAILY_FREE', 10), 0)
 MODE2_ALLOWED_IMAGE_HOSTS = get_mode2_allowed_image_hosts()
 app.config['MAX_CONTENT_LENGTH'] = UPLOAD_MAX_BYTES
-SYSTEM_PROMPT = (
-    '你是电商商品图识别与商品卖点文案专家。'
-    '你必须同时参考用户提供的图片内容与已有文案，输出适合商品详情/作图使用的中文商品文案。'
-    '如果图片中某些参数无法确认，可以使用“约”“预估”“图中可见”等保守表达，禁止编造明显精确但无依据的数据。'
-)
 
 
 
-PRODUCT_JSON_SYSTEM_PROMPT = (
-    '你是商品主体不可变特征结构化提取专家。'
-    '你必须严格根据商品图片与已有卖点文案，只提取后续生图保持商品主体一致性所需的主体信息。'
-    '禁止提取或总结光线、场景、背景、道具、人物/模特、手部、姿势、镜头语言、构图、氛围等非商品主体信息。'
-    '你只能输出合法 JSON，不要输出代码块、解释或额外文字。'
-)
 
-USER_PROMPT_TEMPLATE = """请结合以下信息，为该商品生成新的中文文案：
 
-用户当前文案：
-{selling_text}
 
-要求：
-1. 必须优先参考图片中可见内容，多张图片需要综合分析。
-2. 同时吸收用户当前文案里的有效信息，但不要机械复述。
-3. 只输出以下 5 段，不要添加前言、解释、备注、Markdown 代码块：
-商品名称：
-核心卖点：
-适用人群：
-期望场景：
-规格参数：
-4. 核心卖点尽量清晰、具体、适合电商展示。
-5. 如果图片无法确认某项规格，请使用保守表达，不要虚构精确参数。
-"""
 
-PRODUCT_JSON_USER_PROMPT_TEMPLATE = """请结合当前商品图片与卖点信息，提取后续生图保持商品主体一致性所需的“不可变商品特征” JSON。
 
-用户当前文案：
-{selling_text}
-
-要求：
-1. 只返回 JSON，不要代码块，不要解释。
-2. 只能提取图片中明确可见，或文案中明确给出的商品主体信息；不确定就写空字符串、空数组，不做臆测。
-3. 该 JSON 只服务于锁定“商品主体是什么、哪些特征绝不能变”，不是营销摘要，也不是场景总结。
-4. 严禁提取、概括或带入以下非商品主体信息：光线、打光、场景、背景、道具、人物/模特、手部、姿势、镜头语言、构图、氛围、情绪、文案排版、环境描述。
-5. 输出结构必须适用于任意商品，不要偏向服装类；如果某些字段不适用，则保留空值或空数组。
-6. must_keep 用于列出“后续所有图都必须保留的主体特征”；must_not_change 用于列出“不能漂移、不能弱化、不能替换的稳定主体信息”；forbidden_changes 用于列出“明确禁止出现的改动方向”。这三组规则必须只针对商品主体本身，不得写场景或镜头限制。
-7. selling_points 仅用于提炼可在后续画面中表达的商品卖点，可引用用户文案里的重点，但不得覆盖主体一致性规则，也不得写成场景描述。
-8. 所有字段都要尽量短句化、去修辞化、去营销化；优先写名词短语或硬规则短句，不要写大段完整描述。
-9. structure 只写稳定结构组成，不要把颜色、氛围、场景、卖点解释混进去；优先写“门襟/开合方式、主体开口结构、连接结构、固定结构、主要分区、关键部件关系”。
-10. consistency_rules、must_keep、must_not_change、forbidden_changes 必须写成可直接注入生图提示词的硬约束；每条只表达一个约束点，避免复合长句。
-11. 若同一信息已在更具体字段中表达，不要在多个字段里重复展开；避免把同一句意思改写后重复出现在多个数组中。
-12. 顶层结构必须为：
-{{
-  "product_name": "",
-  "category": "",
-  "core_subject": "",
-  "subject_composition": {{
-    "subject_count": "",
-    "subject_units": [""],
-    "assembly_form": ""
-  }},
-  "appearance": {{
-    "primary_colors": [""],
-    "secondary_colors": [""],
-    "materials": [""],
-    "textures_patterns": [""],
-    "silhouette": "",
-    "structure": "",
-    "surface_finish": "",
-    "craft_details": [""]
-  }},
-  "key_components": [""],
-  "brand_identity": {{
-    "brand_name": "",
-    "logo_details": "",
-    "text_markings": [""],
-    "logo_positions": [""]
-  }},
-  "immutable_traits": [""],
-  "consistency_rules": [""],
-  "must_keep": [""],
-  "must_not_change": [""],
-  "forbidden_changes": [""],
-  "selling_points": [""]
-}}
-13. consistency_rules 至少返回 4 条，必须明确哪些主体特征必须保持一致，例如主体品类、颜色体系、轮廓、结构、关键部件、logo/品牌位、稳定细节等。
-14. must_keep、must_not_change、forbidden_changes 各至少返回 4 条，尽量短句化、硬规则化，便于直接注入后续生图提示词。
-15. immutable_traits、key_components、craft_details、subject_units、textures_patterns、text_markings、logo_positions 最多各返回 6 条。
-16. primary_colors、secondary_colors、materials 最多各返回 4 条；只写稳定且可见的主体特征。
-17. consistency_rules、must_keep、must_not_change、forbidden_changes 最多各返回 8 条；selling_points 最多返回 6 条。
-18. consistency_rules、must_keep、must_not_change、forbidden_changes 每条尽量控制在 6-16 个字，优先使用短规则，不要写解释句。
-19. 禁止输出这类长句："主体必须保持为...不得变成..."、"颜色关系必须保持..."。改为更短的规则，例如："棒球领外套品类"、"深蓝衣身+浅蓝袖身"、"禁止改为拉链门襟"、"禁止删除双侧插袋"。
-20. must_keep 只写需要保留的主体锚点；must_not_change 只写不能变化的稳定主体信息；forbidden_changes 只写明确禁止的改动方向。三者不要互相改写重复。
-21. selling_points 只保留可视化卖点短语，例如“拼色层次清晰”“双侧插袋实用”；不要写完整营销句。
-22. product_name、category、core_subject、silhouette、structure、logo_details 也必须尽量短，不要超过 18 个字；避免“经典、时尚、高级、氛围感”等修饰词。"""
-
-STYLE_ANALYSIS_SYSTEM_PROMPT = (
-    '你是多平台电商商品视觉策略分析专家，擅长根据商品图、核心卖点与目标平台，'
-    '为不同平台的主图/辅图生成可执行的视觉风格方向。'
-    '你必须输出适合前端直接渲染的 JSON，不要返回任何额外说明。'
-)
-
-STYLE_ANALYSIS_USER_PROMPT_TEMPLATE = """请结合当前商品图片与核心卖点，分析适合 {platform} 电商场景的视觉方向。
-
-目标平台：
-{platform}
-
-核心卖点：
-{selling_text}
-
-输出要求：
-1. 仅返回 JSON，不要代码块、不要前言、不要解释。
-2. 返回 4 个明显不同的风格方案，避免只是同义改写。
-3. 每个风格都必须包含：
-   - title：简短风格标题
-   - reasoning：一句适合直接展示在卡片上的简短理由
-   - colors：恰好 3 个可直接用于前端的十六进制颜色值，例如 #F5C028
-4. 风格必须明确贴合 {platform} 的商品主图/辅图策略，不是泛视觉概念。
-5. 本次请尽量给出与常见默认答案不同的组合，方便用户重复点击时获得新方向。
-6. 请严格按以下 JSON 结构返回：
-{{"styles":[{{"title":"","reasoning":"","colors":["#000000","#FFFFFF","#CCCCCC"]}}]}}
-"""
-
-FASHION_OUTPUT_VERIFIER_SYSTEM_PROMPT = (
-    '你是服饰穿搭成图质检助手。'
-    '你会收到 3 张图片，顺序固定为：第 1 张是待检查的生成结果，第 2 张是必须出镜的模特参考图，第 3 张是必须穿到模特身上的商品图。'
-    '你必须严格检查：生成结果里是否真的出现了清晰可见的人体/模特、是否与参考模特保持同一人物身份、是否让该模特穿上了商品图中的同一件服饰、是否出现了任何新增可见文字。'
-    '只允许输出合法 JSON，不要输出代码块、解释或额外文字。'
-)
-
-FASHION_OUTPUT_VERIFIER_USER_PROMPT_TEMPLATE = """请严格检查这 3 张图片（顺序固定：1=生成结果，2=模特参考，3=商品图），并返回 JSON：
-{{
-  "model_present": true,
-  "same_model_identity": true,
-  "wearing_product": true,
-  "extra_text_present": false,
-  "passed": true,
-  "score": 0,
-  "failed_checks": [""],
-  "reason": ""
-}}
-
-判定要求：
-1. model_present：只有当第 1 张图里明显出现真实模特/人体主体时才为 true；如果只是衣服平铺、挂拍、白底单品、无头模特、裁切到看不出人物身份，都必须为 false。
-2. same_model_identity：只有当第 1 张图中的出镜人物，与第 2 张参考图是同一模特身份时才为 true；若换人、性别不符、脸型发型明显不一致、只剩身体看不出是否同一人，都为 false。
-3. wearing_product：只有当第 1 张图中的模特，穿着第 3 张商品图里的同一件服饰主体，且款式、颜色、结构、图案、logo/字样位置总体一致时才为 true；若只是相似衣服、只保留部分特征、没真正穿到人身上，都为 false。
-4. extra_text_present：只要第 1 张图出现任何新增可见文字、数字、水印、海报字、标签字、背景招牌字、字幕或角标，就为 true。商品原本自带且与商品图一致的 logo / 印花文字不算新增文字。
-5. passed：只有当 model_present=true、same_model_identity=true、wearing_product=true、extra_text_present=false 时才为 true。
-6. score：0-100，越高表示越符合要求。
-7. failed_checks：从 ["model_present", "same_model_identity", "wearing_product", "extra_text_present"] 中返回未通过项；若都通过则返回空数组。
-8. reason：用一句中文简洁说明判定依据，20-80 字。
-
-务必保守判定；不确定时按失败处理。"""
-
-FASHION_OUTPUT_MAX_VERIFY_ATTEMPTS = 1
-
-FASHION_SCENE_PLAN_SYSTEM_PROMPT = (
-    '你是服饰穿搭视觉策划专家，擅长围绕服装主体一致性、模特外观、镜头语言与场景氛围，'
-    '为前端生成可直接渲染的场景推荐 JSON。你必须只输出合法 JSON，不要附加解释。'
-)
-
-FASHION_SCENE_PLAN_USER_PROMPT_TEMPLATE = """请基于当前服装商品图与当前已选模特参考，为服饰穿搭生成推荐场景方案。
-
-输出比例：
-{image_size_ratio}
-
-要求：
-1. 商品图用于锁定服饰主体、颜色、材质、版型、图案与细节一致性，不得替换商品主体。
-2. 当前已选模特参考图只用于锁定人物身份、外观、脸部特征、发型、肤感、体态比例与整体气质，后续最终成图必须继续沿用该模特，不得切换成其他人物。
-3. 需要输出 4 组推荐场景，每组 4 个模块方案。
-4. 场景描述要适合电商服饰穿搭图，避免过于复杂或喧宾夺主的背景。
-5. 每个模块都要清楚区分姿态、构图与镜头感，便于前端做多选场景。
-6. scene_prompt 与 poses.scene_prompt 都必须是可直接用于后续生图拼接的中文短句，突出服装一致性与模特一致性优先。
-7. 只返回如下 JSON 结构，不要返回 Markdown：
-{{
-  "summary": "整体推荐说明",
-  "scene_prompt": "适用于整组候选的总场景提示",
-  "scene_groups": [
-    {{
-      "id": "scene-group-1",
-      "title": "场景组标题",
-      "description": "场景组说明",
-      "scene_prompt": "该场景组提示词短句",
-      "poses": [
-        {{
-          "id": "module-1",
-          "title": "模块标题",
-          "description": "模块说明",
-          "scene_prompt": "该模块提示词短句"
-        }}
-      ]
-    }}
-  ]
-}}
-"""
-
-SUITE_PLAN_SYSTEM_PROMPT = (
-    '你是资深电商商品套图策划专家，擅长根据商品图、卖点、平台与固定图类型结构，'
-    '产出可直接进入图生图执行阶段的套图规划 JSON。'
-    '你必须只返回 JSON，不允许返回代码块、解释、说明文字。'
-)
-
-SUITE_PLAN_USER_PROMPT_TEMPLATE = """请基于商品图、平台和卖点，输出结构化套图规划 JSON。基于用户决策路径设计连贯视觉叙事，先做叙事定位再按张数分配模块容量。
-
-目标平台：{platform}
-国家参考：{country}
-说明文字种类：{text_type}
-图片尺寸比例参考：{image_size_ratio}
-用户当前核心关键词/卖点：{selling_text}
-商品主体结构化信息：{product_json}
-风格参考：{style_reference}
-本次输出张数：{output_count}
-后端固定图类型顺序（必须保留顺序，不要改数量）：{type_list}
-可用图类型说明：{type_details}
-
-## 叙事定位与容量分配
-推断产品类型（体验型/搜索型/高涉入）、用户知识水平、购物目标后，据此分配模块容量：
-- 体验型→模块2多张，场景化情感叙事优先；搜索型→模块3多张，参数/功能可视化优先；高涉入→平衡模块3+4
-- 低知识用户→场景叙事+结果可视化为主，减少参数堆砌；高知识用户→价值可视化优先，场景服务于证明
-- 享乐型→情绪共鸣+人物代入；功利型→核心信息+性能证明+信任闭环优先
-- output_count≤4按最小叙事链分配，5-7优先扩展模块2为连续节点，≥8模块2可3-4节点、剩余优先模块3
-- 禁止张数增加导致重复图，禁止产品策略错配
-
-## 四大模块叙事框架（不可打乱）
-模块1 opening_narrative：1秒锁定用户，建立核心冲突，商品为解决方案。首图以用户/人物为主体（品类不适合除外），只允许1个核心痛点+1个方案，确定整图人物/空间/光线/色调/风格基调。文案极简，无文字模式时完全不出现文案。
-模块2 scene_narrative：按"痛点承接→使用动作→效果呈现→价值升华"连续推进，人物/空间/光线/情绪保持一致，每张只推进1个节点，不做随机拼接。
-模块3 value_visualization：功能参数转为用户可感知的视觉结果，禁止纯参数堆砌。体验型做效果可视化（使用前后/氛围变化），搜索型做参数/功能对比可视化。
-模块4 trust_narrative：视觉化信任感（使用反馈感/品牌可信/品质检查/交付可靠），禁止堆砌售后文案或资质文本，风格与前文统一。不规划包装清单、附赠配件或配件展示。
-
-## 连续性与差异化（同时成立）
-- 商品一致性最高优先：主体品类/主色辅色/轮廓/结构/关键部件/logo/标识必一致；允许变背景/道具/光线/构图/文案/人物动作
-- 首图定义的人物/空间/风格后续图必延续，不无故切换
-- 每张图在镜头距离/主体朝向/人物动作/商品位置/版式骨架/信息密度上承担不同职责
-- 首屏主视觉/核心卖点/使用场景图必须强制分化，prompt中直接写出禁止复用的对象（朝向/姿势/摆位/景别/版式）
-- 禁止：碎片堆砌、纯产品展示页、图文脱节、无重点故事链、重复模板化
-
-## 文字版式
-- 版式随模块变化：首屏→极简强记忆，场景→陪伴式信息，价值→结构化说明，信任→清爽信息板
-- 配色与商品主色调呼应、低饱和克制；字体气质匹配产品风格；每张图字号至少拉开两级
-- 文字避开商品主体/模特面部/关键操作区；must_differ_from指定前序图至少在版式/字体/颜色中拉开两项差异
-- 无文字模式：整图不出现任何标题/副标题/标签/角标/参数
-- 禁止：乱码/变形/模糊/粗黑大字/底部居中堆砌/水印感/遮挡主体/高饱和乱色/无层次
-
-## 输出 JSON 结构
-只返回 JSON，不要代码块或解释。顶层：
-{{
-  "summary": "一句中文概括：产品叙事重心、目标用户、购物目标、模块分配逻辑",
-  "output_count": {output_count},
-  "items": [
-    {{
-      "sort": 1, "type": "", "title": "", "keywords": ["","",""], "prompt": "",
-      "module": "opening_narrative|scene_narrative|value_visualization|trust_narrative",
-      "story_role": "核心冲突建立|痛点承接|使用动作|效果呈现|价值升华|理性证明|风险消除等",
-      "decision_task": "该图要解决的用户判断问题",
-      "info_density": "low|medium|high",
-      "scene_required": true, "scene_type": "", "camera_shot": "", "subject_angle": "",
-      "human_presence": "none|hand-only|model", "action_type": "",
-      "layout_anchor": "", "layout_style": "单图分层|分栏线框|竖排多列|环绕标注|边角背书|参数信息板|对比双栏|吊牌角标|图标矩阵等",
-      "font_style": "", "color_scheme": "同色系深浅|低对比撞色|微渐变|浅底深字|深底浅字等",
-      "decor_elements": [""], "must_differ_from": [""]
-    }}
-  ]
-}}
-- items严格{output_count}项，type严格使用后端给定类型，不新创/不调顺序/不增删
-- keywords 3-6个短语围绕故事节点/卖点/场景语义
-- prompt为中文图生图指令，明确：叙事模块/故事节点/决策任务/构图重点/场景背景/人物/文案层级/视觉风格/商品一致性硬约束。无文字时明确不生成任何文案。风格参考优先吸收其气质/色彩/版式，但平台/国家/文字/尺寸/商品约束始终优先
-- 结构化字段必须与prompt一致不矛盾，优先用它们区分模块/节点/版式/字体/配色差异
-- 卖点为空时结合图片可见特征完成规划，不虚构无法确认的精确参数
-"""
-
-
-
-HEX_COLOR_PATTERN = re.compile(r'^#(?:[0-9a-fA-F]{3}|[0-9a-fA-F]{6})$')
-SAFE_NAME_PATTERN = re.compile(r'[^0-9a-zA-Z\u4e00-\u9fff_-]+')
-
-SUITE_TYPE_META = {
-    '首屏主视觉图': {
-        'tag': 'Hero',
-        'detail': '首图担当，突出主体识别度、平台主图逻辑与强视觉记忆点。',
-    },
-    '核心卖点图': {
-        'tag': 'Selling',
-        'detail': '聚焦 1-3 个核心卖点，用主副标题和信息分层强化转化。',
-    },
-    '使用场景图': {
-        'tag': 'Scene',
-        'detail': '展示真实使用环境，让用户快速理解商品用途和适用情境。',
-    },
-    '商品细节图': {
-        'tag': 'Detail',
-        'detail': '放大展示材质、结构、做工、关键部件等细节。',
-    },
-    '参数图': {
-        'tag': 'Specs',
-        'detail': '承载尺寸、规格、适配信息、容量等参数型信息。',
-    },
-    '信任背书图': {
-        'tag': 'Trust',
-        'detail': '展示真实反馈感、品牌可信线索、品质检查感或交付可靠感，禁止包装清单和配件展示。',
-    },
-    '场景氛围图': {
-        'tag': 'Mood',
-        'detail': '强调氛围感、生活方式与审美调性，提升点击欲望。',
-    },
-    '图标卖点图': {
-        'tag': 'Icons',
-        'detail': '通过图标、短词和模块化布局快速说明多个卖点。',
-    },
-    '品牌故事图': {
-        'tag': 'Brand',
-        'detail': '通过品牌感叙事、理念与调性，补足认知与信任。',
-    },
-    '多角度图': {
-        'tag': 'Angles',
-        'detail': '展示产品多角度、多面信息或组合视角，补充完整认知。',
-    },
-}
-
-SUITE_TYPE_RULES = {
-    6: ['首屏主视觉图', '核心卖点图', '使用场景图', '商品细节图', '参数图', '信任背书图'],
-    7: ['首屏主视觉图', '核心卖点图', '使用场景图', '场景氛围图', '商品细节图', '参数图', '信任背书图'],
-    8: ['首屏主视觉图', '使用场景图', '场景氛围图', '核心卖点图', '图标卖点图', '商品细节图', '参数图', '信任背书图'],
-    9: ['首屏主视觉图', '使用场景图', '场景氛围图', '品牌故事图', '核心卖点图', '图标卖点图', '商品细节图', '参数图', '信任背书图'],
-    10: ['首屏主视觉图', '使用场景图', '场景氛围图', '品牌故事图', '核心卖点图', '图标卖点图', '商品细节图', '多角度图', '参数图', '信任背书图'],
-}
-
-APLUS_PLAN_SYSTEM_PROMPT = (
-    '你是资深电商 A+ 详情页策划专家，擅长根据商品图、卖点、平台与指定模块结构，'
-    '产出可直接进入图生图执行阶段的 A+ 页面模块规划 JSON。'
-    '你必须只返回 JSON，不允许返回代码块、解释、说明文字。'
-)
-
-APLUS_PLAN_USER_PROMPT_TEMPLATE = """请根据参考商品图、平台和卖点，输出本次 A+详情页模块的结构化规划 JSON。
-
-目标平台：
-{platform}
-
-国家参考：
-{country}
-
-说明文字种类：
-{text_type}
-
-图片尺寸比例参考：
-{image_size_ratio}
-
-用户当前核心关键词/卖点：
-{selling_text}
-
-商品主体结构化信息：
-{product_json}
-
-风格参考：
-{style_reference}
-
-本次选中的 A+ 模块顺序（必须保留顺序，不要改数量）：
-{module_list}
-
-可用模块说明：
-{module_details}
-
-输出要求：
-1. 只返回 JSON，不要代码块，不要解释。
-2. 顶层结构必须为：
-{{
-  "summary": "",
-  "module_count": {module_count},
-  "items": [
-    {{
-      "sort": 1,
-      "type": "",
-      "title": "",
-      "keywords": ["", "", ""],
-      "prompt": ""
-    }}
-  ]
-}}
-3. summary 用一句中文概括本次 A+ 页面模块策略，体现模块结构、信息层级、平台语境，以及从首屏到转化说明的内容编排。
-4. items 长度必须严格等于 {module_count}，sort 必须从 1 开始递增。
-5. type 必须严格使用后端给定的模块名称，不得自创新 type。
-6. title 适合直接作为单个模块卡片标题，简洁明确。
-7. keywords 必须是 3-6 个短语，便于前端展示。
-8. prompt 必须是适合图生图的中文指令，需明确：该模块的版式目标、信息层级、构图重点、文案位置或禁文要求、视觉风格、商品主体保持一致、不要偏离参考商品。
-9. 这是 A+ 详情页模块规划，不是普通套图；模块之间必须承担不同的信息职责，并严格匹配本次选中的模块语义，例如：首屏主视觉负责第一屏吸引与核心价值、使用场景图负责真实使用展示、效果对比图负责前后差异表达、详细规格/参数表负责数据化说明、售后保障图负责质保退换与服务承诺。
-10. 如果用户卖点为空，也必须结合图片可见特征完成规划，但禁止虚构无法确认的精确参数。
-11. 每个模块都要贴合 {platform} 平台的 A+ 内容表达逻辑，且彼此分工明确、避免重复。
-12. 说明文字种类、图片尺寸比例、国家参考都必须体现在 summary 与每个模块的 prompt 中；如果某些卖点或场景与地区强相关，必须优先参考国家信息。
-13. 如果说明文字种类为“无文字”，prompt 中必须明确不要在图片中生成任何标题、卖点文案或说明文字；否则应按指定文字种类组织模块文案语言。
-14. 如果提供了风格参考，必须优先吸收该风格的视觉气质、色彩倾向、版式氛围与信息层级，并把它们自然融入 summary 与每个模块的 prompt；但平台规则、国家参考、文字类型、尺寸比例、商品主体与卖点约束始终优先。
-15. 选中的模块可能来自以下 16 类标准模块：首屏主视觉、使用场景图、场景氛围图、品牌故事图、效果对比图、工艺制作图、系列展示图、售后保障图、核心卖点图、多角度图、商品细节图、尺寸/容量/尺码图、详细规格/参数表、配件/赠品图、商品成分图、使用建议图。只有被选中的模块才可出现在 items 中。
-16. 对于“首屏主视觉”“核心卖点图”，默认优先做场景化表达，不要只做白底商品、悬浮 cutout 或纯信息板；应尽量把商品放进真实使用环境中，通过人物、动作、空间、氛围来体现第一眼吸引力与核心卖点。如果卖点里包含期望场景，必须优先写入 prompt；如果是服饰、鞋包、配饰类商品，优先让商品穿在/背在/佩戴在人物身上，在咖啡店、通勤、街头、办公室、居家等合理生活场景中展示。
-17. 对于“尺寸/容量/尺码图”“详细规格/参数表”“商品成分图”这类强信息模块，如图片或文案无法确认精确数据，必须使用保守表达，如“尺寸示意”“参数信息以实物为准”“图中可见材质/成分线索”，禁止编造具体数值。
-18. 对于“配件/赠品图”“售后保障图”“效果对比图”这类容易误导的模块，如缺少依据，不要虚构额外赠品、售后政策或夸张功效，应采用克制、可信的表达。
-19. 你必须同时承担全品类电商详情页专属版式规划职责：为每个模块匹配符合 {platform} 平台审美与模块功能的专属文字版式，不得套用统一模板化排版。
-20. 文字/标签配色必须与商品主色调和整体画面色调呼应，优先使用低饱和、克制、清爽的配色；禁止刺眼高饱和色、杂乱彩色字或明显不符合产品调性的乱色文案。
-21. 字体风格必须与产品调性匹配：简约/科技风优先无衬线，温柔/软萌风优先圆润软黑体或柔和手写感，高端/质感风优先纤细衬线或精致细体；禁止粗暴黑体、老旧土味字体和廉价海报字感。
-22. 每个模块都必须区分主标题/副标题/辅助说明层级，字号、粗细、留白与对齐方式要有明显层次，禁止所有文字同权重堆叠。
-23. 文字排版必须避开商品主体、模特面部、关键细节和重要结构区，优先放在画面空白区、边缘区、结构留白区；禁止用大面积文字遮挡主体信息。
-24. 模块之间既要保持统一品牌感，也必须形成不同的版式语言：首屏主视觉强调记忆点与极简标题，场景图强调陪伴式说明，参数/规格模块强调规整的信息板结构，售后/信任模块强调清晰可信与易读性。
-25. 若说明文字种类不为“无文字”，每个模块的 prompt 都必须显式提醒模型规避文字乱码、变形、模糊、粗黑描边大字、底部居中堆字、花哨特效字、水印感文字，并确保文字清晰可辨、版式干净清爽；若为“无文字”，则必须明确禁止出现任何标题、副标题、标签、角标、参数字或说明字。
-26. 每个模块必须使用不同的排版逻辑、不同的字体样式、不同的配色方案，禁止重复模板化设计；至少要在信息骨架、字体气质、色彩组织三项中拉开两项以上差异。
-27. 必须直接参考真实电商详情页常见版式语言并写入 prompt，例如：单图分层、分栏线框、竖排多列、环绕标注、边角背书、参数信息板、对比双栏、吊牌角标、图标矩阵；不要只写“高级排版”或“丰富文案”。
-28. 配色与装饰元素必须增加多样性：可使用同色系深浅、低对比撞色、微渐变、浅底深字、深底浅字，并结合线框、细分隔线、图标、吊牌、角标、编号标签、数据徽章等元素，但必须克制、清爽、服务商品，不得抢夺主体。
-"""
-
-APLUS_MODULE_META = {
-    'hero_value': {
-        'name': '首屏主视觉',
-        'tag': 'Hero',
-        'detail': '页面开场主视觉，优先采用真实场景化表达，突出商品主体、品牌识别与核心价值主张；服饰、鞋包、配饰类优先让商品穿在/背在/佩戴在人物身上。',
-    },
-    'usage_scene': {
-        'name': '使用场景图',
-        'tag': 'Scene',
-        'detail': '呈现真实使用场景，让用户快速理解商品用途、对象与使用方式。',
-    },
-    'mood_scene': {
-        'name': '场景氛围图',
-        'tag': 'Mood',
-        'detail': '展示生活方式与情绪氛围，强化审美调性与场景代入感。',
-    },
-    'brand_story': {
-        'name': '品牌故事图',
-        'tag': 'Brand',
-        'detail': '传达品牌理念、品牌调性、信任背书与故事化表达。',
-    },
-    'effect_compare': {
-        'name': '效果对比图',
-        'tag': 'Compare',
-        'detail': '用于展示使用前后、升级前后或不同状态下的变化对比。',
-    },
-    'craft_process': {
-        'name': '工艺制作图',
-        'tag': 'Craft',
-        'detail': '展示工艺制作过程、制造标准、做工流程与品质细节。',
-    },
-    'series_showcase': {
-        'name': '系列展示图',
-        'tag': 'Series',
-        'detail': '展示多色、多规格、多 SKU 或系列化组合陈列。',
-    },
-    'after_sales': {
-        'name': '售后保障图',
-        'tag': 'Support',
-        'detail': '说明质保、退换、客服响应、物流或服务承诺等保障信息。',
-    },
-    'core_selling': {
-        'name': '核心卖点图',
-        'tag': 'Selling',
-        'detail': '聚焦关键差异点与竞争优势，优先通过真实使用场景、人物状态与环境氛围来演绎卖点，不要退化为纯信息板；服饰、鞋包、配饰类优先展示上身/佩戴效果。',
-    },
-    'multi_angle': {
-        'name': '多角度图',
-        'tag': 'Angles',
-        'detail': '从多个角度呈现外观、轮廓、结构与整体形态。',
-    },
-    'detail_zoom': {
-        'name': '商品细节图',
-        'tag': 'Detail',
-        'detail': '放大材质、纹理、接口、缝线、边角等局部细节与工艺。',
-    },
-    'size_capacity': {
-        'name': '尺寸/容量/尺码图',
-        'tag': 'Size',
-        'detail': '展示尺寸、容量、尺码或适配范围等规格信息。',
-    },
-    'spec_table': {
-        'name': '详细规格/参数表',
-        'tag': 'Specs',
-        'detail': '用表格或信息板形式承载更完整的商品参数与数据说明。',
-    },
-    'accessories_gifts': {
-        'name': '配件/赠品图',
-        'tag': 'Bundle',
-        'detail': '明确收货包含的配件、赠品、包装内容与清单信息。',
-    },
-    'ingredients_materials': {
-        'name': '商品成分图',
-        'tag': 'Formula',
-        'detail': '展示配方、材质、面料、成分构成或核心用料信息。',
-    },
-    'usage_tips': {
-        'name': '使用建议图',
-        'tag': 'Tips',
-        'detail': '说明使用方法、注意事项、禁忌提醒与更佳使用建议。',
-    },
-}
-
-IMAGE_SIZE_RATIO_MAP = {
-    '1:1': '2048x2048',
-    '3:4': '1728x2304',
-    '9:16': '1440x2560',
-    '16:9': '2560x1440',
-}
-
-
-def normalize_platform_label(platform: str) -> str:
-    value = (platform or '').strip()
-    if not value:
-        return '亚马逊'
-    if value == '速卖通速卖通':
-        return '速卖通'
-    return value
-
-
-def get_env(name: str) -> str:
-    value = os.getenv(name, '').strip()
-    if not value:
-        raise ValueError(f'缺少环境变量：{name}')
-    return value
-
-
-def get_optional_env(name: str, default: str = '') -> str:
-    return os.getenv(name, default).strip()
-
-
-def get_optional_int_env(name: str, default: int) -> int:
-    value = get_optional_env(name, str(default))
-    try:
-        return int(value)
-    except ValueError as exc:
-        raise ValueError(f'环境变量 {name} 必须为整数') from exc
-
-
-def get_optional_bool_env(name: str, default: bool = False) -> bool:
-    raw_value = get_optional_env(name, 'true' if default else 'false').lower()
-    return raw_value in {'1', 'true', 'yes', 'on'}
-
-
-def build_supabase_auth_headers() -> dict:
-    return {
-        'apikey': SUPABASE_ANON_KEY,
-        'Content-Type': 'application/json',
-    }
-
-
-def build_supabase_request_url(path: str) -> str:
-    return f'{SUPABASE_URL.rstrip("/")}{path}'
 
 
 def parse_supabase_session_cookie() -> dict | None:
@@ -2563,36 +1109,6 @@ def parse_supabase_session_cookie() -> dict | None:
     if not isinstance(session_data, dict):
         return None
     return session_data
-
-
-
-def refresh_supabase_session(session_data: dict) -> dict | None:
-    refresh_token = str(session_data.get('refresh_token') or '').strip()
-    if not refresh_token:
-        return None
-
-    try:
-        response = requests.post(
-            build_supabase_request_url('/auth/v1/token?grant_type=refresh_token'),
-            headers=build_supabase_auth_headers(),
-            json={'refresh_token': refresh_token},
-            timeout=15,
-        )
-    except requests.RequestException:
-        return None
-
-    if response.status_code != 200:
-        return None
-
-    try:
-        payload = response.json()
-    except ValueError:
-        return None
-
-    if not isinstance(payload, dict):
-        return None
-
-    return normalize_supabase_session(payload)
 
 
 def get_supabase_session() -> dict | None:
@@ -2719,76 +1235,11 @@ def clear_auth_session_cookie(response):
     return response
 
 
-def supabase_logout_session(session_data: dict) -> bool:
-    access_token = str((session_data or {}).get('access_token') or '').strip()
-    if not access_token or not SUPABASE_URL:
-        return False
-
-    try:
-        response = requests.post(
-            build_supabase_request_url('/auth/v1/logout?scope=local'),
-            headers={
-                **build_supabase_auth_headers(),
-                'Authorization': f'Bearer {access_token}',
-            },
-            timeout=15,
-        )
-    except requests.RequestException as exc:
-        app.logger.warning('Failed to revoke Supabase session: %s', exc)
-        return False
-
-    if response.status_code not in {200, 204}:
-        app.logger.warning('Supabase logout returned %s: %s', response.status_code, response.text[:200])
-        return False
-
-    return True
-
-
 def auth_response_from_session(session_data: dict, redirect_path: str | None = None):
     target_path = redirect_path or '/suite'
     response = redirect(target_path)
     set_auth_session_cookie(response, session_data)
     return response
-
-
-def supabase_auth_password(email: str, password: str, action: str) -> tuple[dict, int]:
-    endpoint = '/auth/v1/signup' if action == 'signup' else '/auth/v1/token?grant_type=password'
-    payload = {'email': email, 'password': password}
-    try:
-        response = requests.post(
-            build_supabase_request_url(endpoint),
-            headers=build_supabase_auth_headers(),
-            json=payload,
-            timeout=20,
-        )
-    except requests.RequestException as exc:
-        raise RuntimeError(f'Supabase 请求失败：{exc}') from exc
-
-    try:
-        data = response.json()
-    except ValueError as exc:
-        raise RuntimeError('Supabase 返回了无效响应') from exc
-
-    if response.status_code >= 400:
-        message = data.get('msg') or data.get('message') or data.get('error_description') or data.get('error') or '认证失败'
-        raise ValueError(message)
-
-    if not isinstance(data, dict):
-        raise RuntimeError('Supabase 响应格式错误')
-
-    return data, response.status_code
-
-
-def normalize_supabase_session(payload: dict) -> dict:
-    user = payload.get('user') or {}
-    return {
-        'access_token': payload.get('access_token'),
-        'refresh_token': payload.get('refresh_token'),
-        'token_type': payload.get('token_type', 'bearer'),
-        'expires_in': payload.get('expires_in'),
-        'expires_at': payload.get('expires_at'),
-        'user': user,
-    }
 
 
 def require_auth_session() -> dict | None:
@@ -2798,149 +1249,26 @@ def require_auth_session() -> dict | None:
     return session_data
 
 
-def build_task_name(platform: str, mode: str, count: int) -> str:
-    if mode == 'aplus':
-        mode_label = 'A+详情页'
-        count_label = '模块'
-        return f'{platform}{mode_label}-{count}{count_label}-{datetime.now().strftime("%m%d-%H%M%S")}'
-    if mode == 'fashion':
-        return f'服饰穿搭-{count}张-{datetime.now().strftime("%m%d-%H%M%S")}'
-    mode_label = '爆款套图'
-    count_label = '张'
-    return f'{platform}{mode_label}-{count}{count_label}-{datetime.now().strftime("%m%d-%H%M%S")}'
-
-
-def build_generated_at() -> str:
-    return datetime.now().strftime('%Y-%m-%d %H:%M:%S')
-
-
-def guess_extension(mime_type: str, fallback: str = '.png') -> str:
-    extension = mimetypes.guess_extension(mime_type or '')
-    if extension == '.jpe':
-        extension = '.jpg'
-    return extension or fallback
-
-
-def sanitize_filename_part(value: str, fallback: str = 'file') -> str:
-    text = str(value or '').strip()
-    text = re.sub(r'[\\/:*?"<>|\x00-\x1f]+', '-', text)
-    text = re.sub(r'\s+', '-', text)
-    text = re.sub(r'-{2,}', '-', text).strip('-. _')
-    return (text or fallback)[:80]
-
-
-def sniff_image_mime_type(content: bytes):
-    if content.startswith(b'RIFF') and content[8:12] == b'WEBP':
-        return 'image/webp'
-
-    for mime_type, signatures in IMAGE_SIGNATURES.items():
-        if any(content.startswith(signature) for signature in signatures):
-            return mime_type
-    return None
-
-
-def validate_image_file(file_storage, content: bytes):
-    filename = file_storage.filename or '未命名文件'
-    extension = Path(filename).suffix.lower()
-    declared_mime_type = (file_storage.mimetype or '').split(';', 1)[0].strip().lower()
-    detected_mime_type = sniff_image_mime_type(content)
-
-    if not content:
-        raise ValueError(f'图片 {filename} 内容为空')
-    if len(content) > UPLOAD_MAX_FILE_BYTES:
-        raise ValueError(f'图片 {filename} 超过单张大小限制（{UPLOAD_MAX_FILE_BYTES // (1024 * 1024)}MB）')
-    if extension not in ALLOWED_IMAGE_EXTENSIONS:
-        raise ValueError(f'图片 {filename} 格式不受支持，仅支持 JPG、PNG、WEBP、GIF、BMP')
-    if declared_mime_type and declared_mime_type not in ALLOWED_IMAGE_MIME_TYPES:
-        raise ValueError(f'图片 {filename} MIME 类型不受支持：{declared_mime_type}')
-    if not detected_mime_type:
-        raise ValueError(f'图片 {filename} 不是有效的图片文件')
-
-    return detected_mime_type
-
-
-def cleanup_generated_suites(active_task_id: str | None = None):
-    if not GENERATED_SUITES_DIR.exists():
-        return
-
-    task_dirs = [path for path in GENERATED_SUITES_DIR.iterdir() if path.is_dir()]
-    if not task_dirs:
-        return
-
-    now = datetime.now()
-    removable_dirs = []
-    for path in task_dirs:
-        if active_task_id and path.name == active_task_id:
-            continue
-        modified_at = datetime.fromtimestamp(path.stat().st_mtime)
-        removable_dirs.append((path, modified_at))
-
-    if GENERATED_SUITE_RETENTION_DAYS > 0:
-        expire_before = now - timedelta(days=GENERATED_SUITE_RETENTION_DAYS)
-        for path, modified_at in removable_dirs:
-            if modified_at < expire_before and path.exists():
-                shutil.rmtree(path, ignore_errors=True)
-
-    if GENERATED_SUITE_RETENTION_COUNT > 0:
-        survivors = []
-        for path in GENERATED_SUITES_DIR.iterdir():
-            if not path.is_dir():
-                continue
-            if active_task_id and path.name == active_task_id:
-                continue
-            survivors.append((path, path.stat().st_mtime))
-        survivors.sort(key=lambda item: item[1], reverse=True)
-        for path, _ in survivors[GENERATED_SUITE_RETENTION_COUNT:]:
-            shutil.rmtree(path, ignore_errors=True)
-
-
-def resolve_image_size(image_size_ratio: str) -> str:
-    ratio = (image_size_ratio or '').strip()
-    if ratio in IMAGE_SIZE_RATIO_MAP:
-        return IMAGE_SIZE_RATIO_MAP[ratio]
-    return get_supabase_setting('ARK_IMAGE_SIZE', '2048x2048')
-
-
-def file_to_data_url(file_storage) -> str:
-    content = file_storage.read()
-    if not content:
-        raise ValueError(f'图片 {file_storage.filename or "未命名文件"} 内容为空')
-
-    mime_type = file_storage.mimetype or mimetypes.guess_type(file_storage.filename or '')[0] or 'application/octet-stream'
-    encoded = base64.b64encode(content).decode('utf-8')
-    return f'data:{mime_type};base64,{encoded}'
-
-
-def create_image_payload(file_storage):
-    content = file_storage.read()
-    mime_type = validate_image_file(file_storage, content)
-    filename = file_storage.filename or 'image'
-    encoded = base64.b64encode(content).decode('utf-8')
-    return {
-        'filename': filename,
-        'mime_type': mime_type,
-        'bytes': content,
-        'base64': encoded,
-        'data_url': f'data:{mime_type};base64,{encoded}',
-    }
 
 
 
 
-def parse_string_list(value: str, field_label: str):
-    raw = (value or '').strip()
-    if not raw:
-        return []
 
-    try:
-        parsed = json.loads(raw)
-    except json.JSONDecodeError as exc:
-        raise ValueError(f'{field_label} 参数格式异常') from exc
 
-    if not isinstance(parsed, list):
-        raise ValueError(f'{field_label} 参数必须为数组')
 
-    return [str(item).strip() for item in parsed if str(item).strip()]
+
+
+
+
+
+
+
+
+
+
+
+
+
 
 
 def get_image_payloads_from_request(field_name: str = 'images', limit: int = MAX_IMAGE_UPLOADS):
@@ -2954,944 +1282,6 @@ def get_image_payloads_from_request(field_name: str = 'images', limit: int = MAX
     return payloads
 
 
-def build_multimodal_content(prompt_text: str, image_files):
-    content = [{'type': 'text', 'text': prompt_text}]
-
-    for image_file in image_files:
-        if isinstance(image_file, dict):
-            image_url = image_file.get('data_url')
-        else:
-            image_url = file_to_data_url(image_file)
-        content.append(
-            {
-                'type': 'image_url',
-                'image_url': {'url': image_url},
-            }
-        )
-
-    return content
-
-
-CHAT_COMPLETION_RETRYABLE_STATUS_CODES = {429, 502, 503, 504, 524}
-CHAT_COMPLETION_FALLBACK_ERROR_TOKENS = (
-    'Your request was blocked',
-    'AccountOverdueError',
-    'overdue balance',
-    'usage limit',
-    'usage_limit_reached',
-    'HTTPSConnectionPool',
-    'SSLError',
-    'SSLEOFError',
-    'EOF occurred in violation of protocol',
-    'Max retries exceeded',
-    '524',
-)
-
-
-def create_chat_completion_session():
-    retry = Retry(
-        total=2,
-        connect=2,
-        read=2,
-        status=2,
-        backoff_factor=0.8,
-        allowed_methods=frozenset({'POST'}),
-        status_forcelist=CHAT_COMPLETION_RETRYABLE_STATUS_CODES,
-        raise_on_status=False,
-    )
-    adapter = HTTPAdapter(max_retries=retry)
-    session = requests.Session()
-    session.mount('https://', adapter)
-    session.mount('http://', adapter)
-    return session
-
-
-def _create_chat_client(api_key: str, base_url: str) -> OpenAI:
-    normalized_base_url = str(base_url or '').strip().rstrip('/') + '/'
-    return OpenAI(api_key=api_key, base_url=normalized_base_url)
-
-
-def _run_chat_completion(client: OpenAI, model: str, system_prompt: str, user_content, temperature: float, timeout_seconds: int):
-    return client.chat.completions.create(
-        model=model,
-        messages=[
-            {'role': 'system', 'content': system_prompt},
-            {'role': 'user', 'content': user_content},
-        ],
-        temperature=temperature,
-        timeout=timeout_seconds,
-    )
-
-
-def _run_chat_completion_http(api_key: str, base_url: str, model: str, system_prompt: str, user_content, temperature: float, timeout_seconds: int):
-    normalized_base_url = str(base_url or '').strip().rstrip('/') + '/'
-    session = create_chat_completion_session()
-    try:
-        response = session.post(
-            f'{normalized_base_url}chat/completions',
-            headers={
-                'Authorization': f'Bearer {api_key}',
-                'Content-Type': 'application/json',
-            },
-            json={
-                'model': model,
-                'messages': [
-                    {'role': 'system', 'content': system_prompt},
-                    {'role': 'user', 'content': user_content},
-                ],
-                'temperature': temperature,
-            },
-            timeout=timeout_seconds,
-        )
-    finally:
-        session.close()
-    if response.status_code >= 400:
-        raise RuntimeError(f'Error code: {response.status_code} - {response.text}')
-    return response.json()
-
-
-def should_enable_chat_fallback_to_ark() -> bool:
-    fallback_mode = str(get_supabase_setting('CHAT_FALLBACK_TO_ARK', get_optional_env('CHAT_FALLBACK_TO_ARK', 'auto')) or 'auto').strip().lower()
-    if fallback_mode in {'on', 'true', '1', 'yes'}:
-        return True
-    if fallback_mode in {'off', 'false', '0', 'no'}:
-        return False
-    return True
-
-
-def get_suite_plan_timeout_seconds() -> int:
-    return max(get_supabase_setting_int('SUITE_PLAN_TIMEOUT_SECONDS', get_optional_int_env('SUITE_PLAN_TIMEOUT_SECONDS', 180)), 60)
-
-
-def call_chat_completion(system_prompt: str, user_content, temperature: float = 0.7, timeout_seconds: int = 60):
-    primary_api_key = get_supabase_setting('OPENAI_API_KEY', get_env('OPENAI_API_KEY'))
-    primary_base_url = get_supabase_setting('OPENAI_BASE_URL', get_env('OPENAI_BASE_URL'))
-    primary_model = get_supabase_setting('OPENAI_MODEL', get_env('OPENAI_MODEL'))
-
-    try:
-        response = _run_chat_completion_http(
-            primary_api_key,
-            primary_base_url,
-            primary_model,
-            system_prompt,
-            user_content,
-            temperature,
-            timeout_seconds,
-        )
-        model = primary_model
-    except Exception as exc:
-        error_text = str(exc)
-        should_fallback_to_ark = should_enable_chat_fallback_to_ark() and any(token in error_text for token in CHAT_COMPLETION_FALLBACK_ERROR_TOKENS)
-        if not should_fallback_to_ark:
-            raise
-
-        fallback_api_key = get_supabase_setting('ARK_CHAT_API_KEY', get_optional_env('ARK_CHAT_API_KEY', '')) or get_supabase_setting('ARK_API_KEY', get_optional_env('ARK_API_KEY', ''))
-        fallback_base_url = get_supabase_setting('ARK_CHAT_BASE_URL', get_optional_env('ARK_CHAT_BASE_URL', '')) or get_supabase_setting('ARK_BASE_URL', get_optional_env('ARK_BASE_URL', 'https://ark.cn-beijing.volces.com/api/v3'))
-        fallback_model = get_supabase_setting('ARK_CHAT_MODEL', get_optional_env('ARK_CHAT_MODEL', 'doubao-1-5-lite-32k-250115'))
-        if not fallback_api_key:
-            raise
-
-        app.logger.warning(
-            'Primary chat completion failed with fallbackable error, fallback to Ark chat model=%s base_url=%s original_error=%s',
-            fallback_model,
-            fallback_base_url,
-            error_text,
-        )
-        try:
-            response = _run_chat_completion(
-                _create_chat_client(fallback_api_key, fallback_base_url),
-                fallback_model,
-                system_prompt,
-                user_content,
-                temperature,
-                timeout_seconds,
-            )
-        except Exception as fallback_exc:
-            raise RuntimeError(f'主AI接口失败且备用AI接口也失败。主接口错误：{error_text}；备用接口错误：{fallback_exc}') from fallback_exc
-        model = fallback_model
-
-    try:
-        raw_response_text = json.dumps(response, ensure_ascii=False, indent=2) if isinstance(response, dict) else response.model_dump_json(indent=2)
-    except Exception:
-        raw_response_text = str(response)
-    app.logger.warning(
-        'Chat completion response: model=%s body=%s',
-        model,
-        raw_response_text,
-    )
-
-    if isinstance(response, dict):
-        choice = ((response.get('choices') or [None])[0] or {})
-        message = choice.get('message') or {}
-        text = message.get('content') or ''
-    else:
-        message = ((getattr(response, 'choices', None) or [None])[0] or {}).message
-        text = getattr(message, 'content', '') if message else ''
-    if isinstance(text, list):
-        text = ''.join(part.text for part in text if getattr(part, 'text', None))
-    elif text is None:
-        text = ''
-    text = str(text).strip() if text else ''
-
-    if not text:
-        fallback_fields = ['reasoning_content']
-        for field in fallback_fields:
-            fallback_text = message.get(field, '') if isinstance(message, dict) else (getattr(message, field, '') if message else '')
-            if isinstance(fallback_text, list):
-                fallback_text = ''.join(part.text for part in fallback_text if getattr(part, 'text', None))
-            elif fallback_text is None:
-                fallback_text = ''
-            fallback_text = str(fallback_text).strip() if fallback_text else ''
-            if fallback_text:
-                text = fallback_text
-                break
-
-    if not text:
-        raise ValueError('模型接口未返回内容（已记录原始响应日志，便于排查）')
-    return text
-
-
-def parse_runtime_error(exc: RuntimeError):
-    try:
-        payload = json.loads(str(exc))
-    except ValueError:
-        return {'success': False, 'error': str(exc)}, 502
-    return {'success': False, **payload}, 502
-
-
-def parse_ark_exception(exc: Exception):
-    status_code = 502
-    details = None
-
-    if isinstance(exc, APIStatusError):
-        status_code = exc.status_code or 502
-        details = exc.response.text if getattr(exc, 'response', None) else None
-    elif isinstance(exc, APIError):
-        details = str(exc)
-    else:
-        details = str(exc)
-
-    app.logger.exception('ARK image generation failed: status=%s details=%s', status_code, details)
-
-    return {
-        'success': False,
-        'error': '图像生成接口调用失败',
-        'details': details,
-    }, status_code
-
-
-def strip_code_fences(text: str) -> str:
-    cleaned = text.strip()
-    if cleaned.startswith('```'):
-        cleaned = re.sub(r'^```[a-zA-Z0-9_-]*\s*', '', cleaned)
-        cleaned = re.sub(r'\s*```$', '', cleaned)
-    return cleaned.strip()
-
-
-def extract_json_candidate(text: str) -> str:
-    cleaned = strip_code_fences(str(text or ''))
-    if not cleaned:
-        return cleaned
-    start_indexes = [index for index in [cleaned.find('{'), cleaned.find('[')] if index >= 0]
-    if not start_indexes:
-        return cleaned
-    start = min(start_indexes)
-    opener = cleaned[start]
-    closer = '}' if opener == '{' else ']'
-    end = cleaned.rfind(closer)
-    if end <= start:
-        return cleaned
-    return cleaned[start:end + 1].strip()
-
-
-def remove_trailing_json_commas(text: str) -> str:
-    return re.sub(r',\s*([}\]])', r'\1', text)
-
-
-def parse_json_candidate(text: str, error_prefix: str):
-    candidates = []
-    raw_candidate = strip_code_fences(str(text or ''))
-    extracted_candidate = extract_json_candidate(raw_candidate)
-    for candidate in [raw_candidate, extracted_candidate, remove_trailing_json_commas(extracted_candidate)]:
-        normalized = str(candidate or '').strip()
-        if normalized and normalized not in candidates:
-            candidates.append(normalized)
-    last_error = None
-    for candidate in candidates:
-        try:
-            return json.loads(candidate)
-        except json.JSONDecodeError as exc:
-            last_error = exc
-    raise ValueError(f'{error_prefix}：{last_error}') from last_error
-
-
-def build_json_repair_prompt(raw_text: str, error_message: str) -> str:
-    return (
-        '下面内容本应是 JSON，但格式不合法。请只返回修复后的合法 JSON，不要解释，不要 Markdown 代码块。\n'
-        f'解析错误：{error_message}\n'
-        '原始内容：\n'
-        f'{str(raw_text or "")}'
-    )
-
-
-def call_chat_json_with_repair(
-    system_prompt: str,
-    user_content,
-    parser,
-    error_prefix: str,
-    temperature: float = 0.3,
-    timeout_seconds: int = 60,
-    repair_attempts: int = 1,
-):
-    response_text = call_chat_completion(system_prompt, user_content, temperature=temperature, timeout_seconds=timeout_seconds)
-    try:
-        return parser(response_text), response_text
-    except ValueError as first_exc:
-        last_exc = first_exc
-        repaired_text = response_text
-        for attempt in range(max(int(repair_attempts or 0), 0)):
-            try:
-                repaired_text = call_chat_completion(
-                    '你是严格的 JSON 修复器，只能输出合法 JSON。',
-                    build_json_repair_prompt(repaired_text, str(last_exc)),
-                    temperature=0,
-                    timeout_seconds=min(max(timeout_seconds, 60), 120),
-                )
-                return parser(repaired_text), repaired_text
-            except ValueError as exc:
-                last_exc = exc
-                app.logger.warning('%s JSON repair attempt %s failed: %s', error_prefix, attempt + 1, exc)
-        raise last_exc
-
-
-def normalize_hex_color(value: str) -> str:
-    color = (value or '').strip()
-    if not color:
-        raise ValueError('颜色值为空')
-    if not color.startswith('#'):
-        color = f'#{color}'
-    if not HEX_COLOR_PATTERN.fullmatch(color):
-        raise ValueError(f'颜色值格式非法：{value}')
-    if len(color) == 4:
-        color = '#' + ''.join(ch * 2 for ch in color[1:])
-    return color.upper()
-
-
-def parse_style_analysis(text: str):
-    payload = parse_json_candidate(text, '风格分析结果格式异常')
-
-    styles = payload.get('styles')
-    if not isinstance(styles, list) or len(styles) != 4:
-        raise ValueError('风格分析结果格式异常：styles 必须为长度 4 的数组')
-
-    normalized_styles = []
-    for item in styles:
-        if not isinstance(item, dict):
-            raise ValueError('风格分析结果格式异常：单个风格必须为对象')
-
-        title = str(item.get('title', '')).strip()
-        reasoning = str(item.get('reasoning', '')).strip()
-        colors = item.get('colors')
-
-        if not title or not reasoning:
-            raise ValueError('风格分析结果格式异常：title 和 reasoning 不能为空')
-        if not isinstance(colors, list) or len(colors) != 3:
-            raise ValueError('风格分析结果格式异常：colors 必须包含 3 个颜色值')
-
-        normalized_styles.append(
-            {
-                'title': title,
-                'reasoning': reasoning,
-                'colors': [normalize_hex_color(color) for color in colors],
-            }
-        )
-
-    return normalized_styles
-
-
-def get_suite_type_rules(output_count: int):
-    try:
-        count = int(output_count)
-    except (TypeError, ValueError) as exc:
-        raise ValueError('输出数量必须为 6-10 之间的整数') from exc
-
-    if count not in SUITE_TYPE_RULES:
-        raise ValueError('输出数量必须为 6-10 之间的整数')
-    return count, SUITE_TYPE_RULES[count]
-
-
-def parse_selected_modules(modules_raw: str):
-    try:
-        parsed = json.loads((modules_raw or '').strip() or '[]')
-    except json.JSONDecodeError as exc:
-        raise ValueError('A+ 模块参数格式异常') from exc
-
-    if not isinstance(parsed, list) or not parsed:
-        raise ValueError('请至少选择 1 个 A+ 模块')
-
-    selected_keys = []
-    seen = set()
-    for item in parsed:
-        key = str(item or '').strip()
-        if not key or key in seen:
-            continue
-        if key not in APLUS_MODULE_META:
-            raise ValueError(f'A+ 模块参数非法：{key}')
-        selected_keys.append(key)
-        seen.add(key)
-
-    if not selected_keys:
-        raise ValueError('请至少选择 1 个 A+ 模块')
-    return selected_keys
-
-
-
-def parse_selected_style(title: str, reasoning: str, colors_raw: str):
-    normalized_title = (title or '').strip()
-    normalized_reasoning = (reasoning or '').strip()
-    raw_colors = (colors_raw or '').strip()
-
-    if not normalized_title and not normalized_reasoning and not raw_colors:
-        return None
-
-    if not normalized_title or not normalized_reasoning:
-        raise ValueError('所选风格参数不完整，请重新选择风格后再试')
-
-    try:
-        parsed_colors = json.loads(raw_colors or '[]')
-    except json.JSONDecodeError as exc:
-        raise ValueError('所选风格颜色参数格式异常') from exc
-
-    if not isinstance(parsed_colors, list) or len(parsed_colors) != 3:
-        raise ValueError('所选风格颜色参数必须包含 3 个颜色值')
-
-    return {
-        'title': normalized_title,
-        'reasoning': normalized_reasoning,
-        'colors': [normalize_hex_color(color) for color in parsed_colors],
-    }
-
-
-def build_style_reference_text(selected_style) -> str:
-    if not selected_style:
-        return '未指定风格，请基于平台、卖点、国家、文字类型、尺寸比例与参考图自行规划。'
-
-    color_list = ' / '.join(selected_style.get('colors') or []) or '未提供颜色'
-    return (
-        f'已选风格标题：{selected_style.get("title", "") or "未命名风格"}\n'
-        f'风格说明：{selected_style.get("reasoning", "") or "未提供"}\n'
-        f'参考配色：{color_list}'
-    )
-
-
-PRODUCT_JSON_FALLBACK = {
-    'product_name': '',
-    'category': '',
-    'core_subject': '',
-    'subject_composition': {
-        'subject_count': '',
-        'subject_units': [],
-        'assembly_form': '',
-    },
-    'appearance': {
-        'primary_colors': [],
-        'secondary_colors': [],
-        'materials': [],
-        'textures_patterns': [],
-        'silhouette': '',
-        'structure': '',
-        'surface_finish': '',
-        'craft_details': [],
-    },
-    'key_components': [],
-    'brand_identity': {
-        'brand_name': '',
-        'logo_details': '',
-        'text_markings': [],
-        'logo_positions': [],
-    },
-    'immutable_traits': [],
-    'consistency_rules': [],
-    'must_keep': [],
-    'must_not_change': [],
-    'forbidden_changes': [],
-    'selling_points': [],
-}
-
-
-PRODUCT_JSON_PROMPT_TEMPLATE = (
-    '不可变商品特征（仅用于锁定商品主体，若为空则代表暂未提取）：\n{product_json_text}\n\n'
-    '执行要求：\n'
-    '1. 上述结构只代表商品主体本身，不包含也不得反向推导场景、背景、光线、氛围、人物、姿势、镜头语言或文案排版。\n'
-    '2. 后续所有规划与生图都必须优先遵守以上不可变商品特征，尤其优先执行 must_keep、must_not_change、forbidden_changes 与 consistency_rules。\n'
-    '3. must_keep 代表每张图都必须保留的主体锚点；must_not_change 代表绝不允许漂移、弱化或替换的主体信息；forbidden_changes 代表明确禁止出现的变体方向。\n'
-    '4. selling_points 仅用于补充画面表达重点、信息层级与卖点文案，不得覆盖或削弱主体一致性约束。\n'
-    '5. 允许变化的仅限背景、道具、光线、构图、文案排版与非主体装饰；禁止把商品改成另一种外观、材质、结构或颜色体系。\n'
-    '6. 若某些字段为空，只能依据参考图可见主体信息保守补足，不能臆测或改造成另一种商品。'
-)
-
-
-def normalize_product_json(raw_value):
-    payload = raw_value if isinstance(raw_value, dict) else {}
-    subject_composition = payload.get('subject_composition') if isinstance(payload.get('subject_composition'), dict) else {}
-    appearance = payload.get('appearance') if isinstance(payload.get('appearance'), dict) else {}
-    brand_identity = payload.get('brand_identity') if isinstance(payload.get('brand_identity'), dict) else {}
-    visible_attributes = payload.get('visible_attributes') if isinstance(payload.get('visible_attributes'), dict) else {}
-
-    def clean_list(value, limit=6):
-        if not isinstance(value, list):
-            return []
-        normalized = []
-        seen = set()
-        for item in value:
-            text = str(item).strip()
-            if not text or text in seen:
-                continue
-            normalized.append(text)
-            seen.add(text)
-            if limit and len(normalized) >= limit:
-                break
-        return normalized
-
-    primary_colors = clean_list(appearance.get('primary_colors'), limit=4)
-    secondary_colors = clean_list(appearance.get('secondary_colors'), limit=4)
-    materials = clean_list(appearance.get('materials'), limit=4)
-    textures_patterns = clean_list(appearance.get('textures_patterns'))
-    craft_details = clean_list(appearance.get('craft_details'))
-    key_components = clean_list(payload.get('key_components'))
-    immutable_traits = clean_list(payload.get('immutable_traits'))
-    consistency_rules = clean_list(payload.get('consistency_rules'), limit=8)
-    must_keep = clean_list(payload.get('must_keep'), limit=8)
-    must_not_change = clean_list(payload.get('must_not_change'), limit=8)
-    forbidden_changes = clean_list(payload.get('forbidden_changes'), limit=8)
-    selling_points = clean_list(payload.get('selling_points'))
-    subject_units = clean_list(subject_composition.get('subject_units'))
-    text_markings = clean_list(brand_identity.get('text_markings'))
-    logo_positions = clean_list(brand_identity.get('logo_positions'))
-
-    legacy_color = str(visible_attributes.get('color', '')).strip()
-    legacy_material = str(visible_attributes.get('material', '')).strip()
-    legacy_pattern = str(visible_attributes.get('pattern', '')).strip()
-    legacy_shape = str(visible_attributes.get('shape', '')).strip()
-    legacy_structure = str(visible_attributes.get('structure', '')).strip()
-    legacy_craft_details = clean_list(visible_attributes.get('craft_details'))
-
-    if not primary_colors and legacy_color:
-        primary_colors = [legacy_color]
-    if not materials and legacy_material:
-        materials = [legacy_material]
-    if not textures_patterns and legacy_pattern:
-        textures_patterns = [legacy_pattern]
-    if not craft_details and legacy_craft_details:
-        craft_details = legacy_craft_details
-
-    silhouette = str(appearance.get('silhouette', '')).strip() or legacy_shape
-    structure = str(appearance.get('structure', '')).strip() or legacy_structure
-    category = str(payload.get('category', '')).strip()
-    core_subject = str(payload.get('core_subject', '')).strip()
-
-    if not must_keep:
-        must_keep = clean_list([
-            category,
-            core_subject,
-            *primary_colors[:2],
-            silhouette,
-            *key_components[:2],
-        ], limit=8)
-
-    if not must_not_change:
-        must_not_change = clean_list([
-            structure,
-            *materials[:2],
-            *immutable_traits[:4],
-            *logo_positions[:2],
-        ], limit=8)
-
-    if not forbidden_changes:
-        auto_forbidden = []
-        if category:
-            auto_forbidden.append('禁止替换为其他商品品类或其他主体对象')
-        if primary_colors:
-            auto_forbidden.append('禁止把主体主色与辅色改成另一套明显不同的颜色体系')
-        if materials:
-            auto_forbidden.append('禁止把主体材质表现替换成另一种明显不同的材质')
-        if structure or silhouette:
-            auto_forbidden.append('禁止改变主体轮廓、结构比例或关键造型')
-        if key_components:
-            auto_forbidden.append('禁止删减、替换或新增会改变商品识别度的关键部件')
-        if logo_positions or text_markings:
-            auto_forbidden.append('禁止改动品牌标识、文字标记或 logo 位置')
-        forbidden_changes = clean_list(auto_forbidden, limit=8)
-
-    return {
-        'product_name': str(payload.get('product_name', '')).strip(),
-        'category': category,
-        'core_subject': core_subject,
-        'subject_composition': {
-            'subject_count': str(subject_composition.get('subject_count', '')).strip(),
-            'subject_units': subject_units,
-            'assembly_form': str(subject_composition.get('assembly_form', '')).strip(),
-        },
-        'appearance': {
-            'primary_colors': primary_colors,
-            'secondary_colors': secondary_colors,
-            'materials': materials,
-            'textures_patterns': textures_patterns,
-            'silhouette': silhouette,
-            'structure': structure,
-            'surface_finish': str(appearance.get('surface_finish', '')).strip(),
-            'craft_details': craft_details,
-        },
-        'key_components': key_components,
-        'brand_identity': {
-            'brand_name': str(brand_identity.get('brand_name', '')).strip(),
-            'logo_details': str(brand_identity.get('logo_details', '')).strip(),
-            'text_markings': text_markings,
-            'logo_positions': logo_positions,
-        },
-        'immutable_traits': immutable_traits,
-        'consistency_rules': consistency_rules,
-        'must_keep': must_keep,
-        'must_not_change': must_not_change,
-        'forbidden_changes': forbidden_changes,
-        'selling_points': selling_points,
-    }
-
-
-
-def parse_product_json(text: str):
-    try:
-        payload = parse_json_candidate(text, '商品结构化信息格式异常')
-    except ValueError:
-        payload = extract_json_object_from_text(strip_code_fences(text))
-        if payload is None:
-            raise ValueError('商品结构化信息格式异常：无法解析为 JSON 对象')
-    if not isinstance(payload, dict):
-        raise ValueError('商品结构化信息格式异常：顶层必须为对象')
-    return normalize_product_json(payload)
-
-
-
-def parse_product_json_payload(raw_value: str):
-    normalized_raw = (raw_value or '').strip()
-    if not normalized_raw:
-        return None
-    try:
-        payload = json.loads(normalized_raw)
-    except json.JSONDecodeError:
-        payload = extract_json_object_from_text(normalized_raw)
-        if payload is None:
-            raise ValueError('商品结构化信息参数格式异常')
-    if not isinstance(payload, dict):
-        raise ValueError('商品结构化信息参数格式异常：顶层必须为对象')
-    return normalize_product_json(payload)
-
-
-
-def extract_json_object_from_text(text: str):
-    if not text:
-        return None
-    candidate_patterns = [
-        r'\{[\s\S]*\}',
-    ]
-    for pattern in candidate_patterns:
-        match = re.search(pattern, text)
-        if not match:
-            continue
-        candidate = match.group(0).strip()
-        try:
-            return json.loads(candidate)
-        except json.JSONDecodeError:
-            continue
-    return None
-
-
-
-def extract_product_json_from_image_payloads(selling_text: str, image_payloads):
-    if not image_payloads:
-        return None
-    product_json, _response_text = call_chat_json_with_repair(
-        PRODUCT_JSON_SYSTEM_PROMPT,
-        build_multimodal_content(
-            PRODUCT_JSON_USER_PROMPT_TEMPLATE.format(selling_text=selling_text or '（未填写）'),
-            image_payloads,
-        ),
-        parse_product_json,
-        '商品结构化信息格式异常',
-        temperature=0.2,
-        timeout_seconds=get_suite_plan_timeout_seconds(),
-        repair_attempts=1,
-    )
-    try:
-        return normalize_product_json(product_json)
-    except ValueError as exc:
-        app.logger.warning('商品结构化信息解析失败，已降级为空结构：%s', exc)
-        return normalize_product_json(PRODUCT_JSON_FALLBACK)
-
-
-
-def serialize_product_json(product_json) -> str:
-    normalized = normalize_product_json(product_json or PRODUCT_JSON_FALLBACK)
-    return json.dumps(normalized, ensure_ascii=False, indent=2)
-
-
-
-def build_product_json_prompt_text(product_json) -> str:
-    if not product_json:
-        return '未提供不可变商品特征。'
-    return PRODUCT_JSON_PROMPT_TEMPLATE.format(product_json_text=serialize_product_json(product_json))
-
-
-
-def build_suite_plan_prompt(platform: str, selling_text: str, output_count: int, type_rules, country: str, text_type: str, image_size_ratio: str, selected_style=None, mode: str = 'suite', product_json=None):
-    type_list = '\n'.join(f'{index + 1}. {item}' for index, item in enumerate(type_rules))
-    type_details = '\n'.join(
-        f'- {name}：{SUITE_TYPE_META[name]["detail"]}'
-        for name in type_rules
-    )
-    prompt_template = SUITE_PLAN_USER_PROMPT_TEMPLATE
-    if mode == 'fashion':
-        prompt_template = (
-            SUITE_PLAN_USER_PROMPT_TEMPLATE
-            + '\n18. 当前为服饰穿搭场景：商品图只用于锁定服饰主体的不可变特征，如品类、颜色、材质、版型、结构与稳定细节；如同时提供穿搭参考图，则只用于吸收模特姿态、穿搭方式、镜头语言、氛围与版式方向，不得替换商品主体本身。\n'
-            + '19. 服饰场景下，prompt 必须优先保证商品主体与商品图一致，其次再融合参考图里的姿态、氛围与构图灵感。'
-        )
-    product_json_text = build_product_json_prompt_text(product_json)
-    return prompt_template.format(
-        platform=platform,
-        country=country or '中国',
-        text_type=text_type or '中文',
-        image_size_ratio=image_size_ratio or '1:1',
-        selling_text=selling_text or '（未填写）',
-        style_reference=build_style_reference_text(selected_style),
-        product_json=product_json_text,
-        output_count=output_count,
-        type_list=type_list,
-        type_details=type_details,
-    )
-
-
-def parse_suite_plan(text: str, expected_output_count: int, allowed_types):
-    payload = parse_json_candidate(text, '套图规划结果格式异常')
-
-    summary = str(payload.get('summary', '')).strip()
-    output_count = payload.get('output_count')
-    items = payload.get('items')
-
-    if not summary:
-        raise ValueError('套图规划结果格式异常：summary 不能为空')
-    if output_count != expected_output_count:
-        raise ValueError('套图规划结果格式异常：output_count 与请求不一致')
-    if not isinstance(items, list) or len(items) != expected_output_count:
-        raise ValueError('套图规划结果格式异常：items 数量与输出张数不一致')
-
-    normalized_items = []
-    for index, item in enumerate(items, start=1):
-        if not isinstance(item, dict):
-            raise ValueError('套图规划结果格式异常：单个套图项必须为对象')
-
-        sort = item.get('sort')
-        image_type = str(item.get('type', '')).strip()
-        title = str(item.get('title', '')).strip()
-        prompt = str(item.get('prompt', '')).strip()
-        keywords = item.get('keywords')
-
-        if sort != index:
-            raise ValueError(f'套图规划结果格式异常：第 {index} 项 sort 非法')
-        if image_type not in allowed_types:
-            raise ValueError(f'套图规划结果格式异常：第 {index} 项 type 非法')
-        if not title:
-            raise ValueError(f'套图规划结果格式异常：第 {index} 项 title 不能为空')
-        if not prompt:
-            raise ValueError(f'套图规划结果格式异常：第 {index} 项 prompt 不能为空')
-        if not isinstance(keywords, list) or not (3 <= len(keywords) <= 6):
-            raise ValueError(f'套图规划结果格式异常：第 {index} 项 keywords 数量必须为 3-6 个')
-
-        normalized_keywords = [str(keyword).strip() for keyword in keywords if str(keyword).strip()]
-        if len(normalized_keywords) < 3:
-            raise ValueError(f'套图规划结果格式异常：第 {index} 项 keywords 不能为空')
-
-        module = normalize_plan_enum(
-            item.get('module'),
-            {'opening_narrative', 'scene_narrative', 'value_visualization', 'trust_narrative'},
-            'scene_narrative',
-        )
-        story_role = normalize_plan_short_text(item.get('story_role'), '未指定故事节点')
-        decision_task = normalize_plan_short_text(item.get('decision_task'), '未指定决策任务')
-        info_density = normalize_plan_enum(item.get('info_density'), {'low', 'medium', 'high'}, 'medium')
-
-        scene_required_raw = item.get('scene_required')
-        if not isinstance(scene_required_raw, bool):
-            raise ValueError(f'套图规划结果格式异常：第 {index} 项 scene_required 必须为布尔值')
-
-        human_presence = normalize_plan_enum(item.get('human_presence'), {'none', 'hand-only', 'model'}, 'none')
-        scene_type = normalize_plan_short_text(item.get('scene_type'), '未指定场景')
-        camera_shot = normalize_plan_short_text(item.get('camera_shot'), '未指定景别')
-        subject_angle = normalize_plan_short_text(item.get('subject_angle'), '未指定角度')
-        action_type = normalize_plan_short_text(item.get('action_type'), '静态陈列')
-        layout_anchor = normalize_plan_short_text(item.get('layout_anchor'), '主体居中放大')
-        layout_style = normalize_plan_short_text(item.get('layout_style'), '单图分层')
-        font_style = normalize_plan_short_text(item.get('font_style'), '清晰无衬线')
-        color_scheme = normalize_plan_short_text(item.get('color_scheme'), '低饱和同色系')
-        decor_elements = item.get('decor_elements') if isinstance(item.get('decor_elements'), list) else []
-        decor_elements = [normalize_plan_short_text(value) for value in decor_elements]
-        decor_elements = [value for value in decor_elements if value][:4]
-        must_differ_from = normalize_plan_type_list(item.get('must_differ_from'), allowed_types)
-        must_differ_from = [name for name in must_differ_from if name != image_type]
-
-        normalized_items.append(
-            {
-                'sort': sort,
-                'type': image_type,
-                'title': title,
-                'keywords': normalized_keywords,
-                'prompt': prompt,
-                'type_tag': SUITE_TYPE_META.get(image_type, {}).get('tag', 'Board'),
-                'module': module,
-                'story_role': story_role,
-                'decision_task': decision_task,
-                'info_density': info_density,
-                'scene_required': scene_required_raw,
-                'scene_type': scene_type,
-                'camera_shot': camera_shot,
-                'subject_angle': subject_angle,
-                'human_presence': human_presence,
-                'action_type': action_type,
-                'layout_anchor': layout_anchor,
-                'layout_style': layout_style,
-                'font_style': font_style,
-                'color_scheme': color_scheme,
-                'decor_elements': decor_elements,
-                'must_differ_from': must_differ_from,
-            }
-        )
-
-    return {
-        'summary': summary,
-        'output_count': expected_output_count,
-        'items': normalized_items,
-    }
-
-
-
-
-def normalize_plan_short_text(value: str, fallback: str = '') -> str:
-    return str(value or '').strip() or fallback
-
-
-def normalize_plan_enum(value: str, allowed_values, fallback: str) -> str:
-    text = normalize_plan_short_text(value, fallback)
-    return text if text in allowed_values else fallback
-
-
-def normalize_plan_type_list(raw_value, allowed_types, limit=3):
-    if not isinstance(raw_value, list):
-        return []
-    normalized = []
-    seen = set()
-    for item in raw_value:
-        text = str(item or '').strip()
-        if not text or text in seen or text not in allowed_types:
-            continue
-        normalized.append(text)
-        seen.add(text)
-        if limit and len(normalized) >= limit:
-            break
-    return normalized
-
-
-def build_suite_plan(platform: str, selling_text: str, output_count: int, image_payloads, country: str, text_type: str, image_size_ratio: str, selected_style=None, mode: str = 'suite', product_json=None):
-    _, type_rules = get_suite_type_rules(output_count)
-    prompt = build_suite_plan_prompt(platform, selling_text, output_count, type_rules, country, text_type, image_size_ratio, selected_style, mode, product_json)
-    plan, _response_text = call_chat_json_with_repair(
-        SUITE_PLAN_SYSTEM_PROMPT,
-        build_multimodal_content(prompt, image_payloads),
-        lambda text: parse_suite_plan(text, output_count, type_rules),
-        '套图规划结果格式异常',
-        temperature=0.3,
-        timeout_seconds=get_suite_plan_timeout_seconds(),
-        repair_attempts=1,
-    )
-    return plan
-
-
-
-def parse_fashion_scene_plan(text: str):
-    payload = parse_json_candidate(text, '场景规划结果格式异常')
-
-    summary = str(payload.get('summary', '')).strip()
-    scene_prompt = str(payload.get('scene_prompt', '')).strip()
-    scene_groups = payload.get('scene_groups')
-
-    if not summary:
-        raise ValueError('场景规划结果格式异常：summary 不能为空')
-    if not scene_prompt:
-        raise ValueError('场景规划结果格式异常：scene_prompt 不能为空')
-    if not isinstance(scene_groups, list) or len(scene_groups) != 4:
-        raise ValueError('场景规划结果格式异常：scene_groups 必须严格返回 4 组场景')
-
-    normalized_groups = []
-    for group_index, group in enumerate(scene_groups, start=1):
-        if not isinstance(group, dict):
-            raise ValueError(f'场景规划结果格式异常：第 {group_index} 组必须为对象')
-
-        group_id = str(group.get('id', '')).strip() or f'scene-group-{group_index}'
-        title = str(group.get('title', '')).strip()
-        description = str(group.get('description', '')).strip()
-        group_scene_prompt = str(group.get('scene_prompt', '')).strip()
-        poses = group.get('poses')
-
-        if not title:
-            raise ValueError(f'场景规划结果格式异常：第 {group_index} 组 title 不能为空')
-        if not description:
-            raise ValueError(f'场景规划结果格式异常：第 {group_index} 组 description 不能为空')
-        if not group_scene_prompt:
-            raise ValueError(f'场景规划结果格式异常：第 {group_index} 组 scene_prompt 不能为空')
-        if not isinstance(poses, list) or len(poses) != 4:
-            raise ValueError(f'场景规划结果格式异常：第 {group_index} 组 poses 必须严格返回 4 个模块')
-
-        normalized_poses = []
-        for pose_index, pose in enumerate(poses, start=1):
-            if not isinstance(pose, dict):
-                raise ValueError(f'场景规划结果格式异常：第 {group_index} 组第 {pose_index} 个姿态必须为对象')
-
-            raw_pose_id = str(pose.get('id', '')).strip()
-            pose_id = raw_pose_id if raw_pose_id.startswith(f'{group_id}-') else f'{group_id}-pose-{pose_index}'
-            pose_title = str(pose.get('title', '')).strip()
-            pose_description = str(pose.get('description', '')).strip()
-            pose_scene_prompt = str(pose.get('scene_prompt', '')).strip()
-
-            if not pose_title:
-                raise ValueError(f'场景规划结果格式异常：第 {group_index} 组第 {pose_index} 个姿态 title 不能为空')
-            if not pose_description:
-                raise ValueError(f'场景规划结果格式异常：第 {group_index} 组第 {pose_index} 个姿态 description 不能为空')
-            if not pose_scene_prompt:
-                raise ValueError(f'场景规划结果格式异常：第 {group_index} 组第 {pose_index} 个姿态 scene_prompt 不能为空')
-
-            normalized_poses.append(
-                {
-                    'id': pose_id,
-                    'title': pose_title,
-                    'description': pose_description,
-                    'scene_prompt': pose_scene_prompt,
-                }
-            )
-
-        normalized_groups.append(
-            {
-                'id': group_id,
-                'title': title,
-                'description': description,
-                'scene_prompt': group_scene_prompt,
-                'poses': normalized_poses,
-            }
-        )
-
-    return {
-        'summary': summary,
-        'scene_prompt': scene_prompt,
-        'scene_groups': normalized_groups,
-    }
 
 
 FASHION_DEFAULT_PLATFORM = '服饰穿搭'
@@ -3901,267 +1291,7 @@ FASHION_DEFAULT_SELLING_TEXT = ''
 FASHION_DEFAULT_SELECTED_STYLE = None
 
 
-
-def build_fashion_scene_plan_prompt(platform: str, selling_text: str, country: str, text_type: str, image_size_ratio: str, selected_style=None):
-    return FASHION_SCENE_PLAN_USER_PROMPT_TEMPLATE.format(
-        image_size_ratio=image_size_ratio or '1:1',
-    )
-
-
-
 FASHION_SCENE_PLAN_MODEL_TIMEOUT_SECONDS = 120
-
-
-def build_fashion_scene_plan(platform: str, selling_text: str, image_payloads, country: str, text_type: str, image_size_ratio: str, selected_style=None):
-    prompt = build_fashion_scene_plan_prompt(platform, selling_text, country, text_type, image_size_ratio, selected_style)
-    plan, _response_text = call_chat_json_with_repair(
-        FASHION_SCENE_PLAN_SYSTEM_PROMPT,
-        build_multimodal_content(prompt, image_payloads),
-        parse_fashion_scene_plan,
-        '服饰场景规划结果格式异常',
-        temperature=0.3,
-        timeout_seconds=FASHION_SCENE_PLAN_MODEL_TIMEOUT_SECONDS,
-        repair_attempts=1,
-    )
-    return plan
-
-
-
-def parse_json_string_list(raw_value: str, field_label: str):
-    try:
-        parsed = json.loads((raw_value or '').strip() or '[]')
-    except json.JSONDecodeError as exc:
-        raise ValueError(f'{field_label}参数格式异常') from exc
-
-    if not isinstance(parsed, list):
-        raise ValueError(f'{field_label}参数格式异常')
-
-    normalized = []
-    seen = set()
-    for item in parsed:
-        value = str(item or '').strip()
-        if not value or value in seen:
-            continue
-        normalized.append(value)
-        seen.add(value)
-    return normalized
-
-
-
-def parse_fashion_scene_plan_payload(raw_value: str):
-    normalized = (raw_value or '').strip()
-    if not normalized:
-        raise ValueError('场景规划数据不能为空，请重新生成推荐场景')
-
-    try:
-        payload = json.loads(normalized)
-    except json.JSONDecodeError as exc:
-        raise ValueError('场景规划数据格式异常，请重新生成推荐场景') from exc
-
-    return parse_fashion_scene_plan(json.dumps(payload, ensure_ascii=False))
-
-
-
-def find_fashion_scene_selection(scene_groups, scene_group_id: str, pose_id: str):
-    selected_group = None
-    selected_pose = None
-
-    for group in scene_groups:
-        if group.get('id') != scene_group_id:
-            continue
-        selected_group = group
-        for pose in group.get('poses') or []:
-            if pose.get('id') == pose_id:
-                selected_pose = pose
-                break
-        break
-
-    if not selected_group:
-        raise ValueError('请选择有效的场景组')
-    if not selected_pose:
-        raise ValueError('请选择有效的姿态方案')
-
-    return selected_group, selected_pose
-
-
-
-def parse_fashion_scene_selections(scene_groups, scene_group_ids, pose_ids):
-    normalized_group_ids = []
-    seen_group_ids = set()
-    for scene_group_id in scene_group_ids or []:
-        normalized_group_id = str(scene_group_id or '').strip()
-        if not normalized_group_id or normalized_group_id in seen_group_ids:
-            continue
-        normalized_group_ids.append(normalized_group_id)
-        seen_group_ids.add(normalized_group_id)
-
-    normalized_pose_ids = []
-    seen_pose_ids = set()
-    for pose_id in pose_ids or []:
-        normalized_pose_id = str(pose_id or '').strip()
-        if not normalized_pose_id or normalized_pose_id in seen_pose_ids:
-            continue
-        normalized_pose_ids.append(normalized_pose_id)
-        seen_pose_ids.add(normalized_pose_id)
-
-    if not normalized_pose_ids:
-        raise ValueError('请至少选择 1 个场景')
-
-    normalized_entries = []
-    matched_group_ids = set()
-
-    for normalized_pose_id in normalized_pose_ids:
-        matched_group = None
-        matched_pose = None
-
-        for group in scene_groups or []:
-            for pose in group.get('poses') or []:
-                if pose.get('id') == normalized_pose_id:
-                    matched_group = group
-                    matched_pose = pose
-                    break
-            if matched_group and matched_pose:
-                break
-
-        if not matched_group or not matched_pose:
-            raise ValueError('请选择有效的姿态方案')
-
-        matched_group_id = str(matched_group.get('id') or '').strip()
-        if normalized_group_ids and matched_group_id not in seen_group_ids:
-            raise ValueError('请选择有效的场景组')
-
-        normalized_entries.append(
-            {
-                'scene_group_id': matched_group_id,
-                'pose_id': normalized_pose_id,
-                'group': matched_group,
-                'pose': matched_pose,
-            }
-        )
-        matched_group_ids.add(matched_group_id)
-
-    unused_group_ids = [group_id for group_id in normalized_group_ids if group_id not in matched_group_ids]
-    if unused_group_ids:
-        raise ValueError('请选择有效的场景和姿态')
-
-    return normalized_entries
-
-
-
-def infer_fashion_pose_shot_size(selected_group: dict, selected_pose: dict) -> str:
-    text = ' '.join(
-        str(value or '').strip()
-        for value in [
-            selected_group.get('title'),
-            selected_group.get('description'),
-            selected_group.get('scene_prompt'),
-            selected_pose.get('title'),
-            selected_pose.get('description'),
-            selected_pose.get('scene_prompt'),
-        ]
-        if str(value or '').strip()
-    )
-    if re.search(r'特写|近景|局部|细节|拉链|袖口|领口|纽扣|面料|纹理', text):
-        return '特写'
-    if re.search(r'半身|上半身|胸像', text):
-        return '半身'
-    if re.search(r'四分之三|3/4|七分身|中景', text):
-        return '四分之三'
-    if re.search(r'全身|全景|站立|直立|完整|通身|落地', text):
-        return '全身'
-    return '半身'
-
-
-
-def infer_fashion_pose_view_angle(selected_group: dict, selected_pose: dict) -> str:
-    text = ' '.join(
-        str(value or '').strip()
-        for value in [
-            selected_group.get('title'),
-            selected_group.get('description'),
-            selected_group.get('scene_prompt'),
-            selected_pose.get('title'),
-            selected_pose.get('description'),
-            selected_pose.get('scene_prompt'),
-        ]
-        if str(value or '').strip()
-    )
-    if re.search(r'3/4|四分之三|45度|斜侧|侧前方', text):
-        return '3/4侧'
-    if re.search(r'背面|背影|后背|背部', text):
-        return '背面'
-    if re.search(r'侧面|侧身|侧向', text):
-        return '侧面'
-    if re.search(r'正面|正向|正对', text):
-        return '正面'
-    return '正面'
-
-
-
-def build_fashion_pose_camera_setting(selected_group: dict, selected_pose: dict, current_setting=None):
-    setting = current_setting if isinstance(current_setting, dict) else {}
-    shot_size = str(setting.get('shot_size') or '').strip() or infer_fashion_pose_shot_size(selected_group, selected_pose)
-    view_angle = str(setting.get('view_angle') or '').strip() or infer_fashion_pose_view_angle(selected_group, selected_pose)
-    return {
-        'shot_size': shot_size,
-        'view_angle': view_angle,
-    }
-
-
-
-def parse_fashion_pose_camera_settings(raw_value: str, selections):
-    normalized = (raw_value or '').strip()
-    if not normalized:
-        return {
-            str(selection.get('pose_id') or '').strip(): build_fashion_pose_camera_setting(
-                selection.get('group') or {},
-                selection.get('pose') or {},
-            )
-            for selection in (selections or [])
-            if str(selection.get('pose_id') or '').strip()
-        }
-
-    try:
-        payload = json.loads(normalized)
-    except json.JSONDecodeError as exc:
-        raise ValueError('场景镜头参数格式异常，请重新选择') from exc
-
-    if not isinstance(payload, list):
-        raise ValueError('场景镜头参数格式异常，请重新选择')
-
-    selection_map = {
-        str(selection.get('pose_id') or '').strip(): selection
-        for selection in (selections or [])
-        if str(selection.get('pose_id') or '').strip()
-    }
-    camera_settings = {}
-
-    for item in payload:
-        if not isinstance(item, dict):
-            continue
-        pose_id = str(item.get('pose_id') or '').strip()
-        if not pose_id or pose_id not in selection_map:
-            continue
-        selection = selection_map[pose_id]
-        camera_settings[pose_id] = build_fashion_pose_camera_setting(
-            selection.get('group') or {},
-            selection.get('pose') or {},
-            {
-                'shot_size': str(item.get('shot_size') or '').strip(),
-                'view_angle': str(item.get('view_angle') or '').strip(),
-            },
-        )
-
-    for selection in selections or []:
-        pose_id = str(selection.get('pose_id') or '').strip()
-        if pose_id and pose_id not in camera_settings:
-            camera_settings[pose_id] = build_fashion_pose_camera_setting(
-                selection.get('group') or {},
-                selection.get('pose') or {},
-            )
-
-    return camera_settings
-
 
 
 def parse_fashion_selected_model_payload(form):
@@ -4169,2089 +1299,33 @@ def parse_fashion_selected_model_payload(form):
     return parse_fashion_selected_model_payload_from_data(form, selected_payloads)
 
 
-def parse_fashion_selected_model_payload_from_data(form, selected_payloads):
-    source = (form.get('fashion_selected_model_source', '') or '').strip()
-    model_id = (form.get('fashion_selected_model_id', '') or '').strip()
-    model_name = (form.get('fashion_selected_model_name', '') or '').strip()
-    gender = (form.get('fashion_selected_model_gender', '') or '').strip()
-    age = (form.get('fashion_selected_model_age', '') or '').strip()
-    ethnicity = (form.get('fashion_selected_model_ethnicity', '') or '').strip()
-    body_type = (form.get('fashion_selected_model_body_type', '') or '').strip()
-    appearance_details = (form.get('fashion_selected_model_appearance_details', '') or '').strip()
-    summary = (form.get('fashion_selected_model_summary', '') or '').strip()
-    detail_text = (form.get('fashion_selected_model_detail_text', '') or '').strip()
-
-    if not source:
-        raise ValueError('缺少当前已选模特来源，请重新选择模特后再生成')
-    if source not in {'ai', 'custom'}:
-        raise ValueError('当前已选模特来源无效，请重新选择模特后再生成')
-    if not model_id:
-        raise ValueError('缺少当前已选模特 ID，请重新选择模特后再生成')
-
-    if not selected_payloads:
-        raise ValueError('缺少当前已选模特图片，请重新选择模特后再生成')
-
-    selected_payload = selected_payloads[0]
-    filename = str(selected_payload.get('filename') or '').strip()
-    if source == 'ai' and not filename:
-        raise ValueError('AI 基准模特图片信息异常，请重新生成或重新选择后再试')
-    if source == 'custom' and not filename:
-        raise ValueError('自定义模特图片信息异常，请重新上传或重新选择后再试')
-
-    return {
-        'source': source,
-        'id': model_id,
-        'name': model_name,
-        'gender': gender,
-        'age': age,
-        'ethnicity': ethnicity,
-        'body_type': body_type,
-        'appearance_details': appearance_details,
-        'summary': summary,
-        'detail_text': detail_text,
-        'payload': selected_payload,
-        'debug': {
-            'source': source,
-            'id': model_id,
-            'name': model_name,
-            'filename': filename,
-            'mime_type': str(selected_payload.get('mime_type') or '').strip(),
-            'byte_size': len(selected_payload.get('bytes') or b''),
-            'gender': gender,
-            'age': age,
-            'ethnicity': ethnicity,
-            'body_type': body_type,
-        },
-    }
-
-
-def build_fashion_selected_model_identity_text(selected_model: dict):
-    model_name = str((selected_model or {}).get('name') or '').strip()
-    gender = str((selected_model or {}).get('gender') or '').strip()
-    age = str((selected_model or {}).get('age') or '').strip()
-    ethnicity = str((selected_model or {}).get('ethnicity') or '').strip()
-    body_type = str((selected_model or {}).get('body_type') or '').strip()
-    appearance_details = str((selected_model or {}).get('appearance_details') or '').strip()
-    summary = str((selected_model or {}).get('summary') or '').strip()
-    detail_text = str((selected_model or {}).get('detail_text') or '').strip()
-
-    identity_parts = [value for value in [gender, age, ethnicity, body_type] if value]
-    identity_summary = '、'.join(identity_parts) if identity_parts else '未提供'
-    appearance_summary = appearance_details or detail_text or summary or '未提供'
-    model_label = model_name or '当前已选模特'
-    return (
-        f'模特名称：{model_label}\n'
-        f'模特身份标签：{identity_summary}\n'
-        f'模特外观补充：{appearance_summary}'
-    )
-
-
-def build_fashion_generation_prompt(platform: str, selling_text: str, country: str, text_type: str, image_size_ratio: str, selected_style, selected_model: dict, scene_plan: dict, selected_group: dict, selected_pose: dict, shot_sizes, view_angles):
-    shot_text = '、'.join(shot_sizes) if shot_sizes else '未指定'
-    angle_text = '、'.join(view_angles) if view_angles else '未指定'
-    scene_summary = str(scene_plan.get('summary', '')).strip() or '未提供'
-    scene_prompt = str(scene_plan.get('scene_prompt', '')).strip() or ''
-    group_prompt = str(selected_group.get('scene_prompt', '')).strip() or ''
-    pose_prompt = str(selected_pose.get('scene_prompt', '')).strip() or ''
-    selected_model_identity_text = build_fashion_selected_model_identity_text(selected_model)
-
-    return (
-        f'请生成 1 张服饰穿戴图。产品穿在模特身上，必须清晰可见真人模特完整上身展示该商品，不能只出衣服。\n\n'
-        f'图片尺寸比例参考：{image_size_ratio or "1:1"}\n'
-        f'当前已选模特身份锚点：\n{selected_model_identity_text}\n'
-        f'场景规划摘要：{scene_summary}\n'
-        f'整组场景提示：{scene_prompt or "未提供"}\n'
-        f'已选场景组：{selected_group.get("title", "未命名场景组")}\n'
-        f'场景组说明：{selected_group.get("description", "未提供")}\n'
-        f'场景组提示：{group_prompt or "未提供"}\n'
-        f'已选姿态：{selected_pose.get("title", "未命名姿态")}\n'
-        f'姿态说明：{selected_pose.get("description", "未提供")}\n'
-        f'姿态提示：{pose_prompt or "未提供"}\n'
-        f'镜头景别：{shot_text}\n'
-        f'视角选择：{angle_text}\n\n'
-        f'执行要求：\n'
-        f'1. 严格使用提供的模特图作为最终出镜人物，保持同一张脸、发型、气质、肤感与身形特征；禁止换人、禁止变性别、禁止混入其他模特特征。\n'
-        f'2. 严格使用提供的商品图作为服饰主体，保持款式、颜色、结构、材质、版型、图案、logo 位置与细节一致；禁止替换商品本身。\n'
-        f'3. 商品图只负责锁定衣服，模特图只负责锁定穿着者，二者必须同时生效；不能只参考商品图，也不能只参考模特图。\n'
-        f'4. 最终人物必须与“当前已选模特身份锚点”一致；若场景、姿态、镜头与模特身份锚点冲突，必须优先服从模特身份锚点。\n'
-        f'5. 画面必须体现已选场景组、姿态、镜头景别与视角信息，背景简洁，服务于服装展示，不得让背景喧宾夺主。\n'
-        f'6. 必须输出适合电商展示的真人模特穿搭成图，禁止只生成衣服、禁止平铺挂拍、禁止无头模特、禁止把人物裁切到无法识别身份。\n'
-        f'7. 优先突出模特穿着商品后的上身效果、版型、面料垂感与真实穿搭氛围，让人一眼看出“这是当前已选模特穿着当前商品图中的同一件服饰”。\n'
-        f'8. 严禁生成任何新增可见文字元素：汉字、英文、数字、logo 文案、水印、字幕、角标、标签字样、吊牌字样、排版字、海报字、印刷覆盖字都不允许出现。\n'
-        f'9. 若商品本体原始设计中自带品牌标识、logo、印花文字或标签细节，只能按商品图原样保留，不得新增、篡改、放大、改写或替换成新的文字内容。\n'
-        f'10. 不要出现海报排版、广告字、背景标牌、店招、墙面文字、包装外额外字样、吊牌放大展示、字幕条、水印角标。'
-    )
-
-
-
-def build_fashion_generation_prompts(platform: str, selling_text: str, country: str, text_type: str, image_size_ratio: str, selected_style, selected_model: dict, scene_plan: dict, selections, pose_camera_settings):
-    if not selections:
-        raise ValueError('请至少选择 1 个场景')
-
-    prompts = []
-    for selection in selections:
-        pose_id = str(selection.get('pose_id') or '').strip()
-        camera_setting = pose_camera_settings.get(pose_id) or {}
-        shot_size = str(camera_setting.get('shot_size') or '').strip()
-        view_angle = str(camera_setting.get('view_angle') or '').strip()
-        if not shot_size:
-            raise ValueError('请为每个场景选择景别')
-        if not view_angle:
-            raise ValueError('请为每个场景选择视角')
-        prompts.append(
-            {
-                'scene_group_id': selection['scene_group_id'],
-                'pose_id': pose_id,
-                'group': selection['group'],
-                'pose': selection['pose'],
-                'shot_size': shot_size,
-                'view_angle': view_angle,
-                'prompt': build_fashion_generation_prompt(
-                    platform,
-                    selling_text,
-                    country,
-                    text_type,
-                    image_size_ratio,
-                    selected_style,
-                    selected_model,
-                    scene_plan,
-                    selection['group'],
-                    selection['pose'],
-                    [shot_size] if shot_size else [],
-                    [view_angle] if view_angle else [],
-                ),
-            }
-        )
-    return prompts
-
-
-
-def parse_fashion_output_verification(text: str):
-    payload = parse_json_candidate(text, '服饰成图质检结果格式异常')
-
-    if not isinstance(payload, dict):
-        raise ValueError('服饰成图质检结果格式异常：返回值必须为对象')
-
-    failed_checks = payload.get('failed_checks')
-    if not isinstance(failed_checks, list):
-        failed_checks = []
-    normalized_failed_checks = []
-    allowed_failed_checks = {'model_present', 'same_model_identity', 'wearing_product', 'extra_text_present'}
-    for item in failed_checks:
-        value = str(item or '').strip()
-        if value in allowed_failed_checks and value not in normalized_failed_checks:
-            normalized_failed_checks.append(value)
-
-    reason = str(payload.get('reason', '')).strip()
-    if not reason:
-        raise ValueError('服饰成图质检结果格式异常：reason 不能为空')
-
-    try:
-        score = int(payload.get('score', 0))
-    except (TypeError, ValueError):
-        raise ValueError('服饰成图质检结果格式异常：score 必须为整数') from None
-    score = max(0, min(score, 100))
-
-    result = {
-        'model_present': bool(payload.get('model_present')),
-        'same_model_identity': bool(payload.get('same_model_identity')),
-        'wearing_product': bool(payload.get('wearing_product')),
-        'extra_text_present': bool(payload.get('extra_text_present')),
-        'passed': bool(payload.get('passed')),
-        'score': score,
-        'failed_checks': normalized_failed_checks,
-        'reason': reason,
-    }
-
-    expected_passed = (
-        result['model_present']
-        and result['same_model_identity']
-        and result['wearing_product']
-        and not result['extra_text_present']
-    )
-    result['passed'] = expected_passed
-
-    if expected_passed:
-        result['failed_checks'] = []
-    else:
-        computed_failed_checks = []
-        if not result['model_present']:
-            computed_failed_checks.append('model_present')
-        if not result['same_model_identity']:
-            computed_failed_checks.append('same_model_identity')
-        if not result['wearing_product']:
-            computed_failed_checks.append('wearing_product')
-        if result['extra_text_present']:
-            computed_failed_checks.append('extra_text_present')
-        result['failed_checks'] = computed_failed_checks
-
-    return result
-
-
-
-def verify_fashion_generated_output(generated_payload: dict, selected_model_payload: dict, product_payloads):
-    if not generated_payload:
-        raise ValueError('缺少待质检的服饰生成结果')
-    if not selected_model_payload:
-        raise ValueError('缺少模特参考图，无法执行服饰成图质检')
-    if not product_payloads:
-        raise ValueError('缺少商品图，无法执行服饰成图质检')
-
-    verification_payloads = [generated_payload, selected_model_payload, product_payloads[0]]
-    verification, _response_text = call_chat_json_with_repair(
-        FASHION_OUTPUT_VERIFIER_SYSTEM_PROMPT,
-        build_multimodal_content(FASHION_OUTPUT_VERIFIER_USER_PROMPT_TEMPLATE, verification_payloads),
-        parse_fashion_output_verification,
-        '服饰成图质检结果格式异常',
-        temperature=0,
-        timeout_seconds=90,
-        repair_attempts=1,
-    )
-    return verification
-
-
-
 FASHION_MODEL_APPEARANCE_FALLBACK = '五官自然立体，肤质真实细腻，整体形象干净利落'
-
-
-def get_request_value(payload: dict, form, key: str, default: str = '') -> str:
-    if key in payload:
-        return str(payload.get(key, default) or '').strip()
-    return str(form.get(key, default) or '').strip()
-
-
-def build_fashion_model_prompt(gender: str, age: str, ethnicity: str, body_type: str, appearance_details: str) -> str:
-    normalized_gender = gender or '女'
-    normalized_age = age or '青年'
-    normalized_ethnicity = ethnicity or '欧美白人'
-    normalized_body_type = body_type or '标准'
-    normalized_details = appearance_details or FASHION_MODEL_APPEARANCE_FALLBACK
-    identity_summary = '，'.join([
-        normalized_gender,
-        normalized_age,
-        normalized_ethnicity,
-        normalized_body_type,
-    ])
-
-    return (
-        '请生成 1 张写实风格电商基准模特图，用于后续服饰穿搭展示与人物一致性锁定。\n\n'
-        f'人物基础身份：{identity_summary}。\n'
-        f'外貌细节：{normalized_details}。\n\n'
-        '画面要求：\n'
-        '1. 单人出镜，正面站立，自然表情，看向镜头，姿态放松。\n'
-        '2. 以写实摄影质感呈现，电商棚拍风格，光线均匀柔和，背景简洁干净，适合作为电商展示基准模特。\n'
-        '3. 人物整体形象真实自然，面部、皮肤、发型与体态细节清晰，保留真实质感。\n'
-        '4. 构图优先完整展示人物穿搭承载状态，便于后续继续用于服饰上身生成。\n\n'
-        '限制项：\n'
-        '1. 不要多人，不要儿童陪衬，不要宠物。\n'
-        '2. 不要复杂背景，不要街拍环境，不要凌乱道具。\n'
-        '3. 不要夸张动作，不要大幅扭身，不要跳跃或戏剧化姿势。\n'
-        '4. 不要卡通、插画、二次元、3D 渲染风。\n'
-        '5. 不要畸形肢体、异常手指、面部崩坏或比例错误。\n'
-        '6. 不要过度磨皮、过强滤镜、过分美颜或塑料皮肤。'
-    )
-
-
-def build_fashion_model_summary(gender: str, age: str, ethnicity: str, body_type: str) -> str:
-    return ' · '.join([value for value in [gender, age, ethnicity, body_type] if value])
-
-
-def build_fashion_model_response(task_id: str, model_id: str, gender: str, age: str, ethnicity: str, body_type: str, appearance_details: str, prompt: str, image_url: str, image_path: str, download_name: str):
-    detail_text = appearance_details or FASHION_MODEL_APPEARANCE_FALLBACK
-    summary = build_fashion_model_summary(gender, age, ethnicity, body_type)
-    return {
-        'id': model_id,
-        'name': 'AI 基准模特',
-        'summary': summary,
-        'detailText': detail_text,
-        'previewLabel': 'AI',
-        'previewUrl': image_url,
-        'createdAt': int(datetime.now().timestamp() * 1000),
-        'task_id': task_id,
-        'prompt': prompt,
-        'gender': gender,
-        'age': age,
-        'ethnicity': ethnicity,
-        'body_type': body_type,
-        'appearance_details': appearance_details,
-        'image_url': image_url,
-        'image_path': image_path,
-        'download_name': download_name,
-    }
-
-
-def build_aplus_plan_prompt(platform: str, selling_text: str, selected_module_keys, country: str, text_type: str, image_size_ratio: str, selected_style=None, product_json=None):
-    module_names = [APLUS_MODULE_META[key]['name'] for key in selected_module_keys]
-    module_list = '\n'.join(f'{index + 1}. {name}' for index, name in enumerate(module_names))
-    module_details = '\n'.join(
-        f'- {APLUS_MODULE_META[key]["name"]}：{APLUS_MODULE_META[key]["detail"]}'
-        for key in selected_module_keys
-    )
-    return APLUS_PLAN_USER_PROMPT_TEMPLATE.format(
-        platform=platform,
-        country=country or '中国',
-        text_type=text_type or '中文',
-        image_size_ratio=image_size_ratio or '1:1',
-        selling_text=selling_text or '（未填写）',
-        product_json=build_product_json_prompt_text(product_json),
-        style_reference=build_style_reference_text(selected_style),
-        module_list=module_list,
-        module_details=module_details,
-        module_count=len(selected_module_keys),
-    )
-
-
-def parse_aplus_plan(text: str, selected_module_keys):
-    payload = parse_json_candidate(text, 'A+ 规划结果格式异常')
-
-    summary = str(payload.get('summary', '')).strip()
-    module_count = payload.get('module_count')
-    items = payload.get('items')
-    expected_types = [APLUS_MODULE_META[key]['name'] for key in selected_module_keys]
-
-    if not summary:
-        raise ValueError('A+ 规划结果格式异常：summary 不能为空')
-    if module_count != len(expected_types):
-        raise ValueError('A+ 规划结果格式异常：module_count 与请求不一致')
-    if not isinstance(items, list) or len(items) != len(expected_types):
-        raise ValueError('A+ 规划结果格式异常：items 数量与模块数量不一致')
-
-    normalized_items = []
-    for index, item in enumerate(items, start=1):
-        if not isinstance(item, dict):
-            raise ValueError('A+ 规划结果格式异常：单个模块项必须为对象')
-
-        sort = item.get('sort')
-        module_type = str(item.get('type', '')).strip()
-        title = str(item.get('title', '')).strip()
-        prompt = str(item.get('prompt', '')).strip()
-        keywords = item.get('keywords')
-        expected_type = expected_types[index - 1]
-
-        if sort != index:
-            raise ValueError(f'A+ 规划结果格式异常：第 {index} 项 sort 非法')
-        if module_type != expected_type:
-            raise ValueError(f'A+ 规划结果格式异常：第 {index} 项 type 必须为 {expected_type}')
-        if not title:
-            raise ValueError(f'A+ 规划结果格式异常：第 {index} 项 title 不能为空')
-        if not prompt:
-            raise ValueError(f'A+ 规划结果格式异常：第 {index} 项 prompt 不能为空')
-        if not isinstance(keywords, list) or not (3 <= len(keywords) <= 6):
-            raise ValueError(f'A+ 规划结果格式异常：第 {index} 项 keywords 数量必须为 3-6 个')
-
-        normalized_keywords = [str(keyword).strip() for keyword in keywords if str(keyword).strip()]
-        if len(normalized_keywords) < 3:
-            raise ValueError(f'A+ 规划结果格式异常：第 {index} 项 keywords 不能为空')
-
-        meta = APLUS_MODULE_META[selected_module_keys[index - 1]]
-        normalized_items.append(
-            {
-                'sort': sort,
-                'type': module_type,
-                'title': title,
-                'keywords': normalized_keywords,
-                'prompt': prompt,
-                'type_tag': meta.get('tag', 'Module'),
-            }
-        )
-
-    return {
-        'summary': summary,
-        'module_count': len(expected_types),
-        'items': normalized_items,
-    }
-
-
-def build_aplus_plan(platform: str, selling_text: str, selected_module_keys, image_payloads, country: str, text_type: str, image_size_ratio: str, selected_style=None, product_json=None):
-    prompt = build_aplus_plan_prompt(platform, selling_text, selected_module_keys, country, text_type, image_size_ratio, selected_style, product_json)
-    plan, _response_text = call_chat_json_with_repair(
-        APLUS_PLAN_SYSTEM_PROMPT,
-        build_multimodal_content(prompt, image_payloads),
-        lambda text: parse_aplus_plan(text, selected_module_keys),
-        'A+ 规划结果格式异常',
-        temperature=0.3,
-        timeout_seconds=90,
-        repair_attempts=1,
-    )
-    return plan
-
-
-def get_ark_client() -> OpenAI:
-    return OpenAI(
-        api_key=get_supabase_setting('ARK_API_KEY', get_env('ARK_API_KEY')),
-        base_url=get_supabase_setting('ARK_BASE_URL', get_optional_env('ARK_BASE_URL', 'https://ark.cn-beijing.volces.com/api/v3')).rstrip('/'),
-    )
-
-
-def get_mode2_client() -> OpenAI:
-    return OpenAI(
-        api_key=get_supabase_setting('MODE2_OPENAI_API_KEY', get_optional_env('MODE2_OPENAI_API_KEY', 'any-value')),
-        base_url=get_supabase_setting('MODE2_OPENAI_BASE_URL', get_optional_env('MODE2_OPENAI_BASE_URL', 'https://ark.cn-beijing.volces.com/api/v3')).rstrip('/'),
-    )
-
-
-def resolve_mode2_image_resolution(resolution: str) -> str:
-    normalized_resolution = (resolution or '').strip() or get_supabase_setting('MODE2_DEFAULT_RESOLUTION', get_optional_env('MODE2_DEFAULT_RESOLUTION', '2k'))
-    compact_resolution = normalized_resolution.lower().replace(' ', '')
-    if compact_resolution in {'1k', '2k', '4k'}:
-        return compact_resolution
-    if compact_resolution in {'1024x1024', '1328x1328'}:
-        return '1k'
-    if compact_resolution in {'2048x2048', '2304x2304'}:
-        return '2k'
-    if compact_resolution in {'4096x4096'}:
-        return '4k'
-    return compact_resolution
-
-
-def resolve_mode2_image_ratio(ratio: str) -> str:
-    normalized_ratio = (ratio or '').strip() or get_supabase_setting('MODE2_DEFAULT_RATIO', get_optional_env('MODE2_DEFAULT_RATIO', '1:1'))
-    return normalized_ratio or '1:1'
-
-
-def resolve_mode2_image_size(ratio: str, resolution: str) -> str:
-    normalized_resolution = (resolution or '').strip()
-    if normalized_resolution:
-        return normalized_resolution
-    normalized_ratio = resolve_mode2_image_ratio(ratio)
-    if normalized_ratio in IMAGE_SIZE_RATIO_MAP:
-        return IMAGE_SIZE_RATIO_MAP[normalized_ratio]
-    return get_supabase_setting('MODE2_DEFAULT_RESOLUTION', get_optional_env('MODE2_DEFAULT_RESOLUTION', '2048x2048'))
-
-
-def get_mode2_retry_attempts() -> int:
-    return max(get_supabase_setting_int('MODE2_RETRY_ATTEMPTS', get_optional_int_env('MODE2_RETRY_ATTEMPTS', 2)), 0)
-
-
-def get_mode2_retry_delay_seconds() -> float:
-    raw_value = get_supabase_setting('MODE2_RETRY_DELAY_SECONDS', get_optional_env('MODE2_RETRY_DELAY_SECONDS', '0.5'))
-    try:
-        return max(float(raw_value), 0.0)
-    except ValueError:
-        return 0.5
-
-
-def get_mode3_retry_attempts() -> int:
-    return max(get_supabase_setting_int('MODE3_RETRY_ATTEMPTS', get_optional_int_env('MODE3_RETRY_ATTEMPTS', 2)), 0)
-
-
-def get_mode3_retry_delay_seconds() -> float:
-    raw_value = get_supabase_setting('MODE3_RETRY_DELAY_SECONDS', get_optional_env('MODE3_RETRY_DELAY_SECONDS', '0.5'))
-    try:
-        return max(float(raw_value), 0.0)
-    except ValueError:
-        return 0.5
-
-
-def get_mode3_parallel_workers() -> int:
-    return max(get_supabase_setting_int('MODE3_PARALLEL_WORKERS', get_optional_int_env('MODE3_PARALLEL_WORKERS', 3)), 1)
-
-
-def get_mode3_partial_retry_attempts() -> int:
-    return max(get_supabase_setting_int('MODE3_PARTIAL_RETRY_ATTEMPTS', get_optional_int_env('MODE3_PARTIAL_RETRY_ATTEMPTS', 2)), 0)
-
-
-def get_mode3_timeout_seconds() -> int:
-    return max(get_supabase_setting_int('MODE3_TIMEOUT_SECONDS', get_optional_int_env('MODE3_TIMEOUT_SECONDS', 180)), 30)
-
-
-def get_mode3_suite_batch_size() -> int:
-    return max(get_supabase_setting_int('MODE3_SUITE_BATCH_SIZE', get_optional_int_env('MODE3_SUITE_BATCH_SIZE', 1)), 1)
-
-
-def should_mode3_use_sequential_generation(target_count: int, image_payloads) -> bool:
-    mode = str(get_supabase_setting('MODE3_SEQUENTIAL_GENERATION', get_optional_env('MODE3_SEQUENTIAL_GENERATION', 'auto')) or 'auto').strip().lower()
-    if mode in {'on', 'true', '1', 'yes'}:
-        return True
-    if mode in {'off', 'false', '0', 'no'}:
-        return False
-    return int(target_count or 0) <= 1
-
-
-def get_mode1_retry_attempts() -> int:
-    return max(get_supabase_setting_int('MODE1_RETRY_ATTEMPTS', get_optional_int_env('MODE1_RETRY_ATTEMPTS', 2)), 0)
-
-
-def get_mode1_retry_delay_seconds() -> float:
-    raw_value = get_supabase_setting('MODE1_RETRY_DELAY_SECONDS', get_optional_env('MODE1_RETRY_DELAY_SECONDS', '0.5'))
-    try:
-        return max(float(raw_value), 0.0)
-    except ValueError:
-        return 0.5
-
-
-def get_mode1_parallel_workers() -> int:
-    return max(get_supabase_setting_int('MODE1_PARALLEL_WORKERS', get_optional_int_env('MODE1_PARALLEL_WORKERS', 3)), 1)
-
-
-def get_mode1_partial_retry_attempts() -> int:
-    return max(get_supabase_setting_int('MODE1_PARTIAL_RETRY_ATTEMPTS', get_optional_int_env('MODE1_PARTIAL_RETRY_ATTEMPTS', 2)), 0)
-
-
-def get_mode1_timeout_seconds() -> int:
-    return max(get_supabase_setting_int('MODE1_TIMEOUT_SECONDS', get_optional_int_env('MODE1_TIMEOUT_SECONDS', 180)), 30)
-
-
-def should_mode1_use_sequential_generation(target_count: int, image_payloads) -> bool:
-    mode = str(get_supabase_setting('MODE1_SEQUENTIAL_GENERATION', get_optional_env('MODE1_SEQUENTIAL_GENERATION', 'auto')) or 'auto').strip().lower()
-    if mode in {'on', 'true', '1', 'yes'}:
-        return True
-    if mode in {'off', 'false', '0', 'no'}:
-        return False
-    return int(target_count or 0) <= 1
-
-
-def get_mode2_parallel_workers() -> int:
-    return max(get_supabase_setting_int('MODE2_PARALLEL_WORKERS', get_optional_int_env('MODE2_PARALLEL_WORKERS', 3)), 1)
-
-
-def get_mode2_partial_retry_attempts() -> int:
-    return max(get_supabase_setting_int('MODE2_PARTIAL_RETRY_ATTEMPTS', get_optional_int_env('MODE2_PARTIAL_RETRY_ATTEMPTS', 2)), 0)
-
-
-def get_mode2_timeout_seconds() -> int:
-    return max(get_supabase_setting_int('MODE2_TIMEOUT_SECONDS', get_optional_int_env('MODE2_TIMEOUT_SECONDS', 180)), 30)
-
-
-def should_mode2_use_sequential_generation(target_count: int, image_payloads) -> bool:
-    mode = str(get_supabase_setting('MODE2_SEQUENTIAL_GENERATION', get_optional_env('MODE2_SEQUENTIAL_GENERATION', 'auto')) or 'auto').strip().lower()
-    if mode in {'on', 'true', '1', 'yes'}:
-        return True
-    if mode in {'off', 'false', '0', 'no'}:
-        return False
-    return int(target_count or 0) <= 1
-
-
-def is_retryable_mode1_error(exc: Exception) -> bool:
-    message = str(exc or '')
-    retryable_fragments = (
-        'openai_error',
-        'bad_response_status_code',
-        'Read timed out',
-        'timed out',
-        'Connection aborted',
-        'Connection reset',
-        'temporarily unavailable',
-        'upstream',
-        '524',
-        'ssl',
-        'sslerror',
-        'decryption failed',
-        'bad record mac',
-        'max retries exceeded',
-        'connectionpool',
-        'protocolerror',
-        'eof',
-        'unexpected eof',
-    )
-    if any(fragment.lower() in message.lower() for fragment in retryable_fragments):
-        return True
-    status_code = getattr(exc, 'status_code', None)
-    return status_code in {408, 409, 425, 429, 500, 502, 503, 504, 524}
-
-
-def is_retryable_mode2_error(exc: Exception) -> bool:
-    message = str(exc or '')
-    retryable_fragments = (
-        'Unexpected end of JSON input',
-        'sessions.json',
-        'JSONDecodeError',
-        'Expecting value',
-        'Read timed out',
-        'Connection aborted',
-        'Connection reset',
-        'temporarily unavailable',
-        '积分不足或没有相关权益',
-        '没有相关权益',
-        '请求jimeng失败',
-    )
-    if any(fragment.lower() in message.lower() for fragment in retryable_fragments):
-        return True
-    status_code = getattr(exc, 'status_code', None)
-    return status_code in {408, 409, 425, 429, 500, 502, 503, 504}
-
-
-def get_mode2_response_error(response) -> str:
-    if response is None:
-        return ''
-    error_code = getattr(response, 'code', None)
-    error_message = getattr(response, 'message', None)
-    if isinstance(response, dict):
-        error_code = response.get('code', error_code)
-        error_message = response.get('message') or response.get('error') or error_message
-    if error_message:
-        return str(error_message)
-    if error_code not in (None, 0):
-        return f'错误码：{error_code}'
-    return ''
 
 
 class RetryableMode2ResponseError(RuntimeError):
     pass
 
 
-def call_mode2_images_generate_with_retry(client: OpenAI, request_payload: dict):
-    retry_attempts = get_mode2_retry_attempts()
-    retry_delay_seconds = get_mode2_retry_delay_seconds()
-    total_attempts = retry_attempts + 1
-    last_exc = None
-    for attempt_index in range(total_attempts):
-        try:
-            response = client.images.generate(**request_payload)
-            response_error = get_mode2_response_error(response)
-            if response_error and is_retryable_mode2_error(Exception(response_error)):
-                raise RetryableMode2ResponseError(response_error)
-            return response
-        except Exception as exc:
-            last_exc = exc
-            should_retry = attempt_index < retry_attempts and is_retryable_mode2_error(exc)
-            if not should_retry:
-                raise
-            wait_seconds = retry_delay_seconds * (attempt_index + 1)
-            app.logger.warning('Mode2 image generation failed, retrying in %.2fs (%s/%s): %s', wait_seconds, attempt_index + 1, retry_attempts, exc)
-            time.sleep(wait_seconds)
-    raise last_exc
 
 
-def get_mode2_sample_strength(sample_strength: str) -> float:
-    raw_value = (sample_strength or '').strip() or get_supabase_setting('MODE2_DEFAULT_SAMPLE_STRENGTH', get_optional_env('MODE2_DEFAULT_SAMPLE_STRENGTH', '0.65'))
-    try:
-        return float(raw_value)
-    except ValueError as exc:
-        raise ValueError('sample_strength 必须为数字') from exc
 
 
-def is_private_ip_address(hostname: str) -> bool:
-    try:
-        addresses = socket.getaddrinfo(hostname, None)
-    except socket.gaierror as exc:
-        raise ValueError('参考图片链接域名解析失败') from exc
 
-    for address_family, _, _, _, sockaddr in addresses:
-        if address_family == socket.AF_INET:
-            ip = ipaddress.ip_address(sockaddr[0])
-        elif address_family == socket.AF_INET6:
-            ip = ipaddress.ip_address(sockaddr[0])
-        else:
-            continue
-        if ip.is_private or ip.is_loopback or ip.is_link_local or ip.is_multicast or ip.is_unspecified:
-            return True
-    return False
 
 
-def validate_mode2_remote_image_url(image_url: str) -> str:
-    normalized_url = (image_url or '').strip()
-    if not normalized_url:
-        raise ValueError('参考图片链接不能为空')
 
-    allowed_hosts = get_mode2_allowed_image_hosts()
-    if not allowed_hosts:
-        raise ValueError('MODE2_ALLOWED_IMAGE_HOSTS 未配置，暂不支持远程参考图片')
 
-    parsed_url = urlparse(normalized_url)
-    if parsed_url.scheme not in {'http', 'https'}:
-        raise ValueError('参考图片链接仅支持 http 或 https')
-    if not parsed_url.hostname:
-        raise ValueError('参考图片链接缺少主机名')
 
-    hostname = parsed_url.hostname.lower()
-    if hostname not in allowed_hosts:
-        raise ValueError('参考图片链接域名未被允许')
 
-    return normalized_url
 
 
 
-def build_remote_image_payload(image_url: str):
-    normalized_url = validate_mode2_remote_image_url(image_url)
-    return _fetch_url_to_image_payload(normalized_url)
 
 
-def _fetch_url_to_image_payload(image_url: str):
-    response = requests.get(image_url, timeout=120, allow_redirects=False)
-    if 300 <= response.status_code < 400:
-        raise ValueError('参考图片链接不允许重定向')
-    response.raise_for_status()
-    content = response.content
-    filename = Path(image_url.split('?', 1)[0]).name or 'reference-image'
-    mime_type = sniff_image_mime_type(content)
-    if not mime_type:
-        header_mime_type = response.headers.get('Content-Type', '').split(';', 1)[0].strip().lower()
-        if header_mime_type in ALLOWED_IMAGE_MIME_TYPES:
-            mime_type = header_mime_type
-    if not mime_type:
-        raise ValueError('参考图片链接不是有效的图片文件')
-    if len(content) > UPLOAD_MAX_FILE_BYTES:
-        raise ValueError(f'参考图片超过单张大小限制（{UPLOAD_MAX_FILE_BYTES // (1024 * 1024)}MB）')
 
-    extension = Path(filename).suffix.lower()
-    if extension not in ALLOWED_IMAGE_EXTENSIONS:
-        extension = guess_extension(mime_type)
-        filename = f'{Path(filename).stem or "reference-image"}{extension}'
 
-    encoded = base64.b64encode(content).decode('utf-8')
-    return {
-        'filename': filename,
-        'mime_type': mime_type,
-        'bytes': content,
-        'base64': encoded,
-        'data_url': f'data:{mime_type};base64,{encoded}',
-        'source_url': image_url,
-    }
 
 
-
-
-def normalize_generated_image_item(item):
-    if hasattr(item, 'model_dump'):
-        item = item.model_dump()
-    elif hasattr(item, 'dict'):
-        item = item.dict()
-
-    if not isinstance(item, dict):
-        raise ValueError('图像生成接口返回格式异常')
-    return item
-
-
-def pick_generated_image_item(response):
-    data = getattr(response, 'data', None)
-    if data is None and isinstance(response, dict):
-        data = response.get('data')
-    if not isinstance(data, list) or not data:
-        error_code = getattr(response, 'code', None)
-        error_message = getattr(response, 'message', None)
-        if isinstance(response, dict):
-            error_code = response.get('code', error_code)
-            error_message = response.get('message') or response.get('error') or error_message
-        if error_message:
-            raise ValueError(f'图像生成接口返回错误：{error_message}')
-        if error_code not in (None, 0):
-            raise ValueError(f'图像生成接口返回错误码：{error_code}')
-        raise ValueError('图像生成接口未返回图片数据')
-    return normalize_generated_image_item(data[0])
-
-
-def pick_generated_image_items(response, max_images: int = 1):
-    data = getattr(response, 'data', None)
-    if data is None and isinstance(response, dict):
-        data = response.get('data')
-    if not isinstance(data, list) or not data:
-        return [pick_generated_image_item(response)]
-    limit = max(1, int(max_images or 1))
-    items = []
-    for item in data[:limit]:
-        try:
-            normalized_item = normalize_generated_image_item(item)
-            if normalized_item.get('b64_json') or normalized_item.get('url'):
-                items.append(normalized_item)
-        except ValueError:
-            continue
-    if not items:
-        return [pick_generated_image_item(response)]
-    return items
-
-
-def extract_generated_image_from_content(content):
-    if isinstance(content, str):
-        data_url_match = re.search(r'data:image/[^;]+;base64,[A-Za-z0-9+/=\s]+', content)
-        if data_url_match:
-            data_url = re.sub(r'\s+', '', data_url_match.group(0))
-            return {'b64_json': data_url.split(',', 1)[1]}
-        base64_match = re.search(r'(?<![A-Za-z0-9+/=])([A-Za-z0-9+/]{800,}={0,2})(?![A-Za-z0-9+/=])', content)
-        if base64_match:
-            return {'b64_json': base64_match.group(1)}
-        image_url_match = re.search(r'https?://[^\s\]})"\']+\.(?:png|jpe?g|webp|gif)(?:\?[^\s\]})"\']*)?', content, re.IGNORECASE)
-        if image_url_match:
-            return {'url': image_url_match.group(0)}
-        return None
-
-    if isinstance(content, list):
-        for part in content:
-            if hasattr(part, 'model_dump'):
-                part = part.model_dump()
-            elif hasattr(part, 'dict'):
-                part = part.dict()
-            if not isinstance(part, dict):
-                continue
-            if part.get('type') in {'image_url', 'input_image'}:
-                image_url = part.get('image_url') or part.get('url')
-                if isinstance(image_url, dict):
-                    image_url = image_url.get('url')
-                if isinstance(image_url, str) and image_url.startswith('data:image/') and ',' in image_url:
-                    return {'b64_json': image_url.split(',', 1)[1]}
-                if isinstance(image_url, str) and image_url:
-                    return {'url': image_url}
-            if part.get('type') in {'image', 'output_image'}:
-                image_data = part.get('image') or part.get('data') or part.get('b64_json')
-                if isinstance(image_data, dict):
-                    image_data = image_data.get('b64_json') or image_data.get('data') or image_data.get('url')
-                if isinstance(image_data, str) and image_data.startswith('data:image/') and ',' in image_data:
-                    return {'b64_json': image_data.split(',', 1)[1]}
-                if isinstance(image_data, str) and image_data.startswith(('http://', 'https://')):
-                    return {'url': image_data}
-                if isinstance(image_data, str) and image_data:
-                    return {'b64_json': image_data}
-            nested = extract_generated_image_from_content(part.get('text') or part.get('content'))
-            if nested:
-                return nested
-    return None
-
-
-def normalize_chat_completion_image_response(response):
-    if hasattr(response, 'model_dump'):
-        response_dict = response.model_dump()
-    elif hasattr(response, 'dict'):
-        response_dict = response.dict()
-    elif isinstance(response, dict):
-        response_dict = response
-    else:
-        return response
-
-    choices = response_dict.get('choices') if isinstance(response_dict, dict) else None
-    if not isinstance(choices, list) or not choices:
-        return response
-    message = (choices[0] or {}).get('message') or {}
-    generated_item = extract_generated_image_from_content(message.get('content'))
-    if generated_item:
-        return {'data': [generated_item]}
-    return response
-
-
-def is_retryable_mode3_error(exc: Exception) -> bool:
-    message = str(exc or '')
-    retryable_fragments = (
-        'openai_error',
-        'bad_response_status_code',
-        'Read timed out',
-        'timed out',
-        'Connection aborted',
-        'Connection reset',
-        'temporarily unavailable',
-        'upstream',
-        '524',
-        'ssl',
-        'sslerror',
-        'decryption failed',
-        'bad record mac',
-        'max retries exceeded',
-        'connectionpool',
-        'protocolerror',
-        'eof',
-        'unexpected eof',
-    )
-    if any(fragment.lower() in message.lower() for fragment in retryable_fragments):
-        return True
-    status_code = getattr(exc, 'status_code', None)
-    return status_code in {408, 409, 425, 429, 500, 502, 503, 504, 524}
-
-
-def call_mode3_single_image(prompt: str, image_payloads, image_size_ratio: str = '', text_type: str = '', country: str = '', product_json=None, image_type: str = '', plan_item=None, all_plan_types=None):
-    generated_item, _model = call_mode3_image_edit(get_mode3_client(), prompt, image_payloads or [create_mode3_blank_canvas_payload(image_size_ratio)], image_size_ratio)
-    return generated_item
-
-
-def call_mode3_single_image_with_retry(prompt: str, image_payloads, image_size_ratio: str = '', text_type: str = '', country: str = '', product_json=None, image_type: str = '', plan_item=None, all_plan_types=None):
-    retry_attempts = get_mode3_retry_attempts()
-    retry_delay_seconds = get_mode3_retry_delay_seconds()
-    last_exc = None
-    for attempt in range(retry_attempts + 1):
-        try:
-            return call_mode3_single_image(prompt, image_payloads, image_size_ratio, text_type, country, product_json, image_type, plan_item, all_plan_types)
-        except Exception as exc:
-            last_exc = exc
-            should_retry = attempt < retry_attempts and is_retryable_mode3_error(exc)
-            if not should_retry:
-                raise
-            wait_seconds = retry_delay_seconds * (attempt + 1)
-            app.logger.warning('Mode3 single image failed, retrying in %.2fs (%s/%s): %s', wait_seconds, attempt + 1, retry_attempts, exc)
-            time.sleep(wait_seconds)
-    raise last_exc
-
-
-def call_mode3_images_parallel_with_partial_retry(prompt: str, image_payloads, max_images: int, image_size_ratio: str = '', text_type: str = '', country: str = '', product_json=None, image_type: str = '', plan_item=None, all_plan_types=None):
-    target_count = max(1, int(max_images or 1))
-    enriched_prompt = build_enriched_image_prompt(prompt, image_size_ratio, text_type, country, product_json, image_type, plan_item, all_plan_types)
-    if target_count == 1:
-        return [call_mode3_single_image_with_retry(enriched_prompt, image_payloads, image_size_ratio, text_type, country, product_json, image_type, plan_item, all_plan_types)]
-
-    if should_mode3_use_sequential_generation(target_count, image_payloads):
-        generated_items = []
-        for index in range(target_count):
-            item = call_mode3_single_image_with_retry(enriched_prompt, image_payloads, image_size_ratio, text_type, country, product_json, image_type, plan_item, all_plan_types)
-            generated_items.append(item)
-        return generated_items[:target_count]
-
-    workers = min(target_count, get_mode3_parallel_workers())
-    partial_retry_attempts = get_mode3_partial_retry_attempts()
-    retry_delay_seconds = get_mode3_retry_delay_seconds()
-    generated_items = []
-    failures = []
-
-    def run_one(global_index: int):
-        return call_mode3_single_image_with_retry(enriched_prompt, image_payloads, image_size_ratio, text_type, country, product_json, image_type, plan_item, all_plan_types)
-
-    for attempt_index in range(partial_retry_attempts + 1):
-        missing_count = target_count - len(generated_items)
-        if missing_count <= 0:
-            break
-        failures = []
-        batch_workers = min(missing_count, workers)
-        with concurrent.futures.ThreadPoolExecutor(max_workers=batch_workers) as executor:
-            futures = [executor.submit(run_one, len(generated_items) + index + 1) for index in range(missing_count)]
-            for future in concurrent.futures.as_completed(futures):
-                try:
-                    generated_items.append(future.result())
-                except Exception as exc:
-                    failures.append(exc)
-        missing_count = target_count - len(generated_items)
-        if missing_count > 0 and attempt_index < partial_retry_attempts:
-            app.logger.warning('Mode3 partial generation missing %s/%s images, retrying failed parts in %.2fs (%s/%s): %s', missing_count, target_count, retry_delay_seconds * (attempt_index + 1), attempt_index + 1, partial_retry_attempts, '; '.join(str(exc) for exc in failures[:3]))
-            time.sleep(retry_delay_seconds * (attempt_index + 1))
-
-    if len(generated_items) < target_count:
-        error_text = '; '.join(str(exc) for exc in failures[:3]) or '部分图片生成失败'
-        raise ValueError(f'mode3 部分图片生成失败，已成功 {len(generated_items)}/{target_count}：{error_text}')
-    return generated_items[:target_count]
-
-
-def create_mode1_blank_canvas_payload(image_size_ratio: str = ''):
-    size = resolve_image_size(image_size_ratio)
-    width, height = 2048, 2048
-    match = re.fullmatch(r'(\d+)x(\d+)', size)
-    if match:
-        width, height = int(match.group(1)), int(match.group(2))
-    image = Image.new('RGB', (width, height), (255, 255, 255))
-    buffer = io.BytesIO()
-    image.save(buffer, format='PNG')
-    image_bytes = buffer.getvalue()
-    return {
-        'filename': f'mode1-blank-{width}x{height}.png',
-        'mime_type': 'image/png',
-        'bytes': image_bytes,
-        'data_url': f'data:image/png;base64,{base64.b64encode(image_bytes).decode("ascii")}',
-    }
-
-
-def create_mode2_blank_canvas_payload(ratio: str = '', resolution: str = ''):
-    size = resolve_mode2_image_size(ratio, resolution)
-    width, height = 2048, 2048
-    match = re.fullmatch(r'(\d+)x(\d+)', size)
-    if match:
-        width, height = int(match.group(1)), int(match.group(2))
-    image = Image.new('RGB', (width, height), (255, 255, 255))
-    buffer = io.BytesIO()
-    image.save(buffer, format='PNG')
-    image_bytes = buffer.getvalue()
-    return {
-        'filename': f'mode2-blank-{width}x{height}.png',
-        'mime_type': 'image/png',
-        'bytes': image_bytes,
-        'data_url': f'data:image/png;base64,{base64.b64encode(image_bytes).decode("ascii")}',
-    }
-
-
-def get_mode1_api_key() -> str:
-    api_key = get_supabase_setting('ARK_API_KEY', get_optional_env('ARK_API_KEY', ''))
-    if not api_key:
-        api_key = get_supabase_setting('OPENAI_API_KEY', get_optional_env('OPENAI_API_KEY', ''))
-    return api_key
-
-
-def get_mode1_base_url() -> str:
-    return get_supabase_setting('ARK_BASE_URL', get_optional_env('ARK_BASE_URL', 'https://ark.cn-beijing.volces.com/api/v3')).rstrip('/')
-
-
-def get_mode1_client() -> OpenAI:
-    return OpenAI(
-        api_key=get_mode1_api_key(),
-        base_url=get_mode1_base_url(),
-    )
-
-
-def call_mode1_image_edit(client: OpenAI, prompt: str, image_payloads, image_size_ratio: str = ''):
-    model = get_supabase_setting('ARK_IMAGE_MODEL', get_optional_env('ARK_IMAGE_MODEL', 'doubao-seedream-5-0-260128'))
-    size = resolve_image_size(image_size_ratio)
-    watermark = get_supabase_setting_bool('ARK_IMAGE_WATERMARK', get_optional_bool_env('ARK_IMAGE_WATERMARK', False))
-    reference_instruction = build_mode1_reference_anchor_prompt(len(image_payloads or []))
-    request_payload = {
-        'model': model,
-        'prompt': reference_instruction + prompt,
-        'size': size,
-        'response_format': 'url',
-        'extra_body': {
-            'image': [image_payload['data_url'] for image_payload in image_payloads],
-            'watermark': watermark,
-            'sequential_image_generation': 'disabled',
-        },
-    }
-    app.logger.warning('Mode1 image edit request model=%s size=%s reference_count=%s', model, size, len(image_payloads or []))
-    response = client.images.generate(**request_payload)
-    return pick_generated_image_item(response), model
-
-
-def call_mode1_text2image(client: OpenAI, prompt: str):
-    model = get_supabase_setting('ARK_IMAGE_MODEL', get_optional_env('ARK_IMAGE_MODEL', 'doubao-seedream-5-0-260128'))
-    blank_payload = create_mode1_blank_canvas_payload()
-    generated_item, _model = call_mode1_image_edit(client, prompt, [blank_payload], '1:1')
-    return generated_item, model
-
-
-def call_mode2_image_edit(client: OpenAI, prompt: str, image_payloads, ratio: str, resolution: str, sample_strength: str):
-    model = get_supabase_setting('MODE2_IMAGE_EDIT_MODEL', get_optional_env('MODE2_IMAGE_EDIT_MODEL', 'doubao-seedream-5-0-260128'))
-    request_payload = {
-        'model': model,
-        'prompt': prompt,
-        'response_format': 'url',
-        'extra_body': {
-            'image': [image_payload['data_url'] for image_payload in image_payloads],
-            'sample_strength': get_mode2_sample_strength(sample_strength),
-            'ratio': resolve_mode2_image_ratio(ratio),
-            'resolution': resolve_mode2_image_resolution(resolution),
-        },
-    }
-    request_extra_body = dict(request_payload['extra_body'])
-    request_extra_body['image_count'] = len(image_payloads)
-    app.logger.warning('Mode2 image edit request extra_body image_count=%s ratio=%s resolution=%s', request_extra_body['image_count'], request_extra_body['ratio'], request_extra_body['resolution'])
-    response = call_mode2_images_generate_with_retry(client, request_payload)
-    return pick_generated_image_item(response), model
-
-
-def call_mode2_text2image(client: OpenAI, prompt: str, ratio: str, resolution: str):
-    model = get_supabase_setting('MODE2_TEXT2IMAGE_MODEL', get_optional_env('MODE2_TEXT2IMAGE_MODEL', 'doubao-seedream-5-0-260128'))
-    blank_payload = create_mode2_blank_canvas_payload(ratio, resolution)
-    generated_item, _model = call_mode2_image_edit(client, prompt, [blank_payload], ratio, resolution, '')
-    return generated_item, model
-
-
-def get_mode3_api_key() -> str:
-    api_key = get_supabase_setting('MODE3_OPENAI_API_KEY', get_optional_env('MODE3_OPENAI_API_KEY', ''))
-    if not api_key:
-        api_key = get_supabase_setting('OPENAI_API_KEY', get_optional_env('OPENAI_API_KEY', ''))
-    return api_key
-
-
-def get_mode3_base_url() -> str:
-    return get_supabase_setting('MODE3_OPENAI_BASE_URL', get_optional_env('MODE3_OPENAI_BASE_URL', 'https://code.ciyuanapi.xyz/v1')).rstrip('/')
-
-
-def get_mode3_image_edit_size(image_size_ratio: str = '') -> str:
-    configured_size = get_supabase_setting('MODE3_IMAGE_EDIT_SIZE', get_optional_env('MODE3_IMAGE_EDIT_SIZE', '2048x2048')).strip()
-    if configured_size:
-        return configured_size
-    return '2048x2048'
-
-
-def create_mode3_blank_canvas_payload(image_size_ratio: str = ''):
-    size = get_mode3_image_edit_size(image_size_ratio)
-    width, height = 2048, 2048
-    match = re.fullmatch(r'(\d+)x(\d+)', size)
-    if match:
-        width, height = int(match.group(1)), int(match.group(2))
-    image = Image.new('RGB', (width, height), (255, 255, 255))
-    buffer = io.BytesIO()
-    image.save(buffer, format='PNG')
-    image_bytes = buffer.getvalue()
-    return {
-        'filename': f'mode3-blank-{width}x{height}.png',
-        'mime_type': 'image/png',
-        'bytes': image_bytes,
-        'data_url': f'data:image/png;base64,{base64.b64encode(image_bytes).decode("ascii")}',
-    }
-
-
-def get_mode3_client() -> OpenAI:
-    return OpenAI(
-        api_key=get_mode3_api_key(),
-        base_url=get_mode3_base_url(),
-    )
-
-
-
-
-def call_mode3_text2image(client: OpenAI, prompt: str):
-    model = get_supabase_setting('MODE3_IMAGE_MODEL', get_optional_env('MODE3_IMAGE_MODEL', 'gpt-image-2'))
-    blank_payload = create_mode3_blank_canvas_payload()
-    generated_item, _model = call_mode3_image_edit(client, prompt, [blank_payload], get_mode3_image_edit_size())
-    return generated_item, model
-
-
-def build_mode1_reference_anchor_prompt(reference_count: int) -> str:
-    return (
-        f'参考图执行约束（按 mode1 当前图生图模板执行，已接收 {max(reference_count or 0, 0)} 张参考图）：\n'
-        '- 以下 multipart image 文件中的图片必须作为商品主体唯一锚点，不是风格灵感图，也不是可替换示例图。\n'
-        '- 若提供了参考商品图，必须把参考图视为主体锚点，优先复用其主体外观、颜色关系、材质质感、结构比例、边缘轮廓、关键部件、logo/品牌位与稳定细节。\n'
-        '- 产品一致性是最高优先级，高于场景变化、版式变化、卖点表达和同套图差异；如果差异化要求与产品一致性冲突，必须优先保持商品主体一致。\n'
-        '- 若提供了不可变商品特征，必须将其中的主体品类、核心主体、颜色体系、材质、轮廓、结构、关键部件、品牌标识、logo位置、稳定细节、must_keep、must_not_change、forbidden_changes 与 consistency_rules 视为最高优先级约束。\n'
-        '- 生成时只能改变背景、道具、光线、构图、文字版式、人物动作和非主体装饰；不得重新设计商品，不得替换商品品类，不得改变商品颜色体系、材质质感、结构比例、关键部件组合、logo/品牌位置或包装识别。\n'
-        '- selling_points 只能用于补充文案重点、信息层级与卖点表达，不得推动商品变成其他颜色、其他材质、其他结构、其他部件方案或其他品牌观感。\n'
-        '- 允许变化的仅限背景、道具、光线、构图、文案排版与非主体装饰；禁止把商品改成另一种外观、另一种材质表现、另一种结构、另一种颜色体系、另一种关键部件组合或另一种品牌识别。\n'
-        '- 不要把场景氛围、背景纯度、人物气质或镜头语言误当作商品主体特征；它们只能作为从属变化，不能覆盖主体锁定要求。\n'
-        '- 如果参考图商品带有文字、logo、印花、包装标识或品牌图案，这些内容属于商品主体外观，必须尽量保持位置、大小关系、颜色关系、朝向和识别感；不要新增、替换、重写或随机改造商品本身已有标识。\n'
-        '- 当前任务必须基于参考图做图生图延展，而不是根据场景 prompt 重新想象一个新商品。\n\n'
-    )
-
-
-
-def call_mode3_image_edit(client: OpenAI, prompt: str, image_payloads, image_size_ratio: str = ''):
-    model = get_supabase_setting('MODE3_IMAGE_MODEL', get_optional_env('MODE3_IMAGE_MODEL', 'gpt-image-2'))
-    size = get_mode3_image_edit_size(image_size_ratio)
-    watermark = get_supabase_setting_bool('MODE3_IMAGE_WATERMARK', get_optional_bool_env('MODE3_IMAGE_WATERMARK', False))
-    reference_instruction = build_mode1_reference_anchor_prompt(len(image_payloads or []))
-    base_url = get_mode3_base_url()
-    api_key = get_mode3_api_key()
-    if not api_key:
-        raise ValueError('mode3 图生图缺少 MODE3_OPENAI_API_KEY')
-    request_url = f'{base_url}/images/edits'
-    data = {
-        'model': model,
-        'prompt': reference_instruction + prompt,
-        'size': size,
-        'response_format': 'url',
-    }
-    quality = get_supabase_setting('MODE3_IMAGE_QUALITY', get_optional_env('MODE3_IMAGE_QUALITY', '')).strip()
-    if quality:
-        data['quality'] = quality
-    if watermark:
-        data['watermark'] = 'true'
-    files = []
-    for index, payload in enumerate(image_payloads or [], start=1):
-        filename = str(payload.get('filename') or f'image-{index}.png')
-        mime_type = str(payload.get('mime_type') or 'image/png')
-        image_bytes = payload.get('bytes')
-        if not isinstance(image_bytes, (bytes, bytearray)) or not image_bytes:
-            raise ValueError(f'mode3 图生图参考图 {filename} 内容为空')
-        files.append(('image', (filename, bytes(image_bytes), mime_type)))
-    app.logger.warning(
-        'Mode3 image edit request via images/edits multipart model=%s size=%s reference_count=%s base_url=%s template=mode1_reference_anchor',
-        model,
-        size,
-        len(files),
-        base_url,
-    )
-    response = requests.post(
-        request_url,
-        headers={'Authorization': f'Bearer {api_key}'},
-        data=data,
-        files=files,
-        timeout=get_mode3_timeout_seconds(),
-    )
-    if response.status_code >= 400:
-        raise ValueError(f'mode3 图生图接口错误 {response.status_code}：{response.text[:500]}')
-    try:
-        payload = response.json()
-    except ValueError as exc:
-        raise ValueError('mode3 图生图接口返回了无效 JSON') from exc
-    return pick_generated_image_item(payload), model
-
-
-def call_mode1_single_image(prompt: str, image_payloads, image_size_ratio: str = '', text_type: str = '', country: str = '', product_json=None, image_type: str = '', plan_item=None, all_plan_types=None):
-    generated_item, _model = call_mode1_image_edit(get_mode1_client(), prompt, image_payloads or [create_mode1_blank_canvas_payload(image_size_ratio)], image_size_ratio)
-    return generated_item
-
-
-def call_mode1_single_image_with_retry(prompt: str, image_payloads, image_size_ratio: str = '', text_type: str = '', country: str = '', product_json=None, image_type: str = '', plan_item=None, all_plan_types=None):
-    retry_attempts = get_mode1_retry_attempts()
-    retry_delay_seconds = get_mode1_retry_delay_seconds()
-    last_exc = None
-    for attempt in range(retry_attempts + 1):
-        try:
-            return call_mode1_single_image(prompt, image_payloads, image_size_ratio, text_type, country, product_json, image_type, plan_item, all_plan_types)
-        except Exception as exc:
-            last_exc = exc
-            should_retry = attempt < retry_attempts and is_retryable_mode1_error(exc)
-            if not should_retry:
-                raise
-            wait_seconds = retry_delay_seconds * (attempt + 1)
-            app.logger.warning('Mode1 single image failed, retrying in %.2fs (%s/%s): %s', wait_seconds, attempt + 1, retry_attempts, exc)
-            time.sleep(wait_seconds)
-    raise last_exc
-
-
-def call_mode1_images_parallel_with_partial_retry(prompt: str, image_payloads, max_images: int, image_size_ratio: str = '', text_type: str = '', country: str = '', product_json=None, image_type: str = '', plan_item=None, all_plan_types=None):
-    target_count = max(1, int(max_images or 1))
-    enriched_prompt = build_enriched_image_prompt(prompt, image_size_ratio, text_type, country, product_json, image_type, plan_item, all_plan_types)
-    if target_count == 1:
-        return [call_mode1_single_image_with_retry(enriched_prompt, image_payloads, image_size_ratio, text_type, country, product_json, image_type, plan_item, all_plan_types)]
-
-    if should_mode1_use_sequential_generation(target_count, image_payloads):
-        generated_items = []
-        for index in range(target_count):
-            item = call_mode1_single_image_with_retry(enriched_prompt, image_payloads, image_size_ratio, text_type, country, product_json, image_type, plan_item, all_plan_types)
-            generated_items.append(item)
-        return generated_items[:target_count]
-
-    workers = min(target_count, get_mode1_parallel_workers())
-    partial_retry_attempts = get_mode1_partial_retry_attempts()
-    retry_delay_seconds = get_mode1_retry_delay_seconds()
-    generated_items = []
-    failures = []
-
-    def run_one(global_index: int):
-        return call_mode1_single_image_with_retry(enriched_prompt, image_payloads, image_size_ratio, text_type, country, product_json, image_type, plan_item, all_plan_types)
-
-    for attempt_index in range(partial_retry_attempts + 1):
-        missing_count = target_count - len(generated_items)
-        if missing_count <= 0:
-            break
-        failures = []
-        batch_workers = min(missing_count, workers)
-        with concurrent.futures.ThreadPoolExecutor(max_workers=batch_workers) as executor:
-            future_map = {executor.submit(run_one, i): i for i in range(missing_count)}
-            for future in concurrent.futures.as_completed(future_map):
-                batch_index = future_map[future]
-                try:
-                    generated_items.append(future.result())
-                except Exception as exc:
-                    failures.append(f'第{batch_index+1}张：{exc}')
-        if missing_count > 0 and len(generated_items) >= target_count:
-            break
-        if failures and attempt_index < partial_retry_attempts:
-            app.logger.warning('Mode1 parallel partial retry (%s/%s): %s', attempt_index + 1, partial_retry_attempts, '; '.join(failures[:3]))
-            time.sleep(retry_delay_seconds * (attempt_index + 1))
-
-    if len(generated_items) < target_count:
-        error_text = '；'.join(failures[:3]) if failures else '未知错误'
-        raise ValueError(f'mode1 部分图片生成失败，已成功 {len(generated_items)}/{target_count}：{error_text}')
-    return generated_items[:target_count]
-
-
-def call_mode2_single_image(prompt: str, image_payloads, image_size_ratio: str = '', text_type: str = '', country: str = '', product_json=None, image_type: str = '', plan_item=None, all_plan_types=None):
-    ratio = image_size_ratio or '1:1'
-    generated_item, _model = call_mode2_image_edit(get_mode2_client(), prompt, image_payloads or [create_mode2_blank_canvas_payload(ratio)], ratio, '', '')
-    return generated_item
-
-
-def call_mode2_single_image_with_retry(prompt: str, image_payloads, image_size_ratio: str = '', text_type: str = '', country: str = '', product_json=None, image_type: str = '', plan_item=None, all_plan_types=None):
-    retry_attempts = get_mode2_retry_attempts()
-    retry_delay_seconds = get_mode2_retry_delay_seconds()
-    last_exc = None
-    for attempt in range(retry_attempts + 1):
-        try:
-            return call_mode2_single_image(prompt, image_payloads, image_size_ratio, text_type, country, product_json, image_type, plan_item, all_plan_types)
-        except Exception as exc:
-            last_exc = exc
-            should_retry = attempt < retry_attempts and is_retryable_mode2_error(exc)
-            if not should_retry:
-                raise
-            wait_seconds = retry_delay_seconds * (attempt + 1)
-            app.logger.warning('Mode2 single image failed, retrying in %.2fs (%s/%s): %s', wait_seconds, attempt + 1, retry_attempts, exc)
-            time.sleep(wait_seconds)
-    raise last_exc
-
-
-def call_mode2_images_parallel_with_partial_retry(prompt: str, image_payloads, max_images: int, image_size_ratio: str = '', text_type: str = '', country: str = '', product_json=None, image_type: str = '', plan_item=None, all_plan_types=None):
-    target_count = max(1, int(max_images or 1))
-    enriched_prompt = build_enriched_image_prompt(prompt, image_size_ratio, text_type, country, product_json, image_type, plan_item, all_plan_types)
-    if target_count == 1:
-        return [call_mode2_single_image_with_retry(enriched_prompt, image_payloads, image_size_ratio, text_type, country, product_json, image_type, plan_item, all_plan_types)]
-
-    if should_mode2_use_sequential_generation(target_count, image_payloads):
-        generated_items = []
-        for index in range(target_count):
-            item = call_mode2_single_image_with_retry(enriched_prompt, image_payloads, image_size_ratio, text_type, country, product_json, image_type, plan_item, all_plan_types)
-            generated_items.append(item)
-        return generated_items[:target_count]
-
-    workers = min(target_count, get_mode2_parallel_workers())
-    partial_retry_attempts = get_mode2_partial_retry_attempts()
-    retry_delay_seconds = get_mode2_retry_delay_seconds()
-    generated_items = []
-    failures = []
-
-    def run_one(global_index: int):
-        return call_mode2_single_image_with_retry(enriched_prompt, image_payloads, image_size_ratio, text_type, country, product_json, image_type, plan_item, all_plan_types)
-
-    for attempt_index in range(partial_retry_attempts + 1):
-        missing_count = target_count - len(generated_items)
-        if missing_count <= 0:
-            break
-        failures = []
-        batch_workers = min(missing_count, workers)
-        with concurrent.futures.ThreadPoolExecutor(max_workers=batch_workers) as executor:
-            future_map = {executor.submit(run_one, i): i for i in range(missing_count)}
-            for future in concurrent.futures.as_completed(future_map):
-                batch_index = future_map[future]
-                try:
-                    generated_items.append(future.result())
-                except Exception as exc:
-                    failures.append(f'第{batch_index+1}张：{exc}')
-        if missing_count > 0 and len(generated_items) >= target_count:
-            break
-        if failures and attempt_index < partial_retry_attempts:
-            app.logger.warning('Mode2 parallel partial retry (%s/%s): %s', attempt_index + 1, partial_retry_attempts, '; '.join(failures[:3]))
-            time.sleep(retry_delay_seconds * (attempt_index + 1))
-
-    if len(generated_items) < target_count:
-        error_text = '；'.join(failures[:3]) if failures else '未知错误'
-        raise ValueError(f'mode2 部分图片生成失败，已成功 {len(generated_items)}/{target_count}：{error_text}')
-    return generated_items[:target_count]
-
-
-def call_app_mode_image_generation(client: OpenAI, prompt: str, image_payloads, image_size_ratio: str, text_type: str, country: str, product_json=None, image_type: str = '', plan_item=None, all_plan_types=None, max_images: int = 1):
-    app_mode = get_app_mode()
-    if app_mode == 'mode1':
-        return call_mode1_images_parallel_with_partial_retry(
-            prompt,
-            image_payloads,
-            max_images,
-            image_size_ratio,
-            text_type,
-            country,
-            product_json,
-            image_type,
-            plan_item,
-            all_plan_types,
-        )
-
-    if app_mode == 'mode2':
-        return call_mode2_images_parallel_with_partial_retry(
-            prompt,
-            image_payloads,
-            max_images,
-            image_size_ratio,
-            text_type,
-            country,
-            product_json,
-            image_type,
-            plan_item,
-            all_plan_types,
-        )
-
-    if app_mode == 'mode3':
-        return call_mode3_images_parallel_with_partial_retry(
-            prompt,
-            image_payloads,
-            max_images,
-            image_size_ratio,
-            text_type,
-            country,
-            product_json,
-            image_type,
-            plan_item,
-            all_plan_types,
-        )
-
-    return call_image_generation(
-        client,
-        prompt,
-        image_payloads,
-        image_size_ratio,
-        text_type,
-        country,
-        product_json,
-        image_type,
-        plan_item,
-        all_plan_types,
-        max_images=max_images,
-    )
-
-
-def build_mode2_success_response(task_id: str, mode: str, prompt: str, model: str, generated_item: dict):
-    image_bytes, mime_type = decode_generated_image(generated_item)
-    download_name, relative_path, image_url = save_generated_image(task_id, 1, mode, image_bytes, mime_type)
-    return {
-        'success': True,
-        'task_id': task_id,
-        'image_url': image_url,
-        'image_path': relative_path,
-        'download_name': download_name,
-        'prompt': prompt,
-        'model': model,
-        'mode': mode,
-    }
-
-
-def pick_image_data_entry(data):
-    if not isinstance(data, list) or not data:
-        raise ValueError('图像生成接口未返回图片数据')
-    first_item = data[0]
-    if not isinstance(first_item, dict):
-        raise ValueError('图像生成接口返回格式异常')
-    return first_item
-
-
-def _download_image_url_with_retry(url: str, max_attempts: int = 3, base_delay: float = 1.0):
-    last_exc = None
-    for attempt in range(max_attempts):
-        try:
-            response = requests.get(url, timeout=120)
-            response.raise_for_status()
-            return response
-        except Exception as exc:
-            last_exc = exc
-            if attempt >= max_attempts - 1:
-                raise
-            message = str(exc or '').lower()
-            retryable = any(
-                frag in message
-                for frag in ('ssl', 'sslerror', 'eof', 'decryption failed', 'bad record mac',
-                             'connection aborted', 'connection reset', 'timed out', 'max retries exceeded',
-                             'connectionpool', 'protocolerror')
-            )
-            if not retryable:
-                raise
-            wait = base_delay * (attempt + 1)
-            app.logger.warning('Image URL download failed, retrying in %.2fs (%s/%s): %s', wait, attempt + 1, max_attempts - 1, exc)
-            time.sleep(wait)
-    raise last_exc
-
-
-def decode_generated_image(item: dict):
-    if item.get('url'):
-        response = _download_image_url_with_retry(item['url'])
-        image_bytes = response.content
-        header_mime_type = response.headers.get('Content-Type', 'image/png').split(';', 1)[0].strip()
-        detected_mime_type = sniff_image_mime_type(image_bytes)
-        return image_bytes, detected_mime_type or header_mime_type or 'image/png'
-
-    if item.get('b64_json'):
-        image_bytes = base64.b64decode(item['b64_json'])
-        detected_mime_type = sniff_image_mime_type(image_bytes)
-        return image_bytes, detected_mime_type or 'image/png'
-
-    raise ValueError('图像生成接口未返回可用图片内容')
-
-
-
-def collect_generated_images(response):
-    data = getattr(response, 'data', None)
-    if data is None and isinstance(response, dict):
-        data = response.get('data')
-    if not isinstance(data, list) or not data:
-        raise ValueError('图像生成接口未返回图片数据')
-    return [normalize_generated_image_item(item) for item in data]
-
-
-def save_generated_image(task_id: str, sort: int, image_type: str, image_bytes: bytes, mime_type: str):
-    cleanup_generated_suites(active_task_id=task_id)
-    extension = guess_extension(mime_type)
-    filename = f'{sort:02d}-{sanitize_filename_part(image_type, "image")}{extension}'
-
-    if is_cos_enabled():
-        try:
-            cos_key = generate_cos_key(task_id, filename)
-            image_url = upload_to_cos(image_bytes, cos_key, mime_type)
-            return filename, cos_key, image_url
-        except Exception as exc:
-            app.logger.warning('COS upload failed, falling back to local: %s', exc)
-
-    output_dir = GENERATED_SUITES_DIR / task_id
-    output_dir.mkdir(parents=True, exist_ok=True)
-    output_path = output_dir / filename
-    output_path.write_bytes(image_bytes)
-    relative_path = output_path.relative_to(GENERATED_SUITES_DIR).as_posix()
-    return filename, relative_path, f'/generated/{relative_path}'
-
-
-def save_reference_image(task_id: str, sort: int, filename: str, image_bytes: bytes, mime_type: str):
-    cleanup_generated_suites(active_task_id=task_id)
-    extension = guess_extension(mime_type)
-    source_stem = Path(filename or 'reference').stem
-    safe_stem = sanitize_filename_part(source_stem, f'reference-{sort:02d}')
-    output_name = f'{sort:02d}-{safe_stem}{extension}'
-
-    if is_cos_enabled():
-        try:
-            cos_key = generate_cos_key(task_id, f'references/{output_name}')
-            image_url = upload_to_cos(image_bytes, cos_key, mime_type)
-            return output_name, cos_key, image_url
-        except Exception as exc:
-            app.logger.warning('COS upload failed, falling back to local: %s', exc)
-
-    output_dir = GENERATED_SUITES_DIR / task_id / 'references'
-    output_dir.mkdir(parents=True, exist_ok=True)
-    output_path = output_dir / output_name
-    output_path.write_bytes(image_bytes)
-    relative_path = output_path.relative_to(GENERATED_SUITES_DIR).as_posix()
-    return output_name, relative_path, f'/generated/{relative_path}'
-
-
-def build_reference_images(task_id: str, image_payloads, source: str = 'product', start_sort: int = 1):
-    reference_images = []
-    source_meta = {
-        'product': {'type': '商品原图', 'type_tag': 'Prod', 'reference_source': 'product'},
-        'reference': {'type': '参考图', 'type_tag': 'Ref', 'reference_source': 'reference'},
-        'fashion_reference': {'type': '穿搭参考图', 'type_tag': 'Look', 'reference_source': 'fashion_reference'},
-    }
-    meta = source_meta.get(source, source_meta['product'])
-
-    for offset, payload in enumerate(image_payloads):
-        sort = start_sort + offset
-        download_name, relative_path, image_url = save_reference_image(
-            task_id,
-            sort,
-            payload.get('filename', ''),
-            payload.get('bytes', b''),
-            payload.get('mime_type', 'image/png'),
-        )
-        original_name = Path(payload.get('filename') or f'{meta["type"]} {sort}').stem.strip()
-        title = original_name or f'{meta["type"]} {sort}'
-        reference_images.append(
-            {
-                'sort': sort,
-                'kind': 'reference',
-                'type': meta['type'],
-                'type_tag': meta['type_tag'],
-                'reference_source': meta['reference_source'],
-                'title': title,
-                'keywords': [],
-                'image_url': image_url,
-                'image_path': relative_path,
-                'download_name': download_name,
-            }
-        )
-
-    return reference_images
-
-
-def build_plan_control_prompt(item: dict, all_types) -> str:
-    module = str(item.get('module', '')).strip() or 'scene_narrative'
-    story_role = str(item.get('story_role', '')).strip() or '未指定故事节点'
-    decision_task = str(item.get('decision_task', '')).strip() or '未指定决策任务'
-    info_density = str(item.get('info_density', '')).strip() or 'medium'
-    scene_required = bool(item.get('scene_required'))
-    scene_type = str(item.get('scene_type', '')).strip() or '未指定场景'
-    camera_shot = str(item.get('camera_shot', '')).strip() or '未指定景别'
-    subject_angle = str(item.get('subject_angle', '')).strip() or '未指定角度'
-    human_presence = str(item.get('human_presence', '')).strip() or 'none'
-    action_type = str(item.get('action_type', '')).strip() or '静态陈列'
-    layout_anchor = str(item.get('layout_anchor', '')).strip() or '主体居中放大'
-    layout_style = str(item.get('layout_style', '')).strip() or '单图分层'
-    font_style = str(item.get('font_style', '')).strip() or '清晰无衬线'
-    color_scheme = str(item.get('color_scheme', '')).strip() or '低饱和同色系'
-    decor_elements = [str(value).strip() for value in (item.get('decor_elements') or []) if str(value).strip()]
-    must_differ_from = [
-        str(name).strip()
-        for name in (item.get('must_differ_from') or [])
-        if str(name).strip() and str(name).strip() in all_types and str(name).strip() != item.get('type')
-    ]
-    module_map = {
-        'opening_narrative': '开场叙事模块',
-        'scene_narrative': '场景化叙事模块',
-        'value_visualization': '价值可视化叙事模块',
-        'trust_narrative': '信任叙事模块',
-    }
-    info_density_map = {
-        'low': '低信息密度，文案与元素必须克制，优先保证一眼理解。',
-        'medium': '中等信息密度，允许 1-2 个重点信息层级，但仍需保持清晰阅读路径。',
-        'high': '高信息密度，但仍需模块化组织信息，避免杂乱堆砌。',
-    }
-    human_presence_map = {
-        'none': '本图不应出现人物或手部，只通过商品自身展示完成表达。',
-        'hand-only': '本图仅允许出现手部或局部操作关系，禁止出现完整人物主体。',
-        'model': '本图允许出现人物/模特，但人物只能服务商品表达，不能抢夺主体。',
-    }
-    scene_rule = '必须使用明确场景，且场景类型需与下述规划一致。' if scene_required else '优先采用非场景或弱场景表达，不要强塞生活化环境。'
-    differ_rule = '、'.join(must_differ_from) if must_differ_from else '无指定前序图'
-    decor_rule = '、'.join(decor_elements) if decor_elements else '无额外装饰元素'
-    return '\n'.join(
-        [
-            '结构化叙事与差异控制：',
-            f'- module：{module}（{module_map.get(module, "场景化叙事模块")}）。',
-            f'- story_role：{story_role}。',
-            f'- decision_task：{decision_task}。',
-            f'- info_density：{info_density}。{info_density_map.get(info_density, info_density_map["medium"])}',
-            f'- scene_required：{"true" if scene_required else "false"}。{scene_rule}',
-            f'- scene_type：{scene_type}。',
-            f'- camera_shot：{camera_shot}。',
-            f'- subject_angle：{subject_angle}。',
-            f'- human_presence：{human_presence}。{human_presence_map.get(human_presence, human_presence_map["none"])}',
-            f'- action_type：{action_type}。',
-            f'- layout_anchor：{layout_anchor}。',
-            f'- layout_style：{layout_style}。必须采用明确的真实电商版式模板语言，不可退化成通用大字压图。',
-            f'- font_style：{font_style}。必须与其他图拉开字体气质差异，不可整套图只用同一种粗黑字。',
-            f'- color_scheme：{color_scheme}。必须与当前图的功能和产品气质匹配，并与指定前序图形成色彩组织差异。',
-            f'- decor_elements：{decor_rule}。可使用线框、细分隔线、图标、吊牌、角标、编号标签、数据徽章等，但必须克制服务主体。',
-            f'- must_differ_from：{differ_rule}。必须与这些图在场景类型、景别、主体朝向、人物参与方式、动作关系、构图骨架、版式结构、字体风格、色彩组织中至少拉开三项差异。',
-            '- 每张图必须使用不同的排版逻辑、不同的字体样式、不同的配色方案，禁止重复模板化设计。',
-            '- 必须显式参考真实电商详情页常见版式语言，例如单图分层、分栏线框、竖排多列、环绕标注、边角背书、参数信息板、对比双栏、吊牌角标、图标矩阵。',
-            '- 上述结构化字段优先级高于自由描述；若自由 prompt 与结构化字段冲突，以结构化字段为准。',
-        ]
-    )
-
-
-def build_enriched_image_prompt(prompt: str, image_size_ratio: str, text_type: str, country: str, product_json=None, image_type: str = '', plan_item=None, all_plan_types=None) -> str:
-    normalized_product_json = normalize_product_json(product_json) if product_json else None
-    product_json_text = build_product_json_prompt_text(normalized_product_json)
-    must_keep = '；'.join((normalized_product_json or {}).get('must_keep') or []) or '未单独提取'
-    must_not_change = '；'.join((normalized_product_json or {}).get('must_not_change') or []) or '未单独提取'
-    forbidden_changes = '；'.join((normalized_product_json or {}).get('forbidden_changes') or []) or '未单独提取'
-    selling_points = '；'.join((normalized_product_json or {}).get('selling_points') or []) or '未单独提取'
-    image_type = str(image_type or '').strip()
-    plan_control_prompt = ''
-    if isinstance(plan_item, dict):
-        plan_control_prompt = build_plan_control_prompt(plan_item, all_plan_types or [])
-    type_specific_rules = ''
-    if image_type == '首屏主视觉图':
-        type_specific_rules = (
-            '- 当前图类型：首屏主视觉图。必须使用有场景的主视觉画面，并采用“大场景 + 单主体强聚焦”构图：场景需要真实存在且能承接商品气质，但商品主体仍必须是绝对视觉中心；禁止做成纯白底棚拍、纯色背景孤立陈列或空场静物图。\n'
-            '- 优先保留完整环境信息、空间纵深或前后景层次，让用户一眼感知使用语境，但场景元素不得比商品更抢眼；禁止与核心卖点图、使用场景图复用同一站姿、同一手持关系、同一商品朝向、同一景别或同一构图骨架。\n'
-        )
-    elif image_type == '核心卖点图':
-        type_specific_rules = (
-            '- 当前图类型：核心卖点图。必须使用有场景的画面，并围绕一个核心卖点采用“场景内功能动作 / 局部卖点展示”结构重构视角；可采用场景中的局部放大、半身持握、俯拍陈列、剖面感或结构展示，但禁止继续沿用首屏主视觉图的同姿势、同朝向、同主体位置、同镜头距离。\n'
-            '- 该图的场景必须直接服务卖点表达，例如收纳、清洁、使用前后、桌面操作、随身携带、厨房备餐等；优先出现操作关系、功能触发点、局部放大区域或利益点对应动作，禁止仅把首图换个背景后继续展示整件商品。即使保留人物，也必须让人物动作、身体朝向、持握关系、商品位置至少两项明显变化。\n'
-        )
-    elif image_type == '使用场景图':
-        type_specific_rules = (
-            '- 当前图类型：使用场景图。必须表现商品正在被真实使用，而不是静态拿着展示；优先采用操作中、接触中、桌面使用中、收纳取用中等动态关系。\n'
-            '- 这张图禁止复用首屏主视觉图或核心卖点图的站位、朝向、裁切、商品位置与版式骨架，人物姿势、商品相对位置、镜头距离必须明显不同。\n'
-        )
-    elif image_type == 'fashion-look':
-        type_specific_rules = (
-            '- 当前图类型：服饰穿搭图。最终画面必须是“清晰可见的真人模特穿着商品”的完整穿搭成图；禁止只出衣服、禁止平铺挂拍、禁止无头模特、禁止裁切到看不出人物身份、禁止把商品单独陈列当成最终结果。\n'
-            '- 若同时提供商品图与模特参考图，必须优先使用商品图锁定服饰主体，使用模特参考图锁定最终出镜人物身份、脸部、发型、肤感、体态比例与整体气质；禁止替换为其他人物，禁止混入其他模特特征。\n'
-            '- 该图是服饰最终成图，不允许生成任何新增可见文字元素：标题、卖点文案、说明字、logo 文案、水印、字幕、角标、标签字样、吊牌字样、排版字、海报字都禁止出现。\n'
-            '- 若商品本体原始设计自带品牌标识、logo、印花文字或标签细节，只能按商品图原样保留，不得新增、改写、放大或替换。\n'
-        )
-    text_layout_control_prompt = ''
-    if (text_type or '').strip() == '无文字':
-        text_layout_control_prompt = (
-            '- 本张图为无文字模式：禁止生成任何标题、副标题、卖点文案、说明文字、标签字、角标字、参数字、水印字或海报字；只允许保留商品原本自带且与参考图一致的品牌标识、logo 或印花文字。\n'
-        )
-    else:
-        text_layout_control_prompt = (
-            '- 你同时承担全品类电商详情页专属文字版式规划职责：必须为当前画面设计符合电商行业规范、适配当前模块功能、贴合产品调性的专属文字版式，拒绝模板化排版。\n'
-            '- 每张图片必须使用不同的排版逻辑、不同的字体样式、不同的配色方案，禁止重复模板化设计；至少要在信息骨架、字体气质、色彩组织三项中与同套图其他图片拉开两项以上差异。\n'
-            '- 严禁使用“底部居中粗白字+黑描边”的默认排版，不得整页堆砌单一粗黑大字；整体风格可以统一，但每张图的标题位置、信息骨架、标签组织和留白关系都必须根据模块职责变化。\n'
-            '- 必须直接参考真实电商详情页常见版式语言来组织信息，例如单图分层、分栏线框、竖排多列、环绕标注、边角背书、参数信息板、对比双栏、吊牌角标、图标矩阵，不要只生成普通居中压字排版。\n'
-            '- 文字/标签配色必须与商品主色调、背景氛围和整体画面色调呼应，优先使用低饱和、克制、干净的配色；同时允许使用同色系深浅、低对比撞色、微渐变、浅底深字、深底浅字等方案形成变化，但禁止刺眼高饱和色、杂乱彩色字、强烈撞色字或与商品不匹配的文字配色。\n'
-            '- 字体气质必须匹配产品风格：简约/科技风优先无衬线，温柔/软萌风优先圆润软黑体或柔和手写感，高端/质感风优先纤细衬线或精致细体；同时不同页面要主动拉开字体样式差异，禁止整套图只使用同一种生硬粗黑体、廉价海报字或老旧土味字体。\n'
-            '- 必须清晰区分主标题、副标题、辅助说明至少两级以上层次，字号、字重、字距和留白要有明显差异，确保视觉焦点明确，禁止所有文字同样大小、同样粗细、同样位置逻辑。\n'
-            '- 文字排版必须避开商品主体、模特面部、关键部件、核心细节和主要操作区域，优先放在画面空白区、结构边缘区或场景留白区，禁止大面积遮挡主体。\n'
-            '- 允许克制地搭配线框、细分隔线、图标、吊牌、角标、编号标签、数据徽章等装饰元素，增强真实电商版式质感，但这些元素只能服务信息识别，不得抢夺商品主体。\n'
-            '- 不同功能模块要使用不同的电商通用版式语言：主视觉图偏极简记忆点，场景图偏陪伴式信息，价值图偏结构化说明，信任图偏规整可信的信息板；保持统一风格但版式绝不重复。\n'
-            '- 所有生成文字必须清晰可辨，严格规避文字乱码、变形、模糊、重影、笔画断裂、字距失衡、花哨特效字、水印感文字与脏乱排版。\n'
-        )
-    return (
-        f'{prompt}\n\n'
-        f'当前图类型：{image_type or "未指定"}\n\n'
-        f'不可变商品特征：\n{product_json_text}\n\n'
-        f'{plan_control_prompt}\n\n'
-        f'文字版式执行约束：\n{text_layout_control_prompt}\n'
-        f'额外执行约束：\n'
-        f'- 图片尺寸比例参考：{image_size_ratio or "1:1"}\n'
-        f'- 说明文字种类：{text_type or "中文"}\n'
-        f'- 国家参考：{country or "中国"}\n'
-        f'- 必须保留（must_keep）：{must_keep}\n'
-        f'- 绝对不可改变（must_not_change）：{must_not_change}\n'
-        f'- 明确禁止出现（forbidden_changes）：{forbidden_changes}\n'
-        f'- 可表达卖点（selling_points）：{selling_points}\n'
-        f'- 产品一致性是最高优先级，高于场景变化、版式变化、卖点表达和同套图差异；如果差异化要求与产品一致性冲突，必须优先保持商品主体一致。\n'
-        f'- 若提供了不可变商品特征，必须将其中的主体品类、核心主体、颜色体系、材质、轮廓、结构、关键部件、品牌标识、logo位置、稳定细节、must_keep、must_not_change、forbidden_changes 与 consistency_rules 视为最高优先级约束。\n'
-        f'- 若提供了参考商品图，必须把参考图视为主体锚点，优先复用其主体外观、颜色关系、材质质感、结构比例、边缘轮廓、关键部件、logo/品牌位与稳定细节。\n'
-        f'- 生成时只能改变背景、道具、光线、构图、文字版式、人物动作和非主体装饰；不得重新设计商品，不得替换商品品类，不得改变商品颜色体系、材质质感、结构比例、关键部件组合、logo/品牌位置或包装识别。\n'
-        f'- selling_points 只能用于补充文案重点、信息层级与卖点表达，不得推动商品变成其他颜色、其他材质、其他结构、其他部件方案或其他品牌观感。\n'
-        f'- 允许变化的仅限背景、道具、光线、构图、文案排版与非主体装饰；禁止把商品改成另一种外观、另一种材质表现、另一种结构、另一种颜色体系、另一种关键部件组合或另一种品牌识别。\n'
-        f'- 不要把场景氛围、背景纯度、人物气质或镜头语言误当作商品主体特征；它们只能作为从属变化，不能覆盖主体锁定要求。\n'
-        f'- 本张图必须与同套图中的其他图形成明显展示差异，不能复用相同的商品朝向、相同的人物动作、相同的持握方式、相同的商品摆位、相同的景别或相同的版式骨架。\n'
-        f'- 若本张图包含人物、手部或模特，它们只能服务当前图类型表达，且应与其他图的人物姿势、身体朝向、商品相对位置明显不同。\n'
-        f'- 若本张图不包含人物，则必须通过商品朝向、远近景切换、局部特写、平铺/立放/悬浮/包装展开等摆放方式变化，主动与其他图区分。\n'
-        f'- 主图、卖点图、细节图、参数图、售后图至少应在展示角度、构图重心与商品摆法上明显不同，禁止做成同一参考姿势的连续换背景或加字版本。\n'
-        f'- 首屏主视觉图、核心卖点图、使用场景图三张图尤其要避免同姿势复用；宁可牺牲部分背景统一感，也必须优先拉开商品朝向、人物动作、手持关系、远近景和商品在画面中的位置差异。\n'
-        f'{type_specific_rules}'
-        f'- 若卖点、生活方式、消费场景、节日氛围或合规表达与地区有关，优先按国家参考进行画面设计与文案表达。'
-    )
-
-
-def call_image_generation(client: OpenAI, prompt: str, image_payloads, image_size_ratio: str, text_type: str, country: str, product_json=None, image_type: str = '', plan_item=None, all_plan_types=None, max_images: int = 1):
-    model = get_supabase_setting('ARK_IMAGE_MODEL', get_optional_env('ARK_IMAGE_MODEL', 'doubao-seedream-5-0-260128'))
-    size = resolve_image_size(image_size_ratio)
-    quality = get_supabase_setting('ARK_IMAGE_QUALITY', get_optional_env('ARK_IMAGE_QUALITY', ''))
-    watermark = get_supabase_setting_bool('ARK_IMAGE_WATERMARK', get_optional_bool_env('ARK_IMAGE_WATERMARK', False))
-    sequential_mode = get_supabase_setting('ARK_SEQUENTIAL_IMAGE_GENERATION', get_optional_env('ARK_SEQUENTIAL_IMAGE_GENERATION', 'auto'))
-    sequential_max_images = get_supabase_setting_int('ARK_SEQUENTIAL_MAX_IMAGES', get_optional_int_env('ARK_SEQUENTIAL_MAX_IMAGES', 1))
-    enriched_prompt = build_enriched_image_prompt(prompt, image_size_ratio, text_type, country, product_json, image_type, plan_item, all_plan_types)
-    request_payload = {
-        'model': model,
-        'prompt': enriched_prompt,
-        'size': size,
-        'response_format': 'b64_json',
-    }
-
-    extra_body = {
-        'watermark': watermark,
-        'sequential_image_generation': sequential_mode,
-        'sequential_image_generation_options': {
-            'max_images': max(1, min(max_images, sequential_max_images)),
-        },
-    }
-    if image_payloads:
-        extra_body['image'] = [payload['data_url'] for payload in image_payloads]
-    if quality:
-        extra_body['quality'] = quality
-    request_payload['extra_body'] = extra_body
-    app.logger.warning('ARK image request extra_body: %s', json.dumps(extra_body, ensure_ascii=False))
-
-    response = client.images.generate(**request_payload)
-    return collect_generated_images(response)
-
-
-def build_generated_suite_image_item(task_id: str, plan_item: dict, generated_item: dict):
-    image_bytes, mime_type = decode_generated_image(generated_item)
-    download_name, relative_path, image_url = save_generated_image(task_id, plan_item['sort'], plan_item['type'], image_bytes, mime_type)
-    return {
-        'sort': plan_item['sort'],
-        'kind': 'generated',
-        'type': plan_item['type'],
-        'type_tag': plan_item['type_tag'],
-        'title': plan_item['title'],
-        'keywords': plan_item['keywords'],
-        'prompt': plan_item['prompt'],
-        'module': plan_item.get('module', ''),
-        'story_role': plan_item.get('story_role', ''),
-        'decision_task': plan_item.get('decision_task', ''),
-        'info_density': plan_item.get('info_density', ''),
-        'layout_style': plan_item.get('layout_style', ''),
-        'font_style': plan_item.get('font_style', ''),
-        'color_scheme': plan_item.get('color_scheme', ''),
-        'decor_elements': plan_item.get('decor_elements', []),
-        'image_url': image_url,
-        'image_path': relative_path,
-        'download_name': download_name,
-    }
-
-
-def generate_mode1_suite_images_parallel(plan: dict, image_payloads, task_id: str, image_size_ratio: str, text_type: str, country: str, product_json=None, all_plan_types=None):
-    plan_items = list(plan.get('items') or [])
-    if not plan_items:
-        return []
-    workers = min(len(plan_items), get_mode1_parallel_workers())
-    partial_retry_attempts = get_mode1_partial_retry_attempts()
-    retry_delay_seconds = get_mode1_retry_delay_seconds()
-    results = []
-    failures = []
-
-    def run_one(plan_item: dict):
-        generated_item = call_mode1_single_image_with_retry(
-            build_enriched_image_prompt(
-                plan_item['prompt'],
-                image_size_ratio,
-                text_type,
-                country,
-                product_json,
-                plan_item['type'],
-                plan_item,
-                all_plan_types or [],
-            ),
-            image_payloads,
-            image_size_ratio,
-            text_type,
-            country,
-            product_json,
-            plan_item['type'],
-            plan_item,
-            all_plan_types,
-        )
-        return build_generated_suite_image_item(task_id, plan_item, generated_item)
-
-    pending_items = list(plan_items)
-    for attempt_index in range(partial_retry_attempts + 1):
-        if not pending_items:
-            break
-        batch_workers = min(len(pending_items), workers)
-        batch_results = []
-        batch_failures = []
-        with concurrent.futures.ThreadPoolExecutor(max_workers=batch_workers) as executor:
-            future_map = {executor.submit(run_one, item): item for item in pending_items}
-            for future in concurrent.futures.as_completed(future_map):
-                plan_item = future_map[future]
-                try:
-                    batch_results.append(future.result())
-                except Exception as exc:
-                    batch_failures.append((plan_item, f'{plan_item.get("type") or plan_item.get("title") or plan_item.get("sort")}：{exc}'))
-        results.extend(batch_results)
-        pending_items = [item for item, _msg in batch_failures]
-        failures = [_msg for _item, _msg in batch_failures]
-        if pending_items and attempt_index < partial_retry_attempts:
-            app.logger.warning(
-                'Mode1 suite partial generation missing %s/%s images, retrying in %.2fs (%s/%s): %s',
-                len(pending_items), len(plan_items), retry_delay_seconds * (attempt_index + 1),
-                attempt_index + 1, partial_retry_attempts,
-                '; '.join(failures[:3]),
-            )
-            time.sleep(retry_delay_seconds * (attempt_index + 1))
-
-    if failures:
-        raise ValueError(f'mode1 套图部分生成失败：{"；".join(failures[:3])}')
-    return sorted(results, key=lambda item: item.get('sort') or 0)
-
-
-def generate_mode2_suite_images_parallel(plan: dict, image_payloads, task_id: str, image_size_ratio: str, text_type: str, country: str, product_json=None, all_plan_types=None):
-    plan_items = list(plan.get('items') or [])
-    if not plan_items:
-        return []
-    workers = min(len(plan_items), get_mode2_parallel_workers())
-    partial_retry_attempts = get_mode2_partial_retry_attempts()
-    retry_delay_seconds = get_mode2_retry_delay_seconds()
-    results = []
-    failures = []
-
-    def run_one(plan_item: dict):
-        generated_item = call_mode2_single_image_with_retry(
-            build_enriched_image_prompt(
-                plan_item['prompt'],
-                image_size_ratio,
-                text_type,
-                country,
-                product_json,
-                plan_item['type'],
-                plan_item,
-                all_plan_types or [],
-            ),
-            image_payloads,
-            image_size_ratio,
-            text_type,
-            country,
-            product_json,
-            plan_item['type'],
-            plan_item,
-            all_plan_types,
-        )
-        return build_generated_suite_image_item(task_id, plan_item, generated_item)
-
-    pending_items = list(plan_items)
-    for attempt_index in range(partial_retry_attempts + 1):
-        if not pending_items:
-            break
-        batch_workers = min(len(pending_items), workers)
-        batch_results = []
-        batch_failures = []
-        with concurrent.futures.ThreadPoolExecutor(max_workers=batch_workers) as executor:
-            future_map = {executor.submit(run_one, item): item for item in pending_items}
-            for future in concurrent.futures.as_completed(future_map):
-                plan_item = future_map[future]
-                try:
-                    batch_results.append(future.result())
-                except Exception as exc:
-                    batch_failures.append((plan_item, f'{plan_item.get("type") or plan_item.get("title") or plan_item.get("sort")}：{exc}'))
-        results.extend(batch_results)
-        pending_items = [item for item, _msg in batch_failures]
-        failures = [_msg for _item, _msg in batch_failures]
-        if pending_items and attempt_index < partial_retry_attempts:
-            app.logger.warning(
-                'Mode2 suite partial generation missing %s/%s images, retrying in %.2fs (%s/%s): %s',
-                len(pending_items), len(plan_items), retry_delay_seconds * (attempt_index + 1),
-                attempt_index + 1, partial_retry_attempts,
-                '; '.join(failures[:3]),
-            )
-            time.sleep(retry_delay_seconds * (attempt_index + 1))
-
-    if failures:
-        raise ValueError(f'mode2 套图部分生成失败：{"；".join(failures[:3])}')
-    return sorted(results, key=lambda item: item.get('sort') or 0)
-
-
-def generate_mode3_suite_images_parallel(plan: dict, image_payloads, task_id: str, image_size_ratio: str, text_type: str, country: str, product_json=None, all_plan_types=None):
-    plan_items = list(plan.get('items') or [])
-    if not plan_items:
-        return []
-    workers = min(len(plan_items), get_mode3_parallel_workers())
-    partial_retry_attempts = get_mode3_partial_retry_attempts()
-    retry_delay_seconds = get_mode3_retry_delay_seconds()
-    results = []
-    failures = []
-
-    def run_one(plan_item: dict):
-        generated_item = call_mode3_single_image_with_retry(
-            build_enriched_image_prompt(
-                plan_item['prompt'],
-                image_size_ratio,
-                text_type,
-                country,
-                product_json,
-                plan_item['type'],
-                plan_item,
-                all_plan_types or [],
-            ),
-            image_payloads,
-            image_size_ratio,
-            text_type,
-            country,
-            product_json,
-            plan_item['type'],
-            plan_item,
-            all_plan_types,
-        )
-        return build_generated_suite_image_item(task_id, plan_item, generated_item)
-
-    pending_items = list(plan_items)
-    for attempt_index in range(partial_retry_attempts + 1):
-        if not pending_items:
-            break
-        batch_workers = min(len(pending_items), workers)
-        batch_results = []
-        batch_failures = []
-        with concurrent.futures.ThreadPoolExecutor(max_workers=batch_workers) as executor:
-            future_map = {executor.submit(run_one, item): item for item in pending_items}
-            for future in concurrent.futures.as_completed(future_map):
-                plan_item = future_map[future]
-                try:
-                    batch_results.append(future.result())
-                except Exception as exc:
-                    batch_failures.append((plan_item, f'{plan_item.get("type") or plan_item.get("title") or plan_item.get("sort")}：{exc}'))
-        results.extend(batch_results)
-        pending_items = [item for item, _msg in batch_failures]
-        failures = [_msg for _item, _msg in batch_failures]
-        if pending_items and attempt_index < partial_retry_attempts:
-            app.logger.warning(
-                'Mode3 suite partial generation missing %s/%s images, retrying in %.2fs (%s/%s): %s',
-                len(pending_items), len(plan_items), retry_delay_seconds * (attempt_index + 1),
-                attempt_index + 1, partial_retry_attempts,
-                '; '.join(failures[:3]),
-            )
-            time.sleep(retry_delay_seconds * (attempt_index + 1))
-
-    if failures:
-        raise ValueError(f'mode3 套图部分生成失败：{"；".join(failures[:3])}')
-    return sorted(results, key=lambda item: item.get('sort') or 0)
-
-
-def generate_suite_images(plan: dict, image_payloads, task_id: str, image_size_ratio: str, text_type: str, country: str, product_json=None):
-    client = get_ark_client()
-    images = []
-    all_plan_types = [str(item.get('type', '')).strip() for item in plan.get('items', []) if str(item.get('type', '')).strip()]
-    plan_items = list(plan.get('items') or [])
-    app_mode = get_app_mode()
-    if app_mode == 'mode1':
-        return generate_mode1_suite_images_parallel(plan, image_payloads, task_id, image_size_ratio, text_type, country, product_json, all_plan_types)
-    if app_mode == 'mode2':
-        return generate_mode2_suite_images_parallel(plan, image_payloads, task_id, image_size_ratio, text_type, country, product_json, all_plan_types)
-    if app_mode == 'mode3':
-        return generate_mode3_suite_images_parallel(plan, image_payloads, task_id, image_size_ratio, text_type, country, product_json, all_plan_types)
-    batch_limit = max(get_supabase_setting_int('ARK_SEQUENTIAL_MAX_IMAGES', get_optional_int_env('ARK_SEQUENTIAL_MAX_IMAGES', 1)), 1)
-    index = 0
-
-    while index < len(plan_items):
-        item = plan_items[index]
-        remaining_items = plan_items[index:]
-        generated_items = call_app_mode_image_generation(
-            client,
-            item['prompt'],
-            image_payloads,
-            image_size_ratio,
-            text_type,
-            country,
-            product_json,
-            item['type'],
-            item,
-            all_plan_types,
-            max_images=min(len(remaining_items), batch_limit),
-        )
-
-        consumed_count = 0
-        for generated_item, plan_item in zip(generated_items, remaining_items):
-            images.append(build_generated_suite_image_item(task_id, plan_item, generated_item))
-            consumed_count += 1
-
-        if consumed_count < 1:
-            raise ValueError('图像生成接口未返回可用图片内容')
-
-        index += consumed_count
-
-    return images
-
-
-
-def generate_aplus_images(plan: dict, image_payloads, task_id: str, image_size_ratio: str, text_type: str, country: str, product_json=None):
-    plan_items = list(plan.get('items') or [])
-    if not plan_items:
-        return []
-
-    app_mode = get_app_mode()
-    workers, partial_retry_attempts, retry_delay_seconds = _get_parallel_config(app_mode, len(plan_items))
-
-    results = []
-    failures = []
-
-    def run_one(plan_item: dict):
-        generated_items = call_app_mode_image_generation(
-            get_ark_client(),
-            plan_item['prompt'],
-            image_payloads,
-            image_size_ratio,
-            text_type,
-            country,
-            product_json,
-            plan_item['type'],
-            max_images=1,
-        )
-        generated_item = generated_items[0]
-        image_bytes, mime_type = decode_generated_image(generated_item)
-        download_name, relative_path, image_url = save_generated_image(task_id, plan_item['sort'], plan_item['type'], image_bytes, mime_type)
-        return {
-            'sort': plan_item['sort'],
-            'kind': 'generated',
-            'type': plan_item['type'],
-            'type_tag': plan_item['type_tag'],
-            'title': plan_item['title'],
-            'keywords': plan_item['keywords'],
-            'prompt': plan_item['prompt'],
-            'module': plan_item.get('module', ''),
-            'story_role': plan_item.get('story_role', ''),
-            'decision_task': plan_item.get('decision_task', ''),
-            'info_density': plan_item.get('info_density', ''),
-            'layout_style': plan_item.get('layout_style', ''),
-            'font_style': plan_item.get('font_style', ''),
-            'color_scheme': plan_item.get('color_scheme', ''),
-            'decor_elements': plan_item.get('decor_elements', []),
-            'image_url': image_url,
-            'image_path': relative_path,
-            'download_name': download_name,
-        }
-
-    pending_items = list(plan_items)
-    for attempt_index in range(partial_retry_attempts + 1):
-        if not pending_items:
-            break
-        batch_workers = min(len(pending_items), workers)
-        batch_results = []
-        batch_failures = []
-        with concurrent.futures.ThreadPoolExecutor(max_workers=batch_workers) as executor:
-            future_map = {executor.submit(run_one, item): item for item in pending_items}
-            for future in concurrent.futures.as_completed(future_map):
-                plan_item = future_map[future]
-                try:
-                    batch_results.append(future.result())
-                except Exception as exc:
-                    batch_failures.append((plan_item, f'{plan_item.get("type") or plan_item.get("title") or plan_item.get("sort")}：{exc}'))
-        results.extend(batch_results)
-        pending_items = [item for item, _msg in batch_failures]
-        failures = [_msg for _item, _msg in batch_failures]
-        if pending_items and attempt_index < partial_retry_attempts:
-            app.logger.warning(
-                'A+ parallel partial generation missing %s/%s, retrying in %.2fs (%s/%s): %s',
-                len(pending_items), len(plan_items), retry_delay_seconds * (attempt_index + 1),
-                attempt_index + 1, partial_retry_attempts,
-                '; '.join(failures[:3]),
-            )
-            time.sleep(retry_delay_seconds * (attempt_index + 1))
-
-    if failures:
-        raise ValueError(f'A+ 部分图片生成失败：{"；".join(failures[:3])}')
-    return sorted(results, key=lambda item: item.get('sort') or 0)
-
-
-def _get_parallel_config(app_mode: str, plan_item_count: int):
-    if app_mode == 'mode1':
-        return (
-            min(plan_item_count, get_mode1_parallel_workers()),
-            get_mode1_partial_retry_attempts(),
-            get_mode1_retry_delay_seconds(),
-        )
-    if app_mode == 'mode2':
-        return (
-            min(plan_item_count, get_mode2_parallel_workers()),
-            get_mode2_partial_retry_attempts(),
-            get_mode2_retry_delay_seconds(),
-        )
-    if app_mode == 'mode3':
-        return (
-            min(plan_item_count, get_mode3_parallel_workers()),
-            get_mode3_partial_retry_attempts(),
-            get_mode3_retry_delay_seconds(),
-        )
-    return (min(plan_item_count, 3), 0, 1.5)
 
 
 @app.before_request
@@ -6447,12 +1521,12 @@ def create_pay_order_api():
     except ValueError as exc:
         return jsonify({'error': 'VALIDATION_ERROR', 'message': str(exc)}), 400
     except requests.RequestException as exc:
-        app.logger.exception('Failed to create payment order')
+        logger.exception('Failed to create payment order')
         return jsonify({'error': 'SUPABASE_REQUEST_FAILED', 'message': f'支付订单创建失败：{exc}'}), 502
     except RuntimeError as exc:
         return jsonify({'error': 'PAYMENT_CONFIG_ERROR', 'message': str(exc)}), 500
     except Exception as exc:
-        app.logger.exception('Unexpected error while creating payment order')
+        logger.exception('Unexpected error while creating payment order')
         return jsonify({'error': 'CREATE_PAY_ORDER_FAILED', 'message': f'创建支付订单失败：{exc}'}), 500
 
 
@@ -6465,40 +1539,40 @@ def pay_notify_api():
         callback_money = str(payload.get('money') or '').strip()
         trade_status = str(payload.get('trade_status') or '').strip().upper()
 
-        app.logger.warning('ZPAY notify received: method=%s out_trade_no=%s trade_no=%s trade_status=%s payload=%s', request.method, out_trade_no, callback_trade_no, trade_status, payload)
+        logger.warning('ZPAY notify received: method=%s out_trade_no=%s trade_no=%s trade_status=%s payload=%s', request.method, out_trade_no, callback_trade_no, trade_status, payload)
 
         if not verify_zpay_callback_signature(payload):
-            app.logger.warning('ZPAY notify invalid sign: out_trade_no=%s payload=%s', out_trade_no, payload)
+            logger.warning('ZPAY notify invalid sign: out_trade_no=%s payload=%s', out_trade_no, payload)
             return 'fail', 400
         if not out_trade_no:
-            app.logger.warning('ZPAY notify missing out_trade_no: payload=%s', payload)
+            logger.warning('ZPAY notify missing out_trade_no: payload=%s', payload)
             return 'fail', 400
         if trade_status not in ZPAY_SUCCESS_STATUSES:
-            app.logger.warning('ZPAY notify invalid trade_status: out_trade_no=%s trade_status=%s payload=%s', out_trade_no, trade_status, payload)
+            logger.warning('ZPAY notify invalid trade_status: out_trade_no=%s trade_status=%s payload=%s', out_trade_no, trade_status, payload)
             return 'fail', 400
 
         order_row = fetch_payment_order_by_out_trade_no(out_trade_no)
         if not order_row:
-            app.logger.warning('ZPAY notify order not found: out_trade_no=%s payload=%s', out_trade_no, payload)
+            logger.warning('ZPAY notify order not found: out_trade_no=%s payload=%s', out_trade_no, payload)
             return 'fail', 404
         if is_order_success(order_row):
             return 'success', 200
 
         validate_callback_amount(order_row, callback_money)
         process_success_payment(order_row, callback_trade_no)
-        app.logger.warning('ZPAY notify processed success: out_trade_no=%s trade_no=%s', out_trade_no, callback_trade_no)
+        logger.warning('ZPAY notify processed success: out_trade_no=%s trade_no=%s', out_trade_no, callback_trade_no)
         return 'success', 200
     except ValueError as exc:
-        app.logger.warning('ZPAY notify validation error: %s; payload=%s', exc, request.values.to_dict(flat=True) if request.values else {})
+        logger.warning('ZPAY notify validation error: %s; payload=%s', exc, request.values.to_dict(flat=True) if request.values else {})
         return 'fail', 400
     except requests.RequestException as exc:
-        app.logger.exception('Failed to process payment callback')
+        logger.exception('Failed to process payment callback')
         return 'fail', 502
     except RuntimeError as exc:
-        app.logger.warning('ZPAY notify config error: %s', exc)
+        logger.warning('ZPAY notify config error: %s', exc)
         return 'fail', 500
     except Exception as exc:
-        app.logger.exception('Unexpected error while processing payment callback')
+        logger.exception('Unexpected error while processing payment callback')
         return 'fail', 500
 
 
@@ -6589,7 +1663,7 @@ def index():
 
 
 def render_html_page(filename: str):
-    html = (BASE_DIR / filename).read_text(encoding='utf-8')
+    html = (BASE_DIR / 'pages' / filename).read_text(encoding='utf-8')
     runtime_config = {
         'supabaseUrl': SUPABASE_URL,
         'supabaseAnonKey': SUPABASE_ANON_KEY,
@@ -6714,56 +1788,6 @@ def settings_refresh_api():
     global LOCAL_CONFIG
     LOCAL_CONFIG = load_local_config()
     return jsonify({'success': True})
-
-
-def find_refundable_spend_transaction(user_id: str, request_id: str, amount: int | None = None, transaction_type: str = '') -> dict | None:
-    normalized_user_id = str(user_id or '').strip()
-    normalized_request_id = str(request_id or '').strip()
-    normalized_transaction_type = str(transaction_type or '').strip()
-    if not normalized_user_id or not normalized_request_id:
-        return None
-    params = {
-        'select': '*',
-        'user_id': f'eq.{normalized_user_id}',
-        'metadata': f"cs.{json.dumps({'request_id': normalized_request_id}, separators=(',', ':'), ensure_ascii=False)}",
-        'order': 'created_at.desc',
-        'limit': '1',
-    }
-    if normalized_transaction_type:
-        params['transaction_type'] = f'eq.{normalized_transaction_type}'
-    if amount is not None:
-        params['amount'] = f'eq.-{abs(int(amount))}'
-    response = requests.get(
-        build_supabase_request_url('/rest/v1/user_points_transactions'),
-        headers=_build_supabase_service_headers(),
-        params=params,
-        timeout=20,
-    )
-    response.raise_for_status()
-    payload = response.json()
-    return _extract_single_supabase_row(payload)
-
-
-def find_refund_transaction_for_request(user_id: str, request_id: str) -> dict | None:
-    normalized_user_id = str(user_id or '').strip()
-    normalized_request_id = str(request_id or '').strip()
-    if not normalized_user_id or not normalized_request_id:
-        return None
-    response = requests.get(
-        build_supabase_request_url('/rest/v1/user_points_transactions'),
-        headers=_build_supabase_service_headers(),
-        params={
-            'select': '*',
-            'user_id': f'eq.{normalized_user_id}',
-            'transaction_type': 'eq.refund',
-            'metadata': f"cs.{json.dumps({'request_id': normalized_request_id}, separators=(',', ':'), ensure_ascii=False)}",
-            'limit': '1',
-        },
-        timeout=20,
-    )
-    response.raise_for_status()
-    payload = response.json()
-    return _extract_single_supabase_row(payload)
 
 
 @app.get('/api/points/balance')
@@ -7057,7 +2081,7 @@ def download_zip():
                         used_names.add(archive_name)
                         archive.writestr(archive_name, img_bytes)
                     except Exception as exc:
-                        app.logger.warning('Failed to download COS image for zip: %s', exc)
+                        logger.warning('Failed to download COS image for zip: %s', exc)
                     continue
 
                 file_path = (GENERATED_SUITES_DIR / relative_path).resolve()
@@ -7095,7 +2119,7 @@ def download_zip():
                         used_names.add(archive_name)
                         archive.writestr(archive_name, img_bytes)
                     except Exception as exc:
-                        app.logger.warning('Failed to download COS image for zip: %s', exc)
+                        logger.warning('Failed to download COS image for zip: %s', exc)
                     continue
 
         if not used_names:
@@ -7650,7 +2674,7 @@ def build_generation_result_from_payload(form_payload: dict, file_payloads: dict
         max_verify_attempts = max(1, get_optional_int_env('FASHION_OUTPUT_MAX_VERIFY_ATTEMPTS', FASHION_OUTPUT_MAX_VERIFY_ATTEMPTS))
 
         def _generate_one_fashion_look(index: int, prompt_entry: dict):
-            app.logger.warning(
+            logger.warning(
                 'Fashion image generation start: index=%s total=%s title=%s shot_size=%s view_angle=%s',
                 index,
                 len(prompt_entries),
@@ -7675,7 +2699,7 @@ def build_generation_result_from_payload(form_payload: dict, file_payloads: dict
                     max_images=1,
                 )
                 generated_count = len(generated_items) if isinstance(generated_items, list) else 0
-                app.logger.warning(
+                logger.warning(
                     'Fashion image generation result: index=%s total=%s attempt=%s generated_count=%s title=%s',
                     index,
                     len(prompt_entries),
@@ -7698,7 +2722,7 @@ def build_generation_result_from_payload(form_payload: dict, file_payloads: dict
                     selected_model_payload,
                     image_payloads,
                 )
-                app.logger.warning(
+                logger.warning(
                     'Fashion output verification: index=%s attempt=%s passed=%s score=%s failed_checks=%s reason=%s',
                     index,
                     attempt,
@@ -7755,7 +2779,7 @@ def build_generation_result_from_payload(form_payload: dict, file_payloads: dict
             pending_entries = [(idx, entry) for idx, entry, _msg in batch_failures]
             if pending_entries and attempt_index < partial_retry_attempts:
                 failures_brief = [msg for _idx, _entry, msg in batch_failures[:3]]
-                app.logger.warning(
+                logger.warning(
                     'Fashion parallel partial generation missing %s/%s, retrying in %.2fs (%s/%s): %s',
                     len(pending_entries), len(prompt_entries), retry_delay_seconds * (attempt_index + 1),
                     attempt_index + 1, partial_retry_attempts,
@@ -7815,9 +2839,9 @@ def build_generation_result_from_payload(form_payload: dict, file_payloads: dict
         )
     planning_payloads = image_payloads + reference_payloads
     if product_json is None and planning_payloads:
-        app.logger.warning('Suite generation extracting product_json from uploaded reference images: mode=%s image_count=%s', mode, len(planning_payloads))
+        logger.warning('Suite generation extracting product_json from uploaded reference images: mode=%s image_count=%s', mode, len(planning_payloads))
         product_json = extract_product_json_from_image_payloads(selling_text, planning_payloads)
-    app.logger.warning(
+    logger.warning(
         'Suite generation upload payloads: mode=%s product_count=%s reference_count=%s total_generation_count=%s product_json_ready=%s',
         mode,
         len(image_payloads),
@@ -7968,9 +2992,9 @@ def generate_aplus():
             )
         planning_payloads = image_payloads + reference_payloads
         if product_json is None and planning_payloads:
-            app.logger.warning('A+ generation extracting product_json from uploaded reference images: product_count=%s reference_count=%s total_generation_count=%s', len(image_payloads), len(reference_payloads), len(planning_payloads))
+            logger.warning('A+ generation extracting product_json from uploaded reference images: product_count=%s reference_count=%s total_generation_count=%s', len(image_payloads), len(reference_payloads), len(planning_payloads))
             product_json = extract_product_json_from_image_payloads(selling_text, planning_payloads)
-        app.logger.warning(
+        logger.warning(
             'A+ generation upload payloads: product_count=%s reference_count=%s total_generation_count=%s product_json_ready=%s',
             len(image_payloads),
             len(reference_payloads),
@@ -8016,3 +3040,4 @@ if __name__ == '__main__':
     port = get_supabase_setting_int('PORT', get_optional_int_env('PORT', 5078))
     debug = get_supabase_setting_bool('FLASK_DEBUG', get_optional_bool_env('FLASK_DEBUG', False))
     app.run(host=host, port=port, debug=debug)
+
