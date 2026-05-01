@@ -76,7 +76,7 @@ http://127.0.0.1:5078
 
 当前会同时推送同一个镜像的两个标签：
 
-- `9.1`
+- `9.2`
 - `latest`
 
 工作流文件：
@@ -626,19 +626,83 @@ SUPABASE_ANON_KEY=
 
 并确认页面是通过 Flask 返回的，不是直接用浏览器打开本地 HTML 文件。
 
+## mode3 套图生成性能基准
+
+### 测试环境
+
+- APP_MODE=mode3 | 生图模型: gpt-image-2 | 并行度: 9 workers
+- 套图输出: 6 张 (Hero→Selling→Scene→Detail→Specs→Trust)
+- 套图模式无基准模特生成、无 LLM 质检验证，链路较短
+
+### 实测耗时分解（6 张套图）
+
+| 阶段 | 耗时 | 占比 | 说明 |
+| --- | --- | --- | --- |
+| LLM 套图规划 (gpt-5.4-mini) | ~130s | 79% | SUITE_PLAN prompt 约 12KB，数百行叙事规则 |
+| mode3 并行生成 (6 张) | ~35s | 21% | ThreadPool workers=9，单张 gpt-image-2 约 30s |
+| **服务端总计** | **~165s** | 100% | 含规划 + 生成 + COS 存储 |
+
+### LLM 规划模型对比（2026-05 实测）
+
+| 模型 | 规划耗时 | 单套成本 | 多模态 | 备注 |
+| --- | --- | --- | --- | --- |
+| **gpt-5.4-mini** (nofx 代理) | ~130s | 取决于代理 | ✅ | 当前默认，代理延迟较高 |
+| **doubao-seed-2-0-mini** (Ark 直连) | ~109s | ¥0.008 | ✅ | **推荐**：改 3 行 .env 即可切换，成本可忽略 |
+| DeepSeek V4 Flash | ~35s (估) | ¥0.012 | ❌ 纯文本 | 速度最快但不支持图片输入，需改代码用 product_json 替代图片 |
+
+> **结论**：doubao-seed-2-0-mini 性价比最优——即改即用、成本 < 1 分钱/套、比 gpt-5.4-mini 快 16%。若要进一步加速，需精简 [SUITE_PLAN_SYSTEM_PROMPT](file:///e:/360MoveData/Users/Administrator/Desktop/aiimagenew/app.py#L2210-L2340)（当前 ~12KB）。
+
+### 切换 doubao 方法
+
+修改 `.env` 中 3 行，将 LLM 从代理 gpt-5.4-mini 切到 Ark 直连 doubao：
+
+```env
+# 改前
+OPENAI_API_KEY=sk-rniPHXm3rCD1M4LIyFFw0zhXsJIdmfXIRRZLEsSpBoLk56n2
+OPENAI_BASE_URL=https://api.nofx.online/v1
+OPENAI_MODEL=gpt-5.4-mini
+
+# 改后
+OPENAI_API_KEY=96d739dd-5f53-4a6d-b89d-1779f27be846
+OPENAI_BASE_URL=https://ark.cn-beijing.volces.com/api/v3
+OPENAI_MODEL=doubao-seed-2-0-mini-260215
+```
+
+重启 Flask 即生效，无需改动任何代码。
+
+### 套图 vs 穿搭(fashion) 对比
+
+| 环节 | 套图(suite) | 穿搭(fashion) | 备注 |
+| --- | --- | --- | --- |
+| 基准模特生成 | ❌ 无 | ~30s | fashion 需先生成 AI 模特 |
+| 场景/套图规划 | ~130s | ~19s | suite prompt 远比 fashion 复杂 |
+| mode3 API 调用 | ~35s (6张并行) | ~40s/张 | 串行无并行，每张含重试 |
+| LLM 质检验证 | ❌ 无 | ~18s/张 | fashion 需检模特一致性+穿搭正确性 |
+| **每张平摊耗时** | **~27s** | **~120s** | 套图效率高 4-5x |
+| **总耗时(6张)** | **~165s** | 不适用 | fashion 按张生成，生成 6 张需 ~720s |
+
+### 进一步加速建议
+
+| 优先级 | 方案 | 难度 | 预估收益 |
+| --- | --- | --- | --- |
+| 🔴 P0 | 切 doubao 做规划 | 极低（改 3 行配置） | -21s |
+| 🔴 P0 | 精简 SUITE_PLAN prompt (~12KB→~5KB) | 中 | -20~40s |
+| 🟡 P1 | API response_format 从 url→b64_json 省下载 | 低 | -12~30s |
+| 🟡 P1 | 规划缓存 (同品类+同卖点复用) | 中 | -130s (命中时) |
+| 🟢 P2 | 重试间隔 1.5s→0.5s 起 | 低 | -2~5s |
+| 🟢 P2 | 前端超时 180s→120s ([workspace.js:73](file:///e:/360MoveData/Users/Administrator/Desktop/aiimagenew/static/js/workspace.js#L73)) | 低 | 体验提升 |
+
 ## 近期更新
 
-### 2026-05-01 · v9.0
+### 2026-05-01 · v9.1
 
-- **商品套图信任模块**：最后一张固定图类型从"配件/售后图"改为"信任背书图"，不再生成包装清单、附赠配件或配件展示内容；信任方向改为真实反馈感、品牌可信线索、品质检查感与交付可靠感
+- **mode3 套图性能基准**：实测 6 张套图全流程耗时 ~165s（gpt-5.4-mini 规划 130s + 并发生成 35s），详见上方性能章节
+- **LLM 选型对比与切换方案**：验证 doubao-seed-2-0-mini 可替代 gpt-5.4-mini 做规划，节省 16% 耗时，成本 ¥0.008/套
+- **商品套图信任模块**：最后一张固定图类型从"配件/售后图"改为"信任背书图"，不再生成包装清单、附赠配件或配件展示内容
 - **服饰穿戴场景规划**：修复前端 `FASHION_SCENE_PLAN_REQUEST_TIMEOUT_MS is not defined` 导致点击"生成推荐场景"直接失败的问题，补上 180 秒超时常量
 - **积分配置文档**：完善 README 中 `POINTS_RULE_*` 的 JSON 字段说明、默认值、读取优先级和示例
 - mode1/mode2 接入并行生成与三层断流重试，与 mode3 完全对称
 - Fashion 穿搭、A+ 模块改为并发生成
-- mode2 文生图改为白底 PNG → 图生图
-- 修复 Fashion 场景规划跨域 CORS 无法获取模特图片
-- 新增 `POST /api/generate-mode1-image-edit`、`/api/generate-mode1-text2image`
-- Docker 镜像版本 `9.1` + `latest`
 
 ### 2026-04-30
 
