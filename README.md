@@ -88,8 +88,8 @@ python app.py
 
 | 触发条件 | 标签 |
 |----------|------|
-| 推送到 `main` 分支 | `9.5` + `latest` |
-| GitHub Actions 手动触发 | `9.5` + `latest` |
+| 推送到 `main` 分支 | `9.6` + `latest` |
+| GitHub Actions 手动触发 | `9.6` + `latest` |
 
 - 构建平台：`linux/amd64` + `linux/arm64`
 - `.dockerignore` 已排除 `.env` 和 `.env.*`
@@ -339,7 +339,15 @@ POST {MODE3_OPENAI_BASE_URL}/images/edits
 
 ## 近期更新
 
-### 2026-05-01 · v9.4
+### 2026-05-02 · v9.6
+
+- **COS 图片存储优化**：COS 客户端改为运行时懒加载，每次通过 `os.getenv()` 实时读取配置，避免 Settings 页面修改后不生效的问题
+- **Chat Fallback 增强**：新增 401 / authentication_error / auth_unavailable / token is expired 等认证类错误 token，主接口 Key 过期时自动切换到 Ark Chat 备用接口
+- **AI 帮写按钮修复**：页面初始化时自动启用按钮，不再出现加载后 disabled 的情况
+- **Docker 镜像标签**：9.5 → 9.6，自动打 `9.6` + `latest` 双标签
+- **VIP 系统文档**：补充完整的 Supabase 建表 SQL、AI 提示词配置、积分规则与支付链路教程
+
+### 2026-05-01 · v9.5
 
 - **代码重构**：`app.py` 从 7326 行降至 3044 行（-58%），提取 `supabase_client.py`（887 行）和 `generation/` 包（2570 行）
 - `generation/modes.py`：mode1/2/3 客户端工厂、单图/并行生成、重试逻辑
@@ -348,10 +356,10 @@ POST {MODE3_OPENAI_BASE_URL}/images/edits
 - `app.logger` → 可注入 `logging.Logger`，所有模块独立日志
 - HTML 页面归入 `pages/` 目录
 - 删除 4 个旧测试文件，项目更整洁
-- **Docker 镜像 9.4 + latest**
+- **Docker 镜像 9.5 + latest**
 - 重构后全部 42 个路由回归测试通过，认证/积分/生图全链路正常
 
-### 2026-05-01 · v9.3
+### 2026-05-01 · v9.4
 
 - LLM 全模式切 doubao-seed-2-0-mini（Ark 直连），成本 ¥0.008/套
 - 套图规划 prompt 精简 63%（7KB→2.6KB），规划耗时 -34s

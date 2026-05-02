@@ -2865,6 +2865,7 @@ document.addEventListener('DOMContentLoaded', () => {
     }
 
     if (aiWriteBtn && sellingInput && sellingMessage) {
+      aiWriteBtn.disabled = false;
       aiWriteBtn.addEventListener('click', async () => {
         const originalText = sellingInput.value;
         const formData = new FormData();

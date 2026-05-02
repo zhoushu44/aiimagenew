@@ -39,6 +39,9 @@ CHAT_COMPLETION_FALLBACK_ERROR_TOKENS = (
     'usage limit', 'usage_limit_reached', 'HTTPSConnectionPool',
     'SSLError', 'SSLEOFError', 'EOF occurred in violation of protocol',
     'Max retries exceeded', '524',
+    '401', 'authentication_error', 'auth_unavailable',
+    'token is expired', 'Invalid API Key', 'Incorrect API key',
+    'invalid_api_key',
 )
 
 

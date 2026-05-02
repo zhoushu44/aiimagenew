@@ -28,7 +28,7 @@ from PIL import Image
 from requests.adapters import HTTPAdapter
 from urllib3.util.retry import Retry
 from werkzeug.exceptions import RequestEntityTooLarge
-from cos_utils import upload_to_cos, generate_cos_key, is_cos_enabled, COS_URL_PREFIX
+from cos_utils import upload_to_cos, generate_cos_key, is_cos_enabled, get_cos_url_prefix
 
 from supabase_client import (
     _fetch_user_points_row, _normalize_points_row, _build_legacy_points_balance_row,
@@ -1713,7 +1713,7 @@ def settings_page():
 @app.get('/generated/<path:path>')
 def serve_generated_file(path: str):
     if is_cos_enabled() and not (GENERATED_SUITES_DIR / path).is_file():
-        cos_url = f"{COS_URL_PREFIX}/{path}"
+        cos_url = f"{get_cos_url_prefix()}/{path}"
         return redirect(cos_url)
     return send_from_directory(GENERATED_SUITES_DIR, path)
 
@@ -2111,7 +2111,7 @@ def download_zip():
 
                 if is_cos_enabled():
                     try:
-                        cos_url = f"{COS_URL_PREFIX}/{relative_path}"
+                        cos_url = f"{get_cos_url_prefix()}/{relative_path}"
                         img_resp = requests.get(cos_url, timeout=30)
                         img_resp.raise_for_status()
                         img_bytes = img_resp.content
