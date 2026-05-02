@@ -12,6 +12,7 @@
 - A+ 详情页生成：结构化电商 A+ 模块图文
 - 服饰穿搭（Fashion）：AI 模特生成、场景规划、成图质检
 - 生成任务持久化：支持刷新恢复、状态轮询、失败自动返还积分
+- 任务链路耗时打点：后端生成、图片存储、前端轮询、渲染和图片加载均可拆分排查
 - LLM Chat 双模式：Ark 直连为主，自动 fallback 到备选接口
 - ZPay 支付：创建订单、异步回调验签、一次性/订阅购买
 - 订阅续期自动叠加，会员状态实时展示
@@ -99,8 +100,38 @@ gunicorn -w 4 -b 0.0.0.0:5078 --timeout 300 --access-logfile - app:app
 
 - 构建平台：`linux/amd64` + `linux/arm64`
 - 镜像内使用 Gunicorn 运行 Flask 应用：`gunicorn -w 4 -b 0.0.0.0:5078 --timeout 300 --access-logfile - app:app`
+- 宝塔 Docker 部署时如果容器 `command` 被手动设置为 `python app.py`，需要改为上面的 Gunicorn 命令，否则仍会启动 Flask 开发服务器
 - `.dockerignore` 已排除 `.env` 和 `.env.*`
 - 工作流文件：[docker-publish.yml](.github/workflows/docker-publish.yml)
+
+### 宝塔 Docker 部署检查
+
+容器启动命令应为：
+
+```bash
+gunicorn -w 4 -b 0.0.0.0:5078 --timeout 300 --access-logfile - app:app
+```
+
+正确启动日志应包含：
+
+```text
+[INFO] Starting gunicorn
+[INFO] Listening at: http://0.0.0.0:5078
+[INFO] Booting worker with pid: ...
+```
+
+如果日志仍出现 `WARNING: This is a development server.`，说明容器仍在运行 `python app.py`，Gunicorn 生产启动方式未生效。
+
+推荐 Nginx 反代到本机容器端口：
+
+```nginx
+proxy_pass http://127.0.0.1:5078;
+proxy_connect_timeout 60s;
+proxy_send_timeout 600s;
+proxy_read_timeout 600s;
+send_timeout 600s;
+proxy_buffering off;
+```
 
 GitHub 仓库需要配置 Secrets：
 - `DOCKER_HUB_USERNAME` — Docker Hub 用户名
@@ -351,6 +382,7 @@ POST {MODE3_OPENAI_BASE_URL}/images/edits
 ### 2026-05-02 · v10.0
 
 - **生产启动方式升级**：Docker 镜像加入 Gunicorn，使用 `gunicorn -w 4 -b 0.0.0.0:5078 --timeout 300 --access-logfile - app:app` 运行 Flask 应用
+- **宝塔 Docker 部署确认**：容器 `command` 需要使用 Gunicorn 命令，线上日志已确认出现 `Starting gunicorn`、`Booting worker`，不再使用 Flask 开发服务器
 - **Docker 镜像标签**：9.9 → 10.0，GitHub Action 自动打 `10.0` + `latest` 双标签
 
 ### 2026-05-02 · v9.9

@@ -557,6 +557,103 @@ def generate_payment_order_no() -> str:
 
 
 
+def _iso_utc_from_ts(timestamp: float | int | None) -> str:
+    try:
+        normalized = float(timestamp)
+    except (TypeError, ValueError):
+        normalized = time.time()
+    return datetime.fromtimestamp(normalized, timezone.utc).isoformat()
+
+
+
+def _build_task_trace_patch(task: dict | None, stage: str, now_ts: float | None = None, extra: dict | None = None) -> dict:
+    normalized_now = float(now_ts) if isinstance(now_ts, (int, float)) else time.time()
+    payload = task if isinstance(task, dict) else {}
+    trace = payload.get('trace') if isinstance(payload.get('trace'), dict) else {}
+    trace_events = list(trace.get('events') or [])
+    event = {
+        'stage': str(stage or '').strip() or 'unknown',
+        'ts': normalized_now,
+        'at': _iso_utc_from_ts(normalized_now),
+    }
+    if isinstance(extra, dict):
+        for key, value in extra.items():
+            if value is not None:
+                event[key] = value
+    trace_events.append(event)
+    next_trace = dict(trace)
+    next_trace['events'] = trace_events[-40:]
+    if trace_events:
+        next_trace['last_stage'] = trace_events[-1].get('stage') or ''
+        next_trace['last_at'] = trace_events[-1].get('at') or ''
+        next_trace['last_ts'] = trace_events[-1].get('ts') or normalized_now
+    return {'trace': next_trace}
+
+
+def _trace_ts(event: dict | None) -> float | None:
+    if not isinstance(event, dict):
+        return None
+    try:
+        return float(event.get('ts'))
+    except (TypeError, ValueError):
+        return None
+
+
+def _elapsed_ms_between(start_event: dict | None, end_event: dict | None) -> int | None:
+    start_ts = _trace_ts(start_event)
+    end_ts = _trace_ts(end_event)
+    if start_ts is None or end_ts is None:
+        return None
+    return int(max((end_ts - start_ts) * 1000, 0))
+
+
+def _first_trace_event(events: list, stage: str) -> dict | None:
+    return next((event for event in events if isinstance(event, dict) and event.get('stage') == stage), None)
+
+
+def _last_trace_event(events: list, stage: str) -> dict | None:
+    return next((event for event in reversed(events) if isinstance(event, dict) and event.get('stage') == stage), None)
+
+
+def summarize_generation_task_trace(task: dict | None) -> dict:
+    payload = task if isinstance(task, dict) else {}
+    task_trace = payload.get('trace') if isinstance(payload.get('trace'), dict) else {}
+    result_payload = payload.get('result') if isinstance(payload.get('result'), dict) else {}
+    result_trace = result_payload.get('trace') if isinstance(result_payload.get('trace'), dict) else {}
+    events = [event for event in list(task_trace.get('events') or []) + list(result_trace.get('events') or []) if isinstance(event, dict)]
+    events.sort(key=lambda event: _trace_ts(event) or 0)
+    task_created = _first_trace_event(events, 'task_created')
+    task_running = _first_trace_event(events, 'task_running')
+    storage_started = _first_trace_event(events, 'image_storage_started')
+    storage_completed = _last_trace_event(events, 'image_storage_completed')
+    result_ready = _last_trace_event(events, 'task_result_ready')
+    task_succeeded = _last_trace_event(events, 'task_succeeded')
+    task_polled = _last_trace_event(events, 'task_polled')
+    return {
+        'task_id': payload.get('task_id') or '',
+        'mode': payload.get('mode') or '',
+        'status': payload.get('status') or '',
+        'event_count': len(events),
+        'task_queue_ms': _elapsed_ms_between(task_created, task_running),
+        'backend_until_ready_ms': _elapsed_ms_between(task_running, result_ready),
+        'storage_ms': _elapsed_ms_between(storage_started, storage_completed),
+        'ready_to_succeeded_ms': _elapsed_ms_between(result_ready, task_succeeded),
+        'task_total_ms': _elapsed_ms_between(task_created, task_succeeded),
+        'poll_after_success_ms': _elapsed_ms_between(task_succeeded, task_polled),
+        'created_at': task_created.get('at') if isinstance(task_created, dict) else payload.get('created_at') or '',
+        'result_ready_at': result_ready.get('at') if isinstance(result_ready, dict) else '',
+        'succeeded_at': task_succeeded.get('at') if isinstance(task_succeeded, dict) else payload.get('completed_at') or '',
+        'last_stage': task_trace.get('last_stage') or result_trace.get('last_stage') or '',
+    }
+
+
+def log_generation_task_trace_summary(task: dict | None, label: str = 'task_summary') -> dict:
+    summary = summarize_generation_task_trace(task)
+    logger.info('Generation task trace summary %s: %s', label, json.dumps(summary, ensure_ascii=False, separators=(',', ':')))
+    return summary
+
+
+
 def cache_generation_task(task: dict | None) -> None:
     if not isinstance(task, dict) or not task.get('task_id'):
         return
@@ -591,6 +688,7 @@ _start_periodic_cleanup()
 
 def create_generation_task(user_id: str, mode: str, request_id: str = '', spend_record: dict | None = None) -> dict:
     now = time.time()
+    created_at_iso = _iso_utc_from_ts(now)
     task_id = uuid.uuid4().hex
     task = {
         'task_id': task_id,
@@ -604,10 +702,23 @@ def create_generation_task(user_id: str, mode: str, request_id: str = '', spend_
         'details': '',
         'refunded': False,
         'refund_error': '',
-        'created_at': datetime.now(timezone.utc).isoformat(),
-        'updated_at': datetime.now(timezone.utc).isoformat(),
+        'created_at': created_at_iso,
+        'updated_at': created_at_iso,
         'created_at_ts': now,
         'updated_at_ts': now,
+        'trace': {
+            'events': [
+                {
+                    'stage': 'task_created',
+                    'ts': now,
+                    'at': created_at_iso,
+                    'mode': str(mode or 'suite').strip() or 'suite',
+                }
+            ],
+            'last_stage': 'task_created',
+            'last_at': created_at_iso,
+            'last_ts': now,
+        },
     }
     cache_generation_task(task)
     persist_generation_task(task)
@@ -627,8 +738,9 @@ def update_generation_task(task_id: str, **patch) -> dict | None:
             task = db_task
             GENERATION_TASKS[normalized_task_id] = task
         task.update(patch)
-        task['updated_at'] = datetime.now(timezone.utc).isoformat()
-        task['updated_at_ts'] = time.time()
+        now_ts = time.time()
+        task['updated_at'] = _iso_utc_from_ts(now_ts)
+        task['updated_at_ts'] = now_ts
         snapshot = dict(task)
     persist_generation_task(snapshot)
     return snapshot
@@ -649,6 +761,7 @@ def get_generation_task(task_id: str) -> dict | None:
 
 def serialize_generation_task(task: dict | None) -> dict:
     payload = task if isinstance(task, dict) else {}
+    trace = payload.get('trace') if isinstance(payload.get('trace'), dict) else {}
     return {
         'task_id': payload.get('task_id'),
         'mode': payload.get('mode'),
@@ -660,12 +773,28 @@ def serialize_generation_task(task: dict | None) -> dict:
         'refunded': bool(payload.get('refunded')),
         'refund_error': payload.get('refund_error') or '',
         'created_at': payload.get('created_at'),
+        'created_at_ts': payload.get('created_at_ts'),
         'updated_at': payload.get('updated_at'),
+        'updated_at_ts': payload.get('updated_at_ts'),
+        'completed_at': payload.get('completed_at'),
+        'completed_at_ts': payload.get('completed_at_ts'),
+        'trace': trace,
     }
 
 
 def fail_generation_task_with_refund(task_id: str, error: str, details: str = ''):
-    task = update_generation_task(task_id, status='failed', error=str(error or '生成失败'), details=str(details or ''))
+    failed_at = time.time()
+    task = update_generation_task(
+        task_id,
+        status='failed',
+        error=str(error or '生成失败'),
+        details=str(details or ''),
+        completed_at=_iso_utc_from_ts(failed_at),
+        completed_at_ts=failed_at,
+    )
+    if task:
+        task = update_generation_task(task_id, **_build_task_trace_patch(task, 'task_failed', now_ts=failed_at, extra={'error': str(error or '生成失败')}))
+        logger.warning('Generation task %s failed: mode=%s error=%s', task_id, (task or {}).get('mode') or '', str(error or '生成失败'))
     if not task:
         return
     spend_record = task.get('spend_record') if isinstance(task.get('spend_record'), dict) else None
@@ -731,17 +860,65 @@ def _run_with_timeout(fn, timeout: int, error_message: str):
     return result_container[0]
 
 
-def run_generation_task(task_id: str, form_payload: dict, file_payloads: dict):
-    update_generation_task(task_id, status='running')
+def run_background_generation_task(task_id: str, builder, timeout: int = 600, timeout_error: str = '生成任务执行超时（10分钟），请稍后重试'):
+    task = update_generation_task(task_id, status='running')
+    task = update_generation_task(task_id, **_build_task_trace_patch(task, 'task_running', extra={'timeout_seconds': timeout}))
+    started_at = time.time()
+    logger.info('Generation task %s started: mode=%s timeout=%ss', task_id, (task or {}).get('mode') or '', timeout)
     try:
         result = _run_with_timeout(
-            lambda: build_generation_result_from_payload(form_payload, file_payloads),
-            timeout=600,
-            error_message='生成任务执行超时（10分钟），请稍后重试',
+            builder,
+            timeout=timeout,
+            error_message=timeout_error,
         )
-        update_generation_task(task_id, status='succeeded', result=result, error='', details='')
+        finished_at = time.time()
+        result_payload = result if isinstance(result, dict) else {'value': result}
+        trace_payload = result_payload.get('trace') if isinstance(result_payload.get('trace'), dict) else {}
+        trace_events = list(trace_payload.get('events') or [])
+        image_items = []
+        if isinstance(result_payload.get('images'), list):
+            image_items.extend(item for item in result_payload.get('images') if isinstance(item, dict))
+        model_payload = result_payload.get('model') if isinstance(result_payload.get('model'), dict) else None
+        if model_payload and isinstance(model_payload.get('trace'), dict):
+            image_items.append(model_payload)
+        if isinstance(result_payload.get('image_url'), str) and isinstance(result_payload.get('trace'), dict):
+            image_items.append(result_payload)
+        merged_trace_events = []
+        for item in image_items:
+            item_trace = item.get('trace') if isinstance(item.get('trace'), dict) else {}
+            for event in item_trace.get('events') or []:
+                if isinstance(event, dict):
+                    merged_trace_events.append(event)
+        if merged_trace_events:
+            merged_trace_events.sort(key=lambda item: float(item.get('ts') or 0))
+            trace_events.extend(merged_trace_events)
+        trace_events.append({
+            'stage': 'task_result_ready',
+            'ts': finished_at,
+            'at': _iso_utc_from_ts(finished_at),
+            'elapsed_ms': int(max((finished_at - started_at) * 1000, 0)),
+        })
+        trace_payload['events'] = trace_events[-40:]
+        trace_payload['last_stage'] = 'task_result_ready'
+        trace_payload['last_at'] = _iso_utc_from_ts(finished_at)
+        trace_payload['last_ts'] = finished_at
+        result_payload['trace'] = trace_payload
+        task = update_generation_task(
+            task_id,
+            status='succeeded',
+            result=result_payload,
+            error='',
+            details='',
+            completed_at=_iso_utc_from_ts(finished_at),
+            completed_at_ts=finished_at,
+        )
+        task = update_generation_task(task_id, **_build_task_trace_patch(task, 'task_succeeded', now_ts=finished_at, extra={'elapsed_ms': int(max((finished_at - started_at) * 1000, 0))}))
+        log_generation_task_trace_summary(task, 'succeeded')
+        logger.info('Generation task %s succeeded: mode=%s elapsed=%sms', task_id, (task or {}).get('mode') or '', int(max((finished_at - started_at) * 1000, 0)))
     except TimeoutError:
-        update_generation_task(task_id, status='failed', error='生成任务执行超时（10分钟），请稍后重试', details='task execution timeout')
+        failed_at = time.time()
+        task = update_generation_task(task_id, status='failed', error=timeout_error, details='task execution timeout', completed_at=_iso_utc_from_ts(failed_at), completed_at_ts=failed_at)
+        update_generation_task(task_id, **_build_task_trace_patch(task, 'task_timeout', now_ts=failed_at, extra={'elapsed_ms': int(max((failed_at - started_at) * 1000, 0)), 'timeout_seconds': timeout}))
         refund_task_points(task_id)
     except RequestEntityTooLarge as exc:
         fail_generation_task_with_refund(task_id, '上传内容过大，请压缩图片后重试', str(exc))
@@ -760,6 +937,16 @@ def run_generation_task(task_id: str, form_payload: dict, file_payloads: dict):
     except Exception as exc:
         logger.exception('Generation task failed: %s', task_id)
         fail_generation_task_with_refund(task_id, f'服务端异常：{exc}', str(exc))
+
+
+
+def run_generation_task(task_id: str, form_payload: dict, file_payloads: dict):
+    run_background_generation_task(
+        task_id,
+        lambda: build_generation_result_from_payload(form_payload, file_payloads),
+        timeout=600,
+        timeout_error='生成任务执行超时（10分钟），请稍后重试',
+    )
 
 
 def get_payment_order_no(order_row: dict | None) -> str:
@@ -2116,6 +2303,97 @@ def points_refund_api():
         return jsonify({'success': False, 'error': f'返还积分失败：{exc}'}), 500
 
 
+def build_zip_archive_result(image_paths: list[str]) -> dict:
+    zip_id = uuid.uuid4().hex
+    download_dir = GENERATED_SUITES_DIR / 'downloads'
+    download_dir.mkdir(parents=True, exist_ok=True)
+    zip_file_path = download_dir / f'ai-images-{datetime.now().strftime("%Y%m%d-%H%M%S")}-{zip_id[:8]}.zip'
+    used_names = set()
+
+    with zipfile.ZipFile(zip_file_path, 'w', compression=zipfile.ZIP_DEFLATED) as archive:
+        for index, raw_path in enumerate(image_paths, start=1):
+            relative_path = str(raw_path or '').strip().replace('\\', '/').lstrip('/')
+            if not relative_path:
+                continue
+
+            if relative_path.startswith('http://') or relative_path.startswith('https://'):
+                try:
+                    img_resp = requests.get(relative_path, timeout=30)
+                    img_resp.raise_for_status()
+                    img_bytes = img_resp.content
+                    url_path = urlparse(relative_path).path
+                    base_name = Path(url_path).name or f'image-{index:02d}.jpg'
+                    stem = Path(base_name).stem or f'image-{index:02d}'
+                    suffix = Path(base_name).suffix or '.jpg'
+                    archive_name = f'{stem}{suffix}'
+                    duplicate_index = 2
+                    while archive_name in used_names:
+                        archive_name = f'{stem}-{duplicate_index}{suffix}'
+                        duplicate_index += 1
+                    used_names.add(archive_name)
+                    archive.writestr(archive_name, img_bytes)
+                except Exception as exc:
+                    logger.warning('Failed to download image for zip: %s', exc)
+                continue
+
+            file_path = (GENERATED_SUITES_DIR / relative_path).resolve()
+            try:
+                file_path.relative_to(GENERATED_SUITES_DIR.resolve())
+            except ValueError:
+                continue
+            if file_path.is_file():
+                base_name = Path(relative_path).name or f'image-{index:02d}{file_path.suffix or ".png"}'
+                stem = Path(base_name).stem or f'image-{index:02d}'
+                suffix = Path(base_name).suffix or file_path.suffix or '.png'
+                archive_name = f'{stem}{suffix}'
+                duplicate_index = 2
+                while archive_name in used_names:
+                    archive_name = f'{stem}-{duplicate_index}{suffix}'
+                    duplicate_index += 1
+                used_names.add(archive_name)
+                archive.write(file_path, arcname=archive_name)
+                continue
+
+            if is_cos_enabled():
+                try:
+                    cos_url = f"{get_cos_url_prefix()}/{relative_path}"
+                    img_resp = requests.get(cos_url, timeout=30)
+                    img_resp.raise_for_status()
+                    img_bytes = img_resp.content
+                    base_name = Path(relative_path).name or f'image-{index:02d}.jpg'
+                    stem = Path(base_name).stem or f'image-{index:02d}'
+                    suffix = Path(base_name).suffix or '.jpg'
+                    archive_name = f'{stem}{suffix}'
+                    duplicate_index = 2
+                    while archive_name in used_names:
+                        archive_name = f'{stem}-{duplicate_index}{suffix}'
+                        duplicate_index += 1
+                    used_names.add(archive_name)
+                    archive.writestr(archive_name, img_bytes)
+                except Exception as exc:
+                    logger.warning('Failed to download COS image for zip: %s', exc)
+                continue
+
+    if not used_names:
+        try:
+            zip_file_path.unlink(missing_ok=True)
+        except Exception:
+            pass
+        raise ValueError('未找到可下载的图片文件')
+
+    relative_zip_path = zip_file_path.relative_to(GENERATED_SUITES_DIR).as_posix()
+    download_name = zip_file_path.name
+    return {
+        'success': True,
+        'mode': 'download-zip',
+        'task_id': zip_id,
+        'download_name': download_name,
+        'download_path': relative_zip_path,
+        'download_url': f'/generated/{relative_zip_path}',
+        'total_files': len(used_names),
+    }
+
+
 @app.post('/api/download-zip')
 def download_zip():
     try:
@@ -2123,80 +2401,28 @@ def download_zip():
         image_paths = payload.get('image_paths')
         if not isinstance(image_paths, list) or not image_paths:
             return jsonify({'success': False, 'error': '请至少选择 1 张图片后再下载'}), 400
+        run_async = str(payload.get('async_task') or '').strip().lower() in {'1', 'true', 'yes'}
 
-        zip_buffer = io.BytesIO()
-        used_names = set()
+        if run_async:
+            session_data = g.get('supabase_session') or get_supabase_session()
+            user_id = _get_supabase_user_id(session_data)
+            if not user_id:
+                return jsonify({'success': False, 'error': '请先登录'}), 401
+            task = create_generation_task(user_id, 'download-zip')
+            GENERATION_TASK_EXECUTOR.submit(
+                run_background_generation_task,
+                task['task_id'],
+                lambda: build_zip_archive_result(image_paths),
+                300,
+                '图片打包超时（5分钟），请稍后重试',
+            )
+            return jsonify({'success': True, 'async_task': True, 'task': task, 'task_id': task['task_id']}), 202
 
-        with zipfile.ZipFile(zip_buffer, 'w', compression=zipfile.ZIP_DEFLATED) as archive:
-            for index, raw_path in enumerate(image_paths, start=1):
-                relative_path = str(raw_path or '').strip().replace('\\', '/').lstrip('/')
-                if not relative_path:
-                    continue
-
-                if relative_path.startswith('http://') or relative_path.startswith('https://'):
-                    try:
-                        img_resp = requests.get(relative_path, timeout=30)
-                        img_resp.raise_for_status()
-                        img_bytes = img_resp.content
-                        url_path = urlparse(relative_path).path
-                        base_name = Path(url_path).name or f'image-{index:02d}.jpg'
-                        stem = Path(base_name).stem or f'image-{index:02d}'
-                        suffix = Path(base_name).suffix or '.jpg'
-                        archive_name = f'{stem}{suffix}'
-                        duplicate_index = 2
-                        while archive_name in used_names:
-                            archive_name = f'{stem}-{duplicate_index}{suffix}'
-                            duplicate_index += 1
-                        used_names.add(archive_name)
-                        archive.writestr(archive_name, img_bytes)
-                    except Exception as exc:
-                        logger.warning('Failed to download COS image for zip: %s', exc)
-                    continue
-
-                file_path = (GENERATED_SUITES_DIR / relative_path).resolve()
-                try:
-                    file_path.relative_to(GENERATED_SUITES_DIR.resolve())
-                except ValueError:
-                    continue
-                if file_path.is_file():
-                    base_name = Path(relative_path).name or f'image-{index:02d}{file_path.suffix or ".png"}'
-                    stem = Path(base_name).stem or f'image-{index:02d}'
-                    suffix = Path(base_name).suffix or file_path.suffix or '.png'
-                    archive_name = f'{stem}{suffix}'
-                    duplicate_index = 2
-                    while archive_name in used_names:
-                        archive_name = f'{stem}-{duplicate_index}{suffix}'
-                        duplicate_index += 1
-                    used_names.add(archive_name)
-                    archive.write(file_path, arcname=archive_name)
-                    continue
-
-                if is_cos_enabled():
-                    try:
-                        cos_url = f"{get_cos_url_prefix()}/{relative_path}"
-                        img_resp = requests.get(cos_url, timeout=30)
-                        img_resp.raise_for_status()
-                        img_bytes = img_resp.content
-                        base_name = Path(relative_path).name or f'image-{index:02d}.jpg'
-                        stem = Path(base_name).stem or f'image-{index:02d}'
-                        suffix = Path(base_name).suffix or '.jpg'
-                        archive_name = f'{stem}{suffix}'
-                        duplicate_index = 2
-                        while archive_name in used_names:
-                            archive_name = f'{stem}-{duplicate_index}{suffix}'
-                            duplicate_index += 1
-                        used_names.add(archive_name)
-                        archive.writestr(archive_name, img_bytes)
-                    except Exception as exc:
-                        logger.warning('Failed to download COS image for zip: %s', exc)
-                    continue
-
-        if not used_names:
-            return jsonify({'success': False, 'error': '未找到可下载的图片文件'}), 404
-
-        zip_buffer.seek(0)
-        download_name = f'ai-images-{datetime.now().strftime("%Y%m%d-%H%M%S")}.zip'
-        return send_file(zip_buffer, mimetype='application/zip', as_attachment=True, download_name=download_name)
+        zip_result = build_zip_archive_result(image_paths)
+        zip_file_path = (GENERATED_SUITES_DIR / zip_result['download_path']).resolve()
+        return send_file(zip_file_path, mimetype='application/zip', as_attachment=True, download_name=zip_result['download_name'])
+    except ValueError as exc:
+        return jsonify({'success': False, 'error': str(exc)}), 404
     except Exception as exc:
         return jsonify({'success': False, 'error': f'打包下载失败：{exc}'}), 500
 
@@ -2206,34 +2432,52 @@ def ai_write():
     try:
         selling_text = request.form.get('selling_text', '').strip()
         image_payloads = get_image_payloads_from_request()
+        run_async = str(request.form.get('async_task', '') or '').strip().lower() in {'1', 'true', 'yes'}
 
         if not selling_text and not image_payloads:
             return jsonify({'success': False, 'error': '请至少提供核心卖点文案或上传 1 张图片'}), 400
 
-        text = call_chat_completion(
-            SYSTEM_PROMPT,
-            build_multimodal_content(
-                USER_PROMPT_TEMPLATE.format(selling_text=selling_text or '（未填写）'),
-                image_payloads,
-            ),
-            temperature=0.7,
-        )
-        product_json = None
-        if image_payloads or text:
-            product_json, _response_text = call_chat_json_with_repair(
-                PRODUCT_JSON_SYSTEM_PROMPT,
+        def build_ai_write_result():
+            text = call_chat_completion(
+                SYSTEM_PROMPT,
                 build_multimodal_content(
-                    PRODUCT_JSON_USER_PROMPT_TEMPLATE.format(selling_text=text or selling_text or '（未填写）'),
+                    USER_PROMPT_TEMPLATE.format(selling_text=selling_text or '（未填写）'),
                     image_payloads,
                 ),
-                parse_product_json,
-                '商品结构化信息格式异常',
-                temperature=0.2,
-                timeout_seconds=60,
-                repair_attempts=1,
+                temperature=0.7,
             )
+            product_json = None
+            if image_payloads or text:
+                product_json, _response_text = call_chat_json_with_repair(
+                    PRODUCT_JSON_SYSTEM_PROMPT,
+                    build_multimodal_content(
+                        PRODUCT_JSON_USER_PROMPT_TEMPLATE.format(selling_text=text or selling_text or '（未填写）'),
+                        image_payloads,
+                    ),
+                    parse_product_json,
+                    '商品结构化信息格式异常',
+                    temperature=0.2,
+                    timeout_seconds=60,
+                    repair_attempts=1,
+                )
+            return {'success': True, 'mode': 'ai-write', 'text': text, 'product_json': product_json}
 
-        return jsonify({'success': True, 'text': text, 'product_json': product_json})
+        if run_async:
+            session_data = g.get('supabase_session') or get_supabase_session()
+            user_id = _get_supabase_user_id(session_data)
+            if not user_id:
+                return jsonify({'success': False, 'error': '请先登录'}), 401
+            task = create_generation_task(user_id, 'ai-write')
+            GENERATION_TASK_EXECUTOR.submit(
+                run_background_generation_task,
+                task['task_id'],
+                build_ai_write_result,
+                180,
+                'AI 文案生成超时（3分钟），请稍后重试',
+            )
+            return jsonify({'success': True, 'async_task': True, 'task': task, 'task_id': task['task_id']}), 202
+
+        return jsonify(build_ai_write_result())
     except RequestEntityTooLarge as exc:
         return handle_request_entity_too_large(exc)
     except ValueError as exc:
@@ -2255,26 +2499,45 @@ def style_analysis():
         selling_text = request.form.get('selling_text', '').strip()
         platform = normalize_platform_label(request.form.get('platform', '亚马逊'))
         image_payloads = get_image_payloads_from_request()
+        run_async = str(request.form.get('async_task', '') or '').strip().lower() in {'1', 'true', 'yes'}
 
         if not selling_text and not image_payloads:
             return jsonify({'success': False, 'error': '请至少提供核心卖点文案或上传 1 张图片'}), 400
 
-        styles, _response_text = call_chat_json_with_repair(
-            STYLE_ANALYSIS_SYSTEM_PROMPT,
-            build_multimodal_content(
-                STYLE_ANALYSIS_USER_PROMPT_TEMPLATE.format(
-                    platform=platform,
-                    selling_text=selling_text or '（未填写）',
+        def build_style_analysis_result():
+            styles, _response_text = call_chat_json_with_repair(
+                STYLE_ANALYSIS_SYSTEM_PROMPT,
+                build_multimodal_content(
+                    STYLE_ANALYSIS_USER_PROMPT_TEMPLATE.format(
+                        platform=platform,
+                        selling_text=selling_text or '（未填写）',
+                    ),
+                    image_payloads,
                 ),
-                image_payloads,
-            ),
-            parse_style_analysis,
-            '风格分析结果格式异常',
-            temperature=0.3,
-            timeout_seconds=60,
-            repair_attempts=1,
-        )
-        return jsonify({'success': True, 'styles': styles})
+                parse_style_analysis,
+                '风格分析结果格式异常',
+                temperature=0.3,
+                timeout_seconds=60,
+                repair_attempts=1,
+            )
+            return {'success': True, 'mode': 'style-analysis', 'styles': styles}
+
+        if run_async:
+            session_data = g.get('supabase_session') or get_supabase_session()
+            user_id = _get_supabase_user_id(session_data)
+            if not user_id:
+                return jsonify({'success': False, 'error': '请先登录'}), 401
+            task = create_generation_task(user_id, 'style-analysis')
+            GENERATION_TASK_EXECUTOR.submit(
+                run_background_generation_task,
+                task['task_id'],
+                build_style_analysis_result,
+                180,
+                '风格分析超时（3分钟），请稍后重试',
+            )
+            return jsonify({'success': True, 'async_task': True, 'task': task, 'task_id': task['task_id']}), 202
+
+        return jsonify(build_style_analysis_result())
     except RequestEntityTooLarge as exc:
         return handle_request_entity_too_large(exc)
     except ValueError as exc:
@@ -2303,47 +2566,66 @@ def generate_fashion_model():
         body_type = get_request_value(payload, request.form, 'body_type', '标准') or '标准'
         appearance_details = get_request_value(payload, request.form, 'appearance_details', '')
         image_size_ratio = get_request_value(payload, request.form, 'image_size_ratio', '3:4') or '3:4'
+        run_async = str(get_request_value(payload, request.form, 'async_task', '') or '').strip().lower() in {'1', 'true', 'yes'}
 
-        task_id = uuid.uuid4().hex
-        prompt = build_fashion_model_prompt(gender, age, ethnicity, body_type, appearance_details)
-        generated_item = call_app_mode_image_generation(
-            None,
-            prompt,
-            [],
-            image_size_ratio,
-            '无文字',
-            '中国',
-            None,
-            'fashion-model',
-            max_images=1,
-        )[0]
-        image_bytes, mime_type = decode_generated_image(generated_item)
-        download_name, relative_path, image_url = save_generated_image(task_id, 1, 'fashion-model', image_bytes, mime_type)
-        model_id = f'ai-{task_id}'
-        model = build_fashion_model_response(
-            task_id,
-            model_id,
-            gender,
-            age,
-            ethnicity,
-            body_type,
-            appearance_details,
-            prompt,
-            image_url,
-            relative_path,
-            download_name,
-        )
-
-        return jsonify(
-            {
+        def build_fashion_model_result(task_id: str):
+            prompt = build_fashion_model_prompt(gender, age, ethnicity, body_type, appearance_details)
+            generated_item = call_app_mode_image_generation(
+                None,
+                prompt,
+                [],
+                image_size_ratio,
+                '无文字',
+                '中国',
+                None,
+                'fashion-model',
+                max_images=1,
+            )[0]
+            image_bytes, mime_type = decode_generated_image(generated_item)
+            download_name, relative_path, image_url, storage_trace = save_generated_image(task_id, 1, 'fashion-model', image_bytes, mime_type)
+            model_id = f'ai-{task_id}'
+            model = build_fashion_model_response(
+                task_id,
+                model_id,
+                gender,
+                age,
+                ethnicity,
+                body_type,
+                appearance_details,
+                prompt,
+                image_url,
+                relative_path,
+                download_name,
+            )
+            model['trace'] = storage_trace
+            return {
                 'success': True,
+                'mode': 'fashion-model',
                 'task_id': task_id,
                 'model': model,
                 'image_url': image_url,
                 'image_path': relative_path,
                 'download_name': download_name,
+                'trace': storage_trace,
             }
-        )
+
+        if run_async:
+            session_data = g.get('supabase_session') or get_supabase_session()
+            user_id = _get_supabase_user_id(session_data)
+            if not user_id:
+                return jsonify({'success': False, 'error': '请先登录'}), 401
+            task = create_generation_task(user_id, 'fashion-model')
+            GENERATION_TASK_EXECUTOR.submit(
+                run_background_generation_task,
+                task['task_id'],
+                lambda: build_fashion_model_result(task['task_id']),
+                600,
+                '基准模特生成超时（10分钟），请稍后重试',
+            )
+            return jsonify({'success': True, 'async_task': True, 'task': task, 'task_id': task['task_id']}), 202
+
+        task_id = uuid.uuid4().hex
+        return jsonify(build_fashion_model_result(task_id))
     except ValueError as exc:
         return jsonify({'success': False, 'error': str(exc)}), 400
     except RuntimeError as exc:
@@ -2373,6 +2655,7 @@ def generate_mode1_image_edit():
         prompt = get_request_value(payload, request.form, 'prompt', '')
         image_url = get_request_value(payload, request.form, 'image_url', '')
         uploaded_payloads = get_image_payloads_from_request('images')
+        run_async = str(get_request_value(payload, request.form, 'async_task', '') or '').strip().lower() in {'1', 'true', 'yes'}
 
         if not prompt:
             return jsonify({'success': False, 'error': 'prompt 不能为空'}), 400
@@ -2385,12 +2668,33 @@ def generate_mode1_image_edit():
         else:
             return jsonify({'success': False, 'error': '请上传 1 张或多张参考图片，或提供 image_url'}), 400
 
-        task_id = uuid.uuid4().hex
         image_size_ratio = request.form.get('image_size_ratio', '1:1')
-        product_json = extract_product_json_from_image_payloads(prompt, image_payloads)
-        enriched_prompt = build_enriched_image_prompt(prompt, image_size_ratio, '中文', '中国', product_json, 'mode1-image-edit')
-        generated_item, model = call_mode1_image_edit(get_mode1_client(), enriched_prompt, image_payloads, image_size_ratio)
-        return jsonify(build_mode2_success_response(task_id, 'mode1-image-edit', enriched_prompt, model, generated_item))
+
+        def build_mode1_image_edit_result(task_id: str):
+            product_json = extract_product_json_from_image_payloads(prompt, image_payloads)
+            enriched_prompt = build_enriched_image_prompt(prompt, image_size_ratio, '中文', '中国', product_json, 'mode1-image-edit')
+            generated_item, model = call_mode1_image_edit(get_mode1_client(), enriched_prompt, image_payloads, image_size_ratio)
+            response = build_mode2_success_response(task_id, 'mode1-image-edit', enriched_prompt, model, generated_item)
+            response['mode'] = 'mode1-image-edit'
+            return response
+
+        if run_async:
+            session_data = g.get('supabase_session') or get_supabase_session()
+            user_id = _get_supabase_user_id(session_data)
+            if not user_id:
+                return jsonify({'success': False, 'error': '请先登录'}), 401
+            task = create_generation_task(user_id, 'mode1-image-edit')
+            GENERATION_TASK_EXECUTOR.submit(
+                run_background_generation_task,
+                task['task_id'],
+                lambda: build_mode1_image_edit_result(task['task_id']),
+                600,
+                '模式1图生图超时（10分钟），请稍后重试',
+            )
+            return jsonify({'success': True, 'async_task': True, 'task': task, 'task_id': task['task_id']}), 202
+
+        task_id = uuid.uuid4().hex
+        return jsonify(build_mode1_image_edit_result(task_id))
     except RequestEntityTooLarge as exc:
         return handle_request_entity_too_large(exc)
     except ValueError as exc:
@@ -2460,6 +2764,7 @@ def generate_mode2_image_edit():
         sample_strength = get_request_value(payload, request.form, 'sample_strength', '')
         image_url = get_request_value(payload, request.form, 'image_url', '')
         uploaded_payloads = get_image_payloads_from_request('images')
+        run_async = str(get_request_value(payload, request.form, 'async_task', '') or '').strip().lower() in {'1', 'true', 'yes'}
 
         if not prompt:
             return jsonify({'success': False, 'error': 'prompt 不能为空'}), 400
@@ -2472,16 +2777,36 @@ def generate_mode2_image_edit():
         else:
             return jsonify({'success': False, 'error': '请上传 1 张或多张参考图片，或提供 image_url'}), 400
 
+        def build_mode2_image_edit_result(task_id: str):
+            generated_item, model = call_mode2_image_edit(
+                get_mode2_client(),
+                prompt,
+                image_payloads,
+                ratio,
+                resolution,
+                sample_strength,
+            )
+            response = build_mode2_success_response(task_id, 'mode2-image-edit', prompt, model, generated_item)
+            response['mode'] = 'mode2-image-edit'
+            return response
+
+        if run_async:
+            session_data = g.get('supabase_session') or get_supabase_session()
+            user_id = _get_supabase_user_id(session_data)
+            if not user_id:
+                return jsonify({'success': False, 'error': '请先登录'}), 401
+            task = create_generation_task(user_id, 'mode2-image-edit')
+            GENERATION_TASK_EXECUTOR.submit(
+                run_background_generation_task,
+                task['task_id'],
+                lambda: build_mode2_image_edit_result(task['task_id']),
+                600,
+                '模式2图生图超时（10分钟），请稍后重试',
+            )
+            return jsonify({'success': True, 'async_task': True, 'task': task, 'task_id': task['task_id']}), 202
+
         task_id = uuid.uuid4().hex
-        generated_item, model = call_mode2_image_edit(
-            get_mode2_client(),
-            prompt,
-            image_payloads,
-            ratio,
-            resolution,
-            sample_strength,
-        )
-        return jsonify(build_mode2_success_response(task_id, 'mode2-image-edit', prompt, model, generated_item))
+        return jsonify(build_mode2_image_edit_result(task_id))
     except RequestEntityTooLarge as exc:
         return handle_request_entity_too_large(exc)
     except ValueError as exc:
@@ -2513,18 +2838,39 @@ def generate_mode2_text2image():
         prompt = get_request_value(payload, request.form, 'prompt', '')
         ratio = get_request_value(payload, request.form, 'image_size_ratio', '') or get_request_value(payload, request.form, 'ratio', '')
         resolution = get_request_value(payload, request.form, 'resolution', '')
+        run_async = str(get_request_value(payload, request.form, 'async_task', '') or '').strip().lower() in {'1', 'true', 'yes'}
 
         if not prompt:
             return jsonify({'success': False, 'error': 'prompt 不能为空'}), 400
 
+        def build_mode2_text2image_result(task_id: str):
+            generated_item, model = call_mode2_text2image(
+                get_mode2_client(),
+                prompt,
+                ratio,
+                resolution,
+            )
+            response = build_mode2_success_response(task_id, 'mode2-text2image', prompt, model, generated_item)
+            response['mode'] = 'mode2-text2image'
+            return response
+
+        if run_async:
+            session_data = g.get('supabase_session') or get_supabase_session()
+            user_id = _get_supabase_user_id(session_data)
+            if not user_id:
+                return jsonify({'success': False, 'error': '请先登录'}), 401
+            task = create_generation_task(user_id, 'mode2-text2image')
+            GENERATION_TASK_EXECUTOR.submit(
+                run_background_generation_task,
+                task['task_id'],
+                lambda: build_mode2_text2image_result(task['task_id']),
+                600,
+                '模式2文生图超时（10分钟），请稍后重试',
+            )
+            return jsonify({'success': True, 'async_task': True, 'task': task, 'task_id': task['task_id']}), 202
+
         task_id = uuid.uuid4().hex
-        generated_item, model = call_mode2_text2image(
-            get_mode2_client(),
-            prompt,
-            ratio,
-            resolution,
-        )
-        return jsonify(build_mode2_success_response(task_id, 'mode2-text2image', prompt, model, generated_item))
+        return jsonify(build_mode2_text2image_result(task_id))
     except RequestEntityTooLarge as exc:
         return handle_request_entity_too_large(exc)
     except ValueError as exc:
@@ -2556,6 +2902,7 @@ def generate_mode3_image_edit():
         prompt = get_request_value(payload, request.form, 'prompt', '')
         image_url = get_request_value(payload, request.form, 'image_url', '')
         uploaded_payloads = get_image_payloads_from_request('images')
+        run_async = str(get_request_value(payload, request.form, 'async_task', '') or '').strip().lower() in {'1', 'true', 'yes'}
 
         if not prompt:
             return jsonify({'success': False, 'error': 'prompt 不能为空'}), 400
@@ -2568,12 +2915,33 @@ def generate_mode3_image_edit():
         else:
             return jsonify({'success': False, 'error': '请上传 1 张或多张参考图片，或提供 image_url'}), 400
 
-        task_id = uuid.uuid4().hex
         image_size_ratio = request.form.get('image_size_ratio', '1:1')
-        product_json = extract_product_json_from_image_payloads(prompt, image_payloads)
-        enriched_prompt = build_enriched_image_prompt(prompt, image_size_ratio, '中文', '中国', product_json, 'mode3-image-edit')
-        generated_item, model = call_mode3_image_edit(get_mode3_client(), enriched_prompt, image_payloads, image_size_ratio)
-        return jsonify(build_mode2_success_response(task_id, 'mode3-image-edit', enriched_prompt, model, generated_item))
+
+        def build_mode3_image_edit_result(task_id: str):
+            product_json = extract_product_json_from_image_payloads(prompt, image_payloads)
+            enriched_prompt = build_enriched_image_prompt(prompt, image_size_ratio, '中文', '中国', product_json, 'mode3-image-edit')
+            generated_item, model = call_mode3_image_edit(get_mode3_client(), enriched_prompt, image_payloads, image_size_ratio)
+            response = build_mode2_success_response(task_id, 'mode3-image-edit', enriched_prompt, model, generated_item)
+            response['mode'] = 'mode3-image-edit'
+            return response
+
+        if run_async:
+            session_data = g.get('supabase_session') or get_supabase_session()
+            user_id = _get_supabase_user_id(session_data)
+            if not user_id:
+                return jsonify({'success': False, 'error': '请先登录'}), 401
+            task = create_generation_task(user_id, 'mode3-image-edit')
+            GENERATION_TASK_EXECUTOR.submit(
+                run_background_generation_task,
+                task['task_id'],
+                lambda: build_mode3_image_edit_result(task['task_id']),
+                600,
+                '模式3图生图超时（10分钟），请稍后重试',
+            )
+            return jsonify({'success': True, 'async_task': True, 'task': task, 'task_id': task['task_id']}), 202
+
+        task_id = uuid.uuid4().hex
+        return jsonify(build_mode3_image_edit_result(task_id))
     except RequestEntityTooLarge as exc:
         return handle_request_entity_too_large(exc)
     except ValueError as exc:
@@ -2806,7 +3174,7 @@ def build_generation_result_from_payload(form_payload: dict, file_payloads: dict
                 raise ValueError('生成结果为空')
             if not verification or not verification.get('passed'):
                 raise RuntimeError((verification or {}).get('reason', '质检未通过'))
-            download_name, relative_path, image_url = save_generated_image(task_id, index, 'fashion-look', image_bytes, mime_type)
+            download_name, relative_path, image_url, storage_trace = save_generated_image(task_id, index, 'fashion-look', image_bytes, mime_type)
             return {
                 'sort': index,
                 'kind': 'generated',
@@ -2819,6 +3187,7 @@ def build_generation_result_from_payload(form_payload: dict, file_payloads: dict
                 'image_path': relative_path,
                 'download_name': download_name,
                 'verification': verification,
+                'trace': storage_trace,
             }
 
         images = []
@@ -3004,7 +3373,10 @@ def generation_task_status(task_id):
         return jsonify({'success': False, 'error': '生成任务不存在或已过期'}), 404
     if str(task.get('user_id') or '') != str(user_id):
         return jsonify({'success': False, 'error': '无权访问该生成任务'}), 403
-    return jsonify({'success': True, 'task': serialize_generation_task(task)})
+    traced_task = update_generation_task(task_id, **_build_task_trace_patch(task, 'task_polled')) or task
+    if traced_task.get('status') in {'succeeded', 'failed'}:
+        log_generation_task_trace_summary(traced_task, f"polled_{traced_task.get('status') or 'done'}")
+    return jsonify({'success': True, 'task': serialize_generation_task(traced_task)})
 
 
 @app.post('/api/generation-tasks/<task_id>/cancel')
@@ -3042,39 +3414,39 @@ def generate_aplus():
             request.form.get('selected_style_reasoning', ''),
             request.form.get('selected_style_colors', ''),
         )
+        run_async = str(request.form.get('async_task', '') or '').strip().lower() in {'1', 'true', 'yes'}
 
         if not selling_text and not image_payloads and not reference_payloads:
             return jsonify({'success': False, 'error': '请至少提供核心卖点文案或上传 1 张图片'}), 400
 
-        task_id = uuid.uuid4().hex
-        task_name = build_task_name(platform, 'aplus', len(selected_modules))
-        generated_at = build_generated_at()
-        reference_images = build_reference_images(task_id, image_payloads, source='product')
-        if reference_payloads:
-            reference_images.extend(
-                build_reference_images(
-                    task_id,
-                    reference_payloads,
-                    source='reference',
-                    start_sort=len(reference_images) + 1,
+        def build_aplus_result(task_id: str):
+            task_name = build_task_name(platform, 'aplus', len(selected_modules))
+            generated_at = build_generated_at()
+            reference_images = build_reference_images(task_id, image_payloads, source='product')
+            if reference_payloads:
+                reference_images.extend(
+                    build_reference_images(
+                        task_id,
+                        reference_payloads,
+                        source='reference',
+                        start_sort=len(reference_images) + 1,
+                    )
                 )
+            planning_payloads = image_payloads + reference_payloads
+            resolved_product_json = product_json
+            if resolved_product_json is None and planning_payloads:
+                logger.warning('A+ generation extracting product_json from uploaded reference images: product_count=%s reference_count=%s total_generation_count=%s', len(image_payloads), len(reference_payloads), len(planning_payloads))
+                resolved_product_json = extract_product_json_from_image_payloads(selling_text, planning_payloads)
+            logger.warning(
+                'A+ generation upload payloads: product_count=%s reference_count=%s total_generation_count=%s product_json_ready=%s',
+                len(image_payloads),
+                len(reference_payloads),
+                len(planning_payloads),
+                bool(resolved_product_json),
             )
-        planning_payloads = image_payloads + reference_payloads
-        if product_json is None and planning_payloads:
-            logger.warning('A+ generation extracting product_json from uploaded reference images: product_count=%s reference_count=%s total_generation_count=%s', len(image_payloads), len(reference_payloads), len(planning_payloads))
-            product_json = extract_product_json_from_image_payloads(selling_text, planning_payloads)
-        logger.warning(
-            'A+ generation upload payloads: product_count=%s reference_count=%s total_generation_count=%s product_json_ready=%s',
-            len(image_payloads),
-            len(reference_payloads),
-            len(planning_payloads),
-            bool(product_json),
-        )
-        plan = build_aplus_plan(platform, selling_text, selected_modules, planning_payloads, country, text_type, image_size_ratio, selected_style, product_json)
-        images = generate_aplus_images(plan, planning_payloads, task_id, image_size_ratio, text_type, country, product_json)
-
-        return jsonify(
-            {
+            plan = build_aplus_plan(platform, selling_text, selected_modules, planning_payloads, country, text_type, image_size_ratio, selected_style, resolved_product_json)
+            images = generate_aplus_images(plan, planning_payloads, task_id, image_size_ratio, text_type, country, resolved_product_json)
+            return {
                 'success': True,
                 'mode': 'aplus',
                 'task_id': task_id,
@@ -3085,7 +3457,34 @@ def generate_aplus():
                 'reference_images': reference_images,
                 'images': images,
             }
-        )
+
+        if run_async:
+            session_data = g.get('supabase_session') or get_supabase_session()
+            user_id = _get_supabase_user_id(session_data)
+            if not user_id:
+                return jsonify({'success': False, 'error': '请先登录'}), 401
+            spend_record = None
+            spend_payload = request.form.get('spend_record')
+            if spend_payload:
+                try:
+                    parsed_spend_record = json.loads(spend_payload)
+                    if isinstance(parsed_spend_record, dict):
+                        spend_record = parsed_spend_record
+                except (TypeError, ValueError):
+                    spend_record = None
+            request_id = str(request.form.get('points_request_id') or (spend_record or {}).get('requestId') or '').strip()
+            task = create_generation_task(user_id, 'aplus', request_id, spend_record)
+            GENERATION_TASK_EXECUTOR.submit(
+                run_background_generation_task,
+                task['task_id'],
+                lambda: build_aplus_result(task['task_id']),
+                600,
+                'A+ 生成超时（10分钟），请稍后重试',
+            )
+            return jsonify({'success': True, 'async_task': True, 'task': task, 'task_id': task['task_id']}), 202
+
+        task_id = uuid.uuid4().hex
+        return jsonify(build_aplus_result(task_id))
     except RequestEntityTooLarge as exc:
         return handle_request_entity_too_large(exc)
     except ValueError as exc:

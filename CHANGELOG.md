@@ -1,5 +1,37 @@
 # 版本说明 (Changelog)
 
+## v10.1 (2026-05-02)
+
+### 生成任务异步链路增强
+
+- 重接口继续接入统一 generation task 任务体系，减少长耗时请求阻塞 Web worker
+- 支持任务完成时间字段持久化：`created_at_ts`、`updated_at_ts`、`completed_at`、`completed_at_ts`
+- Supabase `generation_tasks` 表新增 `trace` JSONB 字段，用于保存任务链路事件
+
+### 完整耗时打点
+
+- 后端记录 `task_created`、`task_running`、`task_result_ready`、`task_succeeded`、`task_polled`
+- 图片存储记录 `image_storage_started`、`image_cos_upload_started`、`image_cos_upload_completed`、`image_cos_upload_failed`、`image_local_write_started`、`image_local_write_completed`、`image_storage_completed`
+- 前端记录 `frontend_poll_received`、`frontend_success_received`、`frontend_result_render_start`、`frontend_result_render_done`、`image_loaded`
+- 新增后端 summary 日志：`Generation task trace summary succeeded/polled_succeeded`
+- 新增前端控制台摘要：`render_done_summary`、`image_loaded_summary`
+- 支持精确拆分“生成完成”和“页面显示完成”的延迟来源
+
+### 验证
+
+- 已完成真实 fashion-model 同步生图测试
+- 已完成 `async_task: true` 异步真实生图测试，并轮询到 `succeeded`
+- 已验证任务结果包含完成时间、存储 trace 和任务 trace
+
+### Docker
+
+- 镜像标签 10.0 → 10.1
+- GitHub Action 自动打 `10.1` + `latest` 双标签
+- 推送仍由 GitHub Action 自动完成，本地不执行 Docker 推送操作
+- `.dockerignore` 继续排除 `.env` 和 `.env.*`
+
+***
+
 ## v10.0 (2026-05-02)
 
 ### 生产运行方式升级

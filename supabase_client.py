@@ -432,6 +432,11 @@ def build_generation_task_db_payload(task: dict) -> dict:
         'refund_error': payload.get('refund_error') or None,
         'created_at': payload.get('created_at') or datetime.now(timezone.utc).isoformat(),
         'updated_at': payload.get('updated_at') or datetime.now(timezone.utc).isoformat(),
+        'created_at_ts': payload.get('created_at_ts'),
+        'updated_at_ts': payload.get('updated_at_ts'),
+        'completed_at': payload.get('completed_at'),
+        'completed_at_ts': payload.get('completed_at_ts'),
+        'trace': _safe_json_payload(payload.get('trace')),
     }
 
 
@@ -442,20 +447,38 @@ def persist_generation_task(task: dict, _logger: logging.Logger | None = None) -
     db_payload = build_generation_task_db_payload(task)
     if not db_payload.get('id') or not db_payload.get('user_id'):
         return
-    try:
-        response = requests.post(
+
+    def _post_payload(payload: dict):
+        return requests.post(
             build_supabase_request_url(f'/rest/v1/{SUPABASE_GENERATION_TASKS_TABLE}'),
             headers={
                 **_build_supabase_service_headers(),
                 'Prefer': 'resolution=merge-duplicates,return=minimal',
             },
             params={'on_conflict': 'id'},
-            json=db_payload,
+            json=payload,
             timeout=20,
         )
-        if response.status_code >= 400:
-            log.warning('Failed to persist generation task %s: status=%s body=%s', db_payload.get('id'), response.status_code, response.text)
-            response.raise_for_status()
+
+    try:
+        response = _post_payload(db_payload)
+        if response.status_code < 400:
+            return
+        response_text = response.text or ''
+        if response.status_code == 400 and 'generation_tasks' in response_text and any(column in response_text for column in ('completed_at', 'completed_at_ts', 'created_at_ts', 'updated_at_ts', 'trace')):
+            legacy_payload = {
+                key: value
+                for key, value in db_payload.items()
+                if key not in {'created_at_ts', 'updated_at_ts', 'completed_at', 'completed_at_ts', 'trace'}
+            }
+            log.warning('Generation task table missing new trace columns, falling back to legacy payload for task %s', db_payload.get('id'))
+            legacy_response = _post_payload(legacy_payload)
+            if legacy_response.status_code < 400:
+                return
+            log.warning('Failed to persist generation task %s with legacy payload: status=%s body=%s', db_payload.get('id'), legacy_response.status_code, legacy_response.text)
+            legacy_response.raise_for_status()
+        log.warning('Failed to persist generation task %s: status=%s body=%s', db_payload.get('id'), response.status_code, response_text)
+        response.raise_for_status()
     except Exception as exc:
         log.warning('Failed to persist generation task %s: %s', db_payload.get('id'), exc)
 
@@ -508,7 +531,12 @@ def normalize_generation_task_row(row: dict | None) -> dict | None:
         'refunded': bool(row.get('refunded')),
         'refund_error': row.get('refund_error') or '',
         'created_at': row.get('created_at'),
+        'created_at_ts': row.get('created_at_ts'),
         'updated_at': row.get('updated_at'),
+        'updated_at_ts': row.get('updated_at_ts'),
+        'completed_at': row.get('completed_at'),
+        'completed_at_ts': row.get('completed_at_ts'),
+        'trace': row.get('trace') if isinstance(row.get('trace'), dict) else {},
     }
 
 

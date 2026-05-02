@@ -348,25 +348,110 @@ def decode_generated_image(item: dict):
     raise ValueError('图像生成接口未返回可用图片内容')
 
 
+def _iso_utc_from_ts(timestamp: float | int | None) -> str:
+    try:
+        normalized = float(timestamp)
+    except (TypeError, ValueError):
+        normalized = time.time()
+    return datetime.utcfromtimestamp(normalized).isoformat() + 'Z'
+
+
+def _build_trace_event(stage: str, now_ts: float | int | None = None, extra: dict | None = None) -> dict:
+    normalized_now = float(now_ts) if isinstance(now_ts, (int, float)) else time.time()
+    event = {
+        'stage': str(stage or '').strip() or 'unknown',
+        'ts': normalized_now,
+        'at': _iso_utc_from_ts(normalized_now),
+    }
+    if isinstance(extra, dict):
+        for key, value in extra.items():
+            if value is not None:
+                event[key] = value
+    return event
+
+
+def _build_trace_payload(events) -> dict:
+    trace_events = [item for item in (events or []) if isinstance(item, dict)]
+    if not trace_events:
+        return {}
+    last_event = trace_events[-1]
+    return {
+        'events': trace_events[-40:],
+        'last_stage': last_event.get('stage') or '',
+        'last_at': last_event.get('at') or '',
+        'last_ts': last_event.get('ts'),
+    }
+
+
 def save_generated_image(task_id: str, sort: int, image_type: str, image_bytes: bytes, mime_type: str):
     cleanup_generated_suites(active_task_id=task_id)
     extension = guess_extension(mime_type)
     filename = f'{sort:02d}-{sanitize_filename_part(image_type, "image")}{extension}'
+    storage_started_at = time.time()
+    base_extra = {
+        'sort': sort,
+        'image_type': image_type,
+        'storage_target': 'generated_image',
+        'bytes': len(image_bytes or b''),
+        'mime_type': mime_type,
+        'filename': filename,
+    }
+    trace_events = [_build_trace_event('image_storage_started', storage_started_at, base_extra)]
 
     if is_cos_enabled():
         try:
             cos_key = generate_cos_key(task_id, filename)
+            cos_started_at = time.time()
+            trace_events.append(_build_trace_event('image_cos_upload_started', cos_started_at, {**base_extra, 'file_key': cos_key}))
             image_url = upload_to_cos(image_bytes, cos_key, mime_type)
-            return filename, cos_key, image_url
+            cos_finished_at = time.time()
+            trace_events.append(_build_trace_event('image_cos_upload_completed', cos_finished_at, {
+                **base_extra,
+                'file_key': cos_key,
+                'image_url': image_url,
+                'elapsed_ms': int(max((cos_finished_at - cos_started_at) * 1000, 0)),
+            }))
+            trace_events.append(_build_trace_event('image_storage_completed', cos_finished_at, {
+                **base_extra,
+                'storage_backend': 'cos',
+                'file_key': cos_key,
+                'image_url': image_url,
+                'elapsed_ms': int(max((cos_finished_at - storage_started_at) * 1000, 0)),
+            }))
+            return filename, cos_key, image_url, _build_trace_payload(trace_events)
         except Exception as exc:
+            failed_at = time.time()
+            trace_events.append(_build_trace_event('image_cos_upload_failed', failed_at, {
+                **base_extra,
+                'error': str(exc),
+                'elapsed_ms': int(max((failed_at - storage_started_at) * 1000, 0)),
+            }))
             logger.warning('COS upload failed, falling back to local: %s', exc)
 
     output_dir = GENERATED_SUITES_DIR / task_id
     output_dir.mkdir(parents=True, exist_ok=True)
     output_path = output_dir / filename
+    local_write_started_at = time.time()
+    trace_events.append(_build_trace_event('image_local_write_started', local_write_started_at, {**base_extra, 'output_path': str(output_path)}))
     output_path.write_bytes(image_bytes)
+    local_write_finished_at = time.time()
     relative_path = output_path.relative_to(GENERATED_SUITES_DIR).as_posix()
-    return filename, relative_path, f'/generated/{relative_path}'
+    image_url = f'/generated/{relative_path}'
+    trace_events.append(_build_trace_event('image_local_write_completed', local_write_finished_at, {
+        **base_extra,
+        'output_path': str(output_path),
+        'relative_path': relative_path,
+        'image_url': image_url,
+        'elapsed_ms': int(max((local_write_finished_at - local_write_started_at) * 1000, 0)),
+    }))
+    trace_events.append(_build_trace_event('image_storage_completed', local_write_finished_at, {
+        **base_extra,
+        'storage_backend': 'local',
+        'relative_path': relative_path,
+        'image_url': image_url,
+        'elapsed_ms': int(max((local_write_finished_at - storage_started_at) * 1000, 0)),
+    }))
+    return filename, relative_path, image_url, _build_trace_payload(trace_events)
 
 
 def save_reference_image(task_id: str, sort: int, filename: str, image_bytes: bytes, mime_type: str):
@@ -437,7 +522,7 @@ def build_reference_images(task_id: str, image_payloads, source: str = 'product'
 
 def build_mode2_success_response(task_id: str, mode: str, prompt: str, model: str, generated_item: dict):
     image_bytes, mime_type = decode_generated_image(generated_item)
-    download_name, relative_path, image_url = save_generated_image(task_id, 1, mode, image_bytes, mime_type)
+    download_name, relative_path, image_url, storage_trace = save_generated_image(task_id, 1, mode, image_bytes, mime_type)
     return {
         'success': True,
         'task_id': task_id,
@@ -447,12 +532,13 @@ def build_mode2_success_response(task_id: str, mode: str, prompt: str, model: st
         'prompt': prompt,
         'model': model,
         'mode': mode,
+        'trace': storage_trace,
     }
 
 
 def build_generated_suite_image_item(task_id: str, plan_item: dict, generated_item: dict):
     image_bytes, mime_type = decode_generated_image(generated_item)
-    download_name, relative_path, image_url = save_generated_image(task_id, plan_item['sort'], plan_item['type'], image_bytes, mime_type)
+    download_name, relative_path, image_url, storage_trace = save_generated_image(task_id, plan_item['sort'], plan_item['type'], image_bytes, mime_type)
     return {
         'sort': plan_item['sort'],
         'kind': 'generated',
@@ -472,6 +558,7 @@ def build_generated_suite_image_item(task_id: str, plan_item: dict, generated_it
         'image_url': image_url,
         'image_path': relative_path,
         'download_name': download_name,
+        'trace': storage_trace,
     }
 
 

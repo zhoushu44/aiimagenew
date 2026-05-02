@@ -1057,6 +1057,7 @@
           fashionGeneratedModel: null,
           fashionSelectedModelSource: '',
           fashionSelectedModelId: '',
+          fashionSceneError: '',
         });
         renderFashionModelState();
 
@@ -1067,21 +1068,10 @@
           body_type: document.getElementById('bodyTypeSelect')?.value || '标准',
           appearance_details: (document.getElementById('appearanceDetails')?.value || '').trim(),
           image_size_ratio: document.querySelector('input[name="outputSpec"]:checked')?.value || '3:4',
+          async_task: true,
         };
 
-        try {
-          const response = await fetch('/api/generate-fashion-model', {
-            method: 'POST',
-            headers: {
-              'Content-Type': 'application/json',
-            },
-            body: JSON.stringify(payload),
-          });
-          const result = await response.json().catch(() => ({}));
-          if (!response.ok || !result.success) {
-            throw new Error(result.error || '基准模特生成失败，请稍后重试');
-          }
-
+        const applyGeneratedModelResult = (result) => {
           const generatedModel = buildGeneratedModel(result);
           if (!generatedModel || !generatedModel.previewUrl) {
             throw new Error('生成成功，但未返回可预览的模特图片');
@@ -1102,6 +1092,43 @@
             fashionSelectedModelId: generatedModel.id,
             fashionSceneError: '',
           });
+        };
+
+        const pollTaskResult = async (taskId) => {
+          const startedAt = Date.now();
+          while (Date.now() - startedAt < 12 * 60 * 1000) {
+            const taskResponse = await fetch(`/api/generation-tasks/${encodeURIComponent(taskId)}`);
+            const taskResult = await taskResponse.json().catch(() => ({}));
+            if (!taskResponse.ok || !taskResult.success) {
+              throw new Error(taskResult.error || '基准模特任务状态查询失败');
+            }
+            const task = taskResult.task || {};
+            if (task.status === 'succeeded') {
+              return task.result || {};
+            }
+            if (task.status === 'failed') {
+              throw new Error(task.error || '基准模特生成失败，请稍后重试');
+            }
+            await new Promise((resolve) => window.setTimeout(resolve, 3000));
+          }
+          throw new Error('基准模特生成等待超时，请稍后重试');
+        };
+
+        try {
+          const response = await fetch('/api/generate-fashion-model', {
+            method: 'POST',
+            headers: {
+              'Content-Type': 'application/json',
+            },
+            body: JSON.stringify(payload),
+          });
+          const result = await response.json().catch(() => ({}));
+          if (!response.ok || !result.success || !result.task_id) {
+            throw new Error(result.error || '基准模特生成失败，请稍后重试');
+          }
+
+          const finalResult = await pollTaskResult(result.task_id);
+          applyGeneratedModelResult(finalResult);
         } catch (error) {
           patchWorkspaceState({
             fashionModelGenerationState: 'idle',

@@ -315,7 +315,7 @@ document.addEventListener('DOMContentLoaded', () => {
       label: '请选择模特',
     };
     const STORAGE_KEY = `aiDesignState:${PAGE_MODE}`;
-    const PENDING_GENERATION_POLL_INTERVAL = 3000;
+    const PENDING_GENERATION_POLL_INTERVAL = 1000;
     const PENDING_GENERATION_TIMEOUT = 12 * 60 * 1000;
     let pendingGenerationTask = null;
     let pendingGenerationPollTimer = null;
@@ -1165,13 +1165,27 @@ document.addEventListener('DOMContentLoaded', () => {
       const requests = [];
       for (let index = 0; index < outputCount; index += 1) {
         const requestFormData = cloneFormData(formData);
+        requestFormData.append('async_task', '1');
         const response = await fetch(endpoint, {
           method: 'POST',
           body: requestFormData,
         });
-        const rawResult = await response.json();
+        const taskPayload = await parseJsonResponse(response);
+        if (!response.ok || !taskPayload?.success || !taskPayload.task_id) {
+          const detailMessage = typeof taskPayload?.details === 'string' ? taskPayload.details.trim() : '';
+          const baseMessage = taskPayload?.error || '模式2生成失败，请稍后重试';
+          throw new Error(detailMessage ? `${baseMessage}｜${detailMessage}` : baseMessage);
+        }
+        const rawResult = await pollGenericTaskResult({
+          taskId: taskPayload.task_id,
+          loadingMessage: `模式2任务 ${index + 1}/${outputCount} 已提交，正在处理中…`,
+          pendingMessage: `模式2任务 ${index + 1}/${outputCount} 排队中，请稍候…`,
+          runningMessage: `模式2任务 ${index + 1}/${outputCount} 生成中，请稍候…`,
+          statusErrorMessage: '模式2任务状态查询失败',
+          timeoutMessage: '模式2任务等待超时，请稍后重试',
+        });
         const result = normalizeMode2Result(rawResult);
-        if (!response.ok || !result?.success || !Array.isArray(result.images)) {
+        if (!result?.success || !Array.isArray(result.images)) {
           const detailMessage = typeof result?.details === 'string' ? result.details.trim() : '';
           const baseMessage = result?.error || '模式2生成失败，请稍后重试';
           throw new Error(detailMessage ? `${baseMessage}｜${detailMessage}` : baseMessage);
@@ -1254,17 +1268,200 @@ document.addEventListener('DOMContentLoaded', () => {
       }
     };
 
+    const pollGenericTaskResult = async ({
+      taskId,
+      timeoutMs = PENDING_GENERATION_TIMEOUT,
+      intervalMs = PENDING_GENERATION_POLL_INTERVAL,
+      loadingMessage = '任务已提交，正在处理中，请稍候…',
+      pendingMessage = '任务已提交，正在排队处理，请稍候…',
+      runningMessage = '任务处理中，请稍候…',
+      statusErrorMessage = '任务状态查询失败',
+      timeoutMessage = '任务等待超时，请稍后重试',
+      onPending,
+      onSuccess,
+      onFailed,
+    } = {}) => {
+      const normalizedTaskId = String(taskId || '').trim();
+      if (!normalizedTaskId) {
+        throw new Error('缺少任务编号，请稍后重试');
+      }
+      if (typeof onPending === 'function') {
+        onPending(loadingMessage);
+      }
+      const startedAt = Date.now();
+      while (Date.now() - startedAt < timeoutMs) {
+        const response = await fetch(`/api/generation-tasks/${encodeURIComponent(normalizedTaskId)}`);
+        const result = await parseJsonResponse(response);
+        if (!response.ok || !result?.success) {
+          throw new Error(result?.error || statusErrorMessage);
+        }
+        const task = result.task || {};
+        if (task.status === 'succeeded') {
+          if (typeof onSuccess === 'function') {
+            onSuccess(task.result || {}, task);
+          }
+          return task.result || {};
+        }
+        if (task.status === 'failed') {
+          if (typeof onFailed === 'function') {
+            onFailed(task);
+          }
+          throw new Error(task.error || '任务执行失败，请稍后重试');
+        }
+        if (typeof onPending === 'function') {
+          onPending(task.status === 'running' ? runningMessage : pendingMessage, task);
+        }
+        await new Promise((resolve) => window.setTimeout(resolve, intervalMs));
+      }
+      throw new Error(timeoutMessage);
+    };
+
+    const debugGenerationTrace = (...args) => {
+      console.log('[generation-trace]', ...args);
+    };
+
+    const markTaskTraceEvent = (task, stage, extra = {}) => {
+      if (!task || typeof task !== 'object') {
+        return task;
+      }
+      const now = Date.now();
+      const currentTrace = task.trace && typeof task.trace === 'object' ? task.trace : {};
+      const currentEvents = Array.isArray(currentTrace.events) ? currentTrace.events.slice() : [];
+      const event = {
+        stage: String(stage || '').trim() || 'unknown',
+        ts: now / 1000,
+        at: new Date(now).toISOString(),
+        source: 'frontend',
+        ...extra,
+      };
+      currentEvents.push(event);
+      task.trace = {
+        ...currentTrace,
+        events: currentEvents.slice(-60),
+        last_stage: event.stage,
+        last_at: event.at,
+        last_ts: event.ts,
+      };
+      return task;
+    };
+
+    const summarizeTaskTrace = (task) => {
+      const events = Array.isArray(task?.trace?.events) ? task.trace.events : [];
+      const findFirst = (stage) => events.find((item) => item?.stage === stage);
+      const findLast = (stage) => events.slice().reverse().find((item) => item?.stage === stage);
+      const getTime = (event) => {
+        const ts = Number(event?.ts);
+        if (Number.isFinite(ts)) {
+          return ts * 1000;
+        }
+        const parsed = Date.parse(event?.at || '');
+        return Number.isFinite(parsed) ? parsed : null;
+      };
+      const diffMs = (startEvent, endEvent) => {
+        const start = getTime(startEvent);
+        const end = getTime(endEvent);
+        return Number.isFinite(start) && Number.isFinite(end) ? Math.max(Math.round(end - start), 0) : null;
+      };
+      const createdEvent = findFirst('task_created');
+      const succeededEvent = findLast('task_succeeded') || findLast('task_result_ready');
+      const pollEvent = findLast('frontend_poll_received');
+      const successReceivedEvent = findLast('frontend_success_received');
+      const renderStartEvent = findLast('frontend_result_render_start');
+      const renderDoneEvent = findLast('frontend_result_render_done');
+      const imageLoadedEvent = findLast('image_loaded');
+      return {
+        taskCreatedAt: createdEvent?.at || task?.created_at || '',
+        taskSucceededAt: succeededEvent?.at || task?.updated_at || '',
+        frontendPollAt: pollEvent?.at || '',
+        frontendSuccessAt: successReceivedEvent?.at || '',
+        renderStartedAt: renderStartEvent?.at || '',
+        renderDoneAt: renderDoneEvent?.at || '',
+        imageLoadedAt: imageLoadedEvent?.at || '',
+        backendElapsedMs: Number.isFinite(succeededEvent?.elapsed_ms) ? succeededEvent.elapsed_ms : null,
+        frontendPollDetectMs: diffMs(succeededEvent, pollEvent),
+        frontendRenderWaitMs: diffMs(successReceivedEvent, renderStartEvent),
+        frontendRenderMs: diffMs(renderStartEvent, renderDoneEvent),
+        frontendImageLoadMs: diffMs(renderDoneEvent, imageLoadedEvent),
+        frontendDisplayDelayMs: diffMs(succeededEvent, imageLoadedEvent),
+        totalEndToEndMs: diffMs(createdEvent, imageLoadedEvent),
+      };
+    };
+
+    const attachResultImageTrace = (task, rootElement) => {
+      if (!task || !rootElement || typeof rootElement.querySelectorAll !== 'function') {
+        return;
+      }
+      const images = rootElement.querySelectorAll('[data-role="preview-image"]');
+      images.forEach((img, index) => {
+        if (!(img instanceof HTMLImageElement) || img.dataset.traceBound === '1') {
+          return;
+        }
+        img.dataset.traceBound = '1';
+        const handleLoaded = () => {
+          markTaskTraceEvent(task, 'image_loaded', {
+            index,
+            image_url: img.currentSrc || img.src || '',
+          });
+          const summary = summarizeTaskTrace(task);
+          debugGenerationTrace('image_loaded_summary', {
+            taskId: task.task_id || '',
+            index,
+            taskCreatedAt: summary.taskCreatedAt,
+            taskSucceededAt: summary.taskSucceededAt,
+            frontendPollAt: summary.frontendPollAt,
+            renderDoneAt: summary.renderDoneAt,
+            imageLoadedAt: summary.imageLoadedAt,
+            backendElapsedMs: summary.backendElapsedMs,
+            frontendPollDetectMs: summary.frontendPollDetectMs,
+            frontendRenderMs: summary.frontendRenderMs,
+            frontendImageLoadMs: summary.frontendImageLoadMs,
+            frontendDisplayDelayMs: summary.frontendDisplayDelayMs,
+            totalEndToEndMs: summary.totalEndToEndMs,
+          });
+        };
+        if (img.complete && img.naturalWidth > 0) {
+          window.setTimeout(handleLoaded, 0);
+        } else {
+          img.addEventListener('load', handleLoaded, { once: true });
+        }
+      });
+    };
+
     const completePendingGenerationTask = (task) => {
       stopGenerationProgress();
       const result = task?.result;
       if (!result || !Array.isArray(result.images)) {
         return false;
       }
+      const renderStartedAt = Date.now();
+      markTaskTraceEvent(task, 'frontend_result_render_start', {
+        imageCount: Array.isArray(result.images) ? result.images.length : 0,
+      });
       currentResult = result;
       currentResultItems = normalizeResultItems(result);
       selectedResultKeys = new Set();
       updateTaskSummary(result);
       renderResultCards(currentResultItems);
+      markTaskTraceEvent(task, 'frontend_result_render_done', {
+        imageCount: currentResultItems.length,
+        renderElapsedMs: Math.max(Date.now() - renderStartedAt, 0),
+      });
+      attachResultImageTrace(task, resultGrid);
+      const summary = summarizeTaskTrace(task);
+      debugGenerationTrace('render_done_summary', {
+        taskId: task?.task_id || pendingGenerationTask?.taskId || '',
+        taskCreatedAt: summary.taskCreatedAt,
+        taskSucceededAt: summary.taskSucceededAt,
+        frontendPollAt: summary.frontendPollAt,
+        renderStartedAt: summary.renderStartedAt,
+        renderDoneAt: summary.renderDoneAt,
+        backendElapsedMs: summary.backendElapsedMs,
+        frontendPollDetectMs: summary.frontendPollDetectMs,
+        frontendRenderWaitMs: summary.frontendRenderWaitMs,
+        frontendRenderMs: summary.frontendRenderMs,
+        frontendDisplayDelayMs: summary.frontendDisplayDelayMs,
+        imageCount: currentResultItems.length,
+      });
       const spendAmount = Number(pendingGenerationTask?.spendRecord?.amount) || 0;
       setResultStatus(`${getCurrentModeConfig().successFallback.replace('{count}', String(getCurrentOutputMetric(result)))}${spendAmount > 0 ? `，已消耗 ${spendAmount} 积分` : ''}`, 'success');
       if (result.mode === 'fashion') {
@@ -1314,7 +1511,17 @@ document.addEventListener('DOMContentLoaded', () => {
           throw new Error(result.error || '生成任务状态查询失败');
         }
         const task = result.task || {};
+        markTaskTraceEvent(task, 'frontend_poll_received', {
+          status: task.status || '',
+        });
+        debugGenerationTrace('poll_received', {
+          taskId: task.task_id || pendingGenerationTask.taskId,
+          status: task.status || '',
+          lastStage: task.trace?.last_stage || '',
+          lastAt: task.trace?.last_at || '',
+        });
         if (task.status === 'succeeded') {
+          markTaskTraceEvent(task, 'frontend_success_received');
           completePendingGenerationTask(task);
           return;
         }
@@ -1979,6 +2186,22 @@ document.addEventListener('DOMContentLoaded', () => {
       };
     }).filter(Boolean);
 
+    const triggerFileDownload = (downloadUrl, downloadName) => {
+      const normalizedUrl = typeof downloadUrl === 'string' ? downloadUrl.trim() : '';
+      if (!normalizedUrl) {
+        throw new Error('缺少下载地址，请稍后重试');
+      }
+      const link = document.createElement('a');
+      link.href = normalizedUrl;
+      if (downloadName) {
+        link.download = downloadName;
+      }
+      document.body.appendChild(link);
+      link.click();
+      link.remove();
+      return true;
+    };
+
     const downloadItemsAsZip = async (items = []) => {
       const downloadableItems = getDownloadableItems(items);
       if (!downloadableItems.length) {
@@ -2060,36 +2283,23 @@ document.addEventListener('DOMContentLoaded', () => {
           'Content-Type': 'application/json',
         },
         body: JSON.stringify({
-          image_paths: zipSourceItems.map((item) => item.image_path),
+          image_paths: zipSourceItems.map((item) => item.image_path || item.image_url),
+          async_task: true,
         }),
       });
-      if (!response.ok) {
-        let message = '打包下载失败，请稍后重试';
-        try {
-          const payload = await response.json();
-          if (payload?.error) {
-            message = payload.error;
-          }
-        } catch (error) {
-          console.error('Failed to parse zip download error:', error);
-        }
-        throw new Error(message);
+      const taskPayload = await parseJsonResponse(response);
+      if (!response.ok || !taskPayload?.success || !taskPayload.task_id) {
+        throw new Error(taskPayload?.error || '打包下载失败，请稍后重试');
       }
-      const blob = await response.blob();
-      const objectUrl = URL.createObjectURL(blob);
-      const disposition = response.headers.get('Content-Disposition') || '';
-      const utf8Match = disposition.match(/filename\*=UTF-8''([^;]+)/i);
-      const basicMatch = disposition.match(/filename="?([^";]+)"?/i);
-      const downloadName = utf8Match
-        ? decodeURIComponent(utf8Match[1])
-        : (basicMatch ? basicMatch[1] : 'ai-images.zip');
-      const link = document.createElement('a');
-      link.href = objectUrl;
-      link.download = downloadName;
-      document.body.appendChild(link);
-      link.click();
-      link.remove();
-      window.setTimeout(() => URL.revokeObjectURL(objectUrl), 1000);
+      const taskResult = await pollGenericTaskResult({
+        taskId: taskPayload.task_id,
+        loadingMessage: '打包任务已提交，正在处理中…',
+        pendingMessage: '打包任务排队中，请稍候…',
+        runningMessage: '正在打包图片，请稍候…',
+        statusErrorMessage: '打包任务状态查询失败',
+        timeoutMessage: '图片打包等待超时，请稍后重试',
+      });
+      triggerFileDownload(taskResult?.download_url, taskResult?.download_name || 'ai-images.zip');
       return true;
     };
 
@@ -2327,7 +2537,7 @@ document.addEventListener('DOMContentLoaded', () => {
               <div class="overlay-chip">
                 <span class="result-no">${String(item.sort || index + 1).padStart(2, '0')}</span>
               </div>
-              ${imageUrl ? `<img src="${imageUrl}" alt="${escapeHtml(item.title || item.type || '生成结果')}" loading="lazy" data-role="preview-image" data-index="${index}">` : '<div class="image-shape"></div>'}
+              ${imageUrl ? `<img src="${imageUrl}" alt="${escapeHtml(item.title || item.type || '生成结果')}" loading="eager" decoding="async" fetchpriority="high" data-role="preview-image" data-index="${index}">` : '<div class="image-shape"></div>'}
             </div>
             <div class="result-body">
               <div class="result-topline">
@@ -2870,6 +3080,7 @@ document.addEventListener('DOMContentLoaded', () => {
         const originalText = sellingInput.value;
         const formData = new FormData();
         formData.append('selling_text', originalText);
+        formData.append('async_task', '1');
         appendFilesToFormData(formData, 'images', getProductFiles());
 
         sellingMessage.textContent = '';
@@ -2882,19 +3093,34 @@ document.addEventListener('DOMContentLoaded', () => {
             method: 'POST',
             body: formData,
           });
-          const result = await response.json();
+          const result = await parseJsonResponse(response);
 
-          if (!response.ok || !result.success) {
+          if (!response.ok || !result.success || !result.task_id) {
             throw new Error(result.error || '生成失败，请稍后重试');
           }
 
-          sellingInput.value = result.text || '';
-          currentProductJson = result.product_json && typeof result.product_json === 'object'
-            ? result.product_json
-            : null;
-          sellingMessage.textContent = 'AI 文案已生成';
-          sellingMessage.className = 'field-message success';
-          persistState();
+          await pollGenericTaskResult({
+            taskId: result.task_id,
+            loadingMessage: 'AI 文案任务已提交，正在处理中…',
+            pendingMessage: 'AI 文案任务排队中，请稍候…',
+            runningMessage: 'AI 文案生成中，请稍候…',
+            statusErrorMessage: 'AI 文案任务状态查询失败',
+            timeoutMessage: 'AI 文案生成等待超时，请稍后重试',
+            onPending: (message) => {
+              sellingMessage.textContent = message || 'AI 文案生成中，请稍候…';
+              sellingMessage.className = 'field-message';
+              sellingInput.value = '生成中';
+            },
+            onSuccess: (taskResult) => {
+              sellingInput.value = taskResult?.text || '';
+              currentProductJson = taskResult?.product_json && typeof taskResult.product_json === 'object'
+                ? taskResult.product_json
+                : null;
+              sellingMessage.textContent = 'AI 文案已生成';
+              sellingMessage.className = 'field-message success';
+              persistState();
+            },
+          });
         } catch (error) {
           sellingInput.value = originalText;
           sellingMessage.textContent = error.message || '生成失败，请稍后重试';
@@ -2911,6 +3137,7 @@ document.addEventListener('DOMContentLoaded', () => {
         const formData = new FormData();
         formData.append('selling_text', sellingInput.value.trim());
         formData.append('platform', getPlatformLabel());
+        formData.append('async_task', '1');
         appendFilesToFormData(formData, 'images', getProductFiles());
 
         currentStyleResults = [];
@@ -2927,17 +3154,34 @@ document.addEventListener('DOMContentLoaded', () => {
             method: 'POST',
             body: formData,
           });
-          const result = await response.json();
+          const result = await parseJsonResponse(response);
 
-          if (!response.ok || !result.success || !Array.isArray(result.styles)) {
+          if (!response.ok || !result.success || !result.task_id) {
             throw new Error(result.error || '风格分析失败，请稍后重试');
           }
 
-          renderStyleCards(result.styles);
-          setStyleButtonLabel(refreshStyleBtnLabel);
-          styleResultsMessage.textContent = getStyleSuccessMessage();
-          styleResultsMessage.className = 'style-results-message success';
-          persistState();
+          await pollGenericTaskResult({
+            taskId: result.task_id,
+            loadingMessage: `${getStyleLoadingLabel()}，请稍候…`,
+            pendingMessage: '风格分析任务排队中，请稍候…',
+            runningMessage: '风格分析中，请稍候…',
+            statusErrorMessage: '风格分析任务状态查询失败',
+            timeoutMessage: '风格分析等待超时，请稍后重试',
+            onPending: (message) => {
+              styleResultsMessage.textContent = message || `${getStyleLoadingLabel()}，请稍候…`;
+              styleResultsMessage.className = 'style-results-message';
+            },
+            onSuccess: (taskResult) => {
+              if (!Array.isArray(taskResult?.styles)) {
+                throw new Error('风格分析成功，但未返回可用结果');
+              }
+              renderStyleCards(taskResult.styles);
+              setStyleButtonLabel(refreshStyleBtnLabel);
+              styleResultsMessage.textContent = getStyleSuccessMessage();
+              styleResultsMessage.className = 'style-results-message success';
+              persistState();
+            },
+          });
         } catch (error) {
           currentStyleResults = [];
           selectedStyleIndex = -1;
@@ -3040,22 +3284,8 @@ document.addEventListener('DOMContentLoaded', () => {
 
           let result;
           let asyncSuiteTaskStarted = false;
-          if (isMode2 || currentMode === 'aplus') {
-            if (isMode2) {
-              result = await generateMode2Results(endpoint, formData, plannedOutputCount);
-            } else {
-              const response = await fetch(endpoint, {
-                method: 'POST',
-                body: formData,
-              });
-              const rawResult = await parseJsonResponse(response);
-              result = rawResult;
-              if (!response.ok || !result?.success || !Array.isArray(result.images)) {
-                const detailMessage = typeof result?.details === 'string' ? result.details.trim() : '';
-                const baseMessage = result?.error || config.errorFallback;
-                throw new Error(detailMessage ? `${baseMessage}｜${detailMessage}` : baseMessage);
-              }
-            }
+          if (isMode2) {
+            result = await generateMode2Results(endpoint, formData, plannedOutputCount);
           } else {
             formData.append('async_task', '1');
             formData.append('points_request_id', spendRecord?.requestId || '');
