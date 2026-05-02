@@ -14,4 +14,4 @@ COPY . ./
 
 EXPOSE 5078
 
-CMD ["python", "app.py"]
+CMD ["gunicorn", "-w", "4", "-b", "0.0.0.0:5078", "--timeout", "300", "--access-logfile", "-", "app:app"]

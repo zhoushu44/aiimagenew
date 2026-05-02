@@ -1184,7 +1184,7 @@ def get_request_value(payload: dict, form, key: str, default: str = '') -> str:
 
 def build_fashion_model_prompt(gender: str, age: str, ethnicity: str, body_type: str, appearance_details: str) -> str:
     normalized_gender = gender or '女'
-    normalized_age = age or '青年'
+    normalized_age = age or '青年（18-35岁）'
     normalized_ethnicity = ethnicity or '欧美白人'
     normalized_body_type = body_type or '标准'
     normalized_details = appearance_details or FASHION_MODEL_APPEARANCE_FALLBACK

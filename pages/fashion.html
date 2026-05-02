@@ -79,7 +79,7 @@
           <div class="model-config" id="aiModelConfig">
             <div class="grid-2">
               <label class="field"><span class="field-label">性别</span><select id="genderSelect"><option selected>女</option><option>男</option></select></label>
-              <label class="field"><span class="field-label">年龄</span><select id="ageSelect"><option selected>青年</option><option>少年</option><option>中年</option></select></label>
+              <label class="field"><span class="field-label">年龄</span><select id="ageSelect"><option>婴儿（0-3岁）</option><option>幼儿（3-6岁）</option><option>儿童（6-12岁）</option><option>少年（12-18岁）</option><option selected>青年（18-35岁）</option><option>中年（35-55岁）</option><option>中老年（55-65岁）</option><option>老年（65岁以上）</option></select></label>
               <label class="field"><span class="field-label">人种</span><select id="ethnicitySelect"><option selected>欧美白人</option><option>东亚</option><option>东南亚</option><option>非洲</option><option>拉丁</option></select></label>
               <label class="field"><span class="field-label">体型</span><select id="bodyTypeSelect"><option selected>标准</option><option>偏瘦</option><option>偏胖</option></select></label>
             </div>
@@ -1062,7 +1062,7 @@
 
         const payload = {
           gender: document.getElementById('genderSelect')?.value || '女',
-          age: document.getElementById('ageSelect')?.value || '青年',
+          age: document.getElementById('ageSelect')?.value || '青年（18-35岁）',
           ethnicity: document.getElementById('ethnicitySelect')?.value || '欧美白人',
           body_type: document.getElementById('bodyTypeSelect')?.value || '标准',
           appearance_details: (document.getElementById('appearanceDetails')?.value || '').trim(),

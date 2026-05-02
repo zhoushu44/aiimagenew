@@ -1,10 +1,10 @@
 # AI Image New
 
-基于 Flask 的 AI 图片生成与会员支付项目，支持 Supabase 登录、积分、会员套餐、ZPay 支付、支付回调、订阅续期和前端账号面板。
+基于 Flask + Gunicorn 的 AI 图片生成与会员支付项目，支持 Supabase 登录、积分、会员套餐、ZPay 支付、支付回调、订阅续期和前端账号面板。
 
 ## 功能概览
 
-- Flask 2.x 后端，模块化代码结构（`app.py` 仅 3044 行）
+- Flask 2.x 后端，Docker 生产镜像使用 Gunicorn 启动（`app:app`）
 - Supabase Auth 登录与后端 session 同步（httpOnly Cookie）
 - 积分系统：注册奖励、每日签到、按量消费、失败自动退款
 - AI 图片生成：3 种 App Mode（mode1/mode2/mode3），支持文生图/图生图
@@ -80,7 +80,13 @@ pip install -r requirements.txt
 python app.py
 ```
 
-默认监听 `http://127.0.0.1:5078`。可通过 `.env` 中 `HOST` / `PORT` 配置。
+本地开发可直接使用 `python app.py` 启动 Flask 开发服务，默认监听 `http://127.0.0.1:5078`。可通过 `.env` 中 `HOST` / `PORT` 配置。
+
+生产/Docker 镜像已加入 Gunicorn，并通过 `app:app` 启动：
+
+```bash
+gunicorn -w 4 -b 0.0.0.0:5078 --timeout 300 --access-logfile - app:app
+```
 
 ## Docker 镜像发布
 
@@ -88,10 +94,11 @@ python app.py
 
 | 触发条件 | 标签 |
 |----------|------|
-| 推送到 `main` 分支 | `9.9` + `latest` |
-| GitHub Actions 手动触发 | `9.9` + `latest` |
+| 推送到 `main` 分支 | `10.0` + `latest` |
+| GitHub Actions 手动触发 | `10.0` + `latest` |
 
 - 构建平台：`linux/amd64` + `linux/arm64`
+- 镜像内使用 Gunicorn 运行 Flask 应用：`gunicorn -w 4 -b 0.0.0.0:5078 --timeout 300 --access-logfile - app:app`
 - `.dockerignore` 已排除 `.env` 和 `.env.*`
 - 工作流文件：[docker-publish.yml](.github/workflows/docker-publish.yml)
 
@@ -340,6 +347,11 @@ POST {MODE3_OPENAI_BASE_URL}/images/edits
 ---
 
 ## 近期更新
+
+### 2026-05-02 · v10.0
+
+- **生产启动方式升级**：Docker 镜像加入 Gunicorn，使用 `gunicorn -w 4 -b 0.0.0.0:5078 --timeout 300 --access-logfile - app:app` 运行 Flask 应用
+- **Docker 镜像标签**：9.9 → 10.0，GitHub Action 自动打 `10.0` + `latest` 双标签
 
 ### 2026-05-02 · v9.9
 

@@ -2298,7 +2298,7 @@ def generate_fashion_model():
             payload = {}
 
         gender = get_request_value(payload, request.form, 'gender', '女') or '女'
-        age = get_request_value(payload, request.form, 'age', '青年') or '青年'
+        age = get_request_value(payload, request.form, 'age', '青年（18-35岁）') or '青年（18-35岁）'
         ethnicity = get_request_value(payload, request.form, 'ethnicity', '欧美白人') or '欧美白人'
         body_type = get_request_value(payload, request.form, 'body_type', '标准') or '标准'
         appearance_details = get_request_value(payload, request.form, 'appearance_details', '')
