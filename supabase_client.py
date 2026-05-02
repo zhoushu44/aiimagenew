@@ -376,7 +376,7 @@ def grant_payment_points_once(order_row: dict, _logger: logging.Logger | None = 
     order_no = str((order_row or {}).get('order_no') or (order_row or {}).get('out_trade_no') or '').strip()
     package_id = str((order_row or {}).get('package_id') or (order_row or {}).get('product_id') or '').strip()
 
-    from points_rules import get_payment_points_amount
+    from app import get_payment_points_amount
     points_amount = get_payment_points_amount(package_id)
     if not user_id or not order_no or points_amount <= 0:
         return None
@@ -397,7 +397,7 @@ def grant_payment_points_once(order_row: dict, _logger: logging.Logger | None = 
     if isinstance(existing_payload, list) and existing_payload:
         return get_user_points_balance(user_id, _logger=log)
 
-    from points_rules import add_user_points
+    from app import add_user_points
     return add_user_points(
         user_id,
         points_amount,

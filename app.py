@@ -889,12 +889,13 @@ def process_success_payment(order_row: dict, callback_trade_no: str) -> dict:
         'payment_method': payment_method,
         'callback_payload': callback_payload,
     }
-    updated_row = update_payment_order(out_trade_no, patch_payload)
 
     try:
-        grant_payment_points_once(updated_row)
+        grant_payment_points_once(order_row)
     except (requests.RequestException, RuntimeError, ValueError):
         logger.exception('Failed to grant payment points after payment success: out_trade_no=%s', out_trade_no)
+
+    updated_row = update_payment_order(out_trade_no, patch_payload)
 
     if get_payment_pay_type(updated_row).lower() == 'subscription':
         user_id = str((updated_row or {}).get('user_id') or '').strip()
@@ -1563,6 +1564,10 @@ def pay_notify_api():
             logger.warning('ZPAY notify order not found: out_trade_no=%s payload=%s', out_trade_no, payload)
             return 'fail', 404
         if is_order_success(order_row):
+            try:
+                grant_payment_points_once(order_row)
+            except Exception:
+                logger.exception('Failed to grant payment points on retry: out_trade_no=%s', out_trade_no)
             return 'success', 200
 
         validate_callback_amount(order_row, callback_money)

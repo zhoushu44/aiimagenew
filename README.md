@@ -88,8 +88,8 @@ python app.py
 
 | 触发条件 | 标签 |
 |----------|------|
-| 推送到 `main` 分支 | `9.6` + `latest` |
-| GitHub Actions 手动触发 | `9.6` + `latest` |
+| 推送到 `main` 分支 | `9.7` + `latest` |
+| GitHub Actions 手动触发 | `9.7` + `latest` |
 
 - 构建平台：`linux/amd64` + `linux/arm64`
 - `.dockerignore` 已排除 `.env` 和 `.env.*`
@@ -228,8 +228,10 @@ GitHub 仓库需要配置 Secrets：
 | `COS_SECRET_ID` | 否 | 腾讯云 SecretId |
 | `COS_SECRET_KEY` | 否 | 腾讯云 SecretKey |
 | `COS_REGION` | 否 | 地域（如 `ap-guangzhou`） |
-| `COS_BUCKET` | 否 | 存储桶名 |
-| `COS_CDN_DOMAIN` | 否 | CDN 域名（不带协议头） |
+| `COS_BUCKET` | 否 | **存储桶名**（纯名称，不含域名，如 `aiimg-1234567890`） |
+| `COS_CDN_DOMAIN` | 否 | CDN 域名（不带协议头，如 `cdn.example.com`） |
+
+> **注意**：`COS_BUCKET` 填腾讯云控制台的纯桶名，不要填域名。CDN 加速域名填在 `COS_CDN_DOMAIN`。COS 配置支持 `.env` 和 Settings 页面 `config.json` 两种方式，`cos_utils` 优先读环境变量，其次读取 `config.json` 的 `LOCAL_CONFIG`。
 
 ### 管理员
 
@@ -338,6 +340,13 @@ POST {MODE3_OPENAI_BASE_URL}/images/edits
 ---
 
 ## 近期更新
+
+### 2026-05-02 · v9.7
+
+- **积分发放修复**：修复 `grant_payment_points_once` 中错误从 `points_rules` 导入不存在的函数，导致支付回调积分永远不到账的严重 Bug；调整执行顺序为先发积分再标记订单 paid，并对重试回调补发积分
+- **COS 配置增强**：新增 `config.json` 兜底读取链路，Docker 中无 `.env` 时自动从 Settings 页面写入的 `config.json` 读取 COS 密钥；恢复 `load_dotenv` 确保本地 `.env` 正常加载
+- **COS 桶名校验**：`COS_BUCKET` 必须填腾讯云控制台的纯桶名（如 `aiimg-1234567890`），不能填 CDN 域名
+- **Docker 镜像标签**：9.6 → 9.7，自动打 `9.7` + `latest` 双标签
 
 ### 2026-05-02 · v9.6
 

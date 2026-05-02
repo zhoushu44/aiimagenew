@@ -1,5 +1,27 @@
 # 版本说明 (Changelog)
 
+## v9.7 (2026-05-02)
+
+### 积分发放修复 (Critical Bugfix)
+- 修复 `grant_payment_points_once` 中 `from points_rules import get_payment_points_amount` 和 `from points_rules import add_user_points` 错误导入——这两个函数在 `app.py` 而非 `points_rules.py`，导致支付回调积分永远不到账
+- 调整 `process_success_payment` 执行顺序：先发积分 (`grant_payment_points_once`) 再标记订单 paid (`update_payment_order`)，避免先改状态后崩溃
+- 回调重试时对已 paid 订单仍然补发积分（幂等安全，按 `order_no` 去重）
+
+### COS 配置增强
+- 新增 `_read_cos_env()` 函数：优先 `os.getenv()` 读环境变量，其次读取 `config.LOCAL_CONFIG`（`config.json`）兜底
+- 恢复 `load_dotenv(Path(__file__).resolve().parent / '.env')`，确保本地 `.env` 正常加载
+- Docker 中无 `.env` 时自动从 Settings 页面写入的 `config.json` 读取 COS 密钥
+- COS 全链路上传/删除测试通过
+
+### COS 桶名校验
+- `COS_BUCKET` 必须填腾讯云控制台的纯桶名（如 `aiimg-1234567890`），不能填 CDN 域名，否则报 `bucket format is illegal`
+
+### Docker
+- 镜像标签 9.6 → 9.7
+- GitHub Action 自动打 `9.7` + `latest` 双标签
+
+---
+
 ## v9.6 (2026-05-02)
 
 ### COS 图片存储优化
@@ -82,6 +104,7 @@
 
 | 版本 | 标签 | 日期 |
 |---|---|---|
+| v9.7 | `9.7`, `latest` | 2026-05-02 |
 | v9.6 | `9.6`, `latest` | 2026-05-02 |
 | v9.5 | `9.5`, `latest` | 2026-05-01 |
 | v9.4 | `9.4` | 2026-05-01 |

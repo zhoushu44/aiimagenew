@@ -1,8 +1,12 @@
 import logging
 import os
 from datetime import datetime
+from pathlib import Path
 
+from dotenv import load_dotenv
 from qcloud_cos import CosConfig, CosS3Client
+
+load_dotenv(Path(__file__).resolve().parent / '.env')
 
 logger = logging.getLogger(__name__)
 
@@ -11,12 +15,26 @@ _cos_signature = None
 COS_URL_PREFIX = ''
 
 
+def _read_cos_env(name: str, default: str = '') -> str:
+    value = (os.getenv(name) or '').strip()
+    if value:
+        return value
+    try:
+        from config import LOCAL_CONFIG
+        value = str(LOCAL_CONFIG.get(name, '')).strip()
+        if value:
+            return value
+    except Exception:
+        pass
+    return default
+
+
 def _get_cos_config() -> dict:
-    secret_id = (os.getenv('COS_SECRET_ID') or '').strip()
-    secret_key = (os.getenv('COS_SECRET_KEY') or '').strip()
-    region = (os.getenv('COS_REGION') or 'ap-guangzhou').strip()
-    bucket = (os.getenv('COS_BUCKET') or '').strip()
-    cdn_domain = (os.getenv('COS_CDN_DOMAIN') or '').strip()
+    secret_id = _read_cos_env('COS_SECRET_ID')
+    secret_key = _read_cos_env('COS_SECRET_KEY')
+    region = _read_cos_env('COS_REGION', 'ap-guangzhou') or 'ap-guangzhou'
+    bucket = _read_cos_env('COS_BUCKET')
+    cdn_domain = _read_cos_env('COS_CDN_DOMAIN')
     url_prefix = f"https://{cdn_domain}" if cdn_domain else (f"https://{bucket}.cos.{region}.myqcloud.com" if bucket else '')
     enabled = bool(secret_id and secret_key and bucket)
     return {
