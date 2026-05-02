@@ -1,5 +1,31 @@
 # 版本说明 (Changelog)
 
+## v9.8 (2026-05-02)
+
+### Flask 多线程
+- `app.run()` 新增 `threaded=True`，AI 帮写等长耗时请求不再阻塞其他用户的页面加载和 API 调用
+- 解决生产环境 AI 帮写时整个服务器响应卡顿的问题
+
+### Chat HTTP 重试优化
+- `_run_chat_completion_http` 使用独立 session，HTTP 错误码（503 等）不做自动重试（`status_forcelist=frozenset()`）
+- 主 API 失败立刻抛异常走 fallback，节省 4-6s 额外延迟
+
+### SSE/流式兼容 + Fallback 完善
+- 新增 SSE 流式格式（`Content-Type: text/event-stream`）解析支持
+- Fallback token 扩展：新增 `model_not_found`、`No available channel`、`new_api_error`、`Expecting value`、`JSONDecodeError`
+- 主 API 返回非 JSON 格式时自动 fallback，通用兼容性大幅提升
+
+### OpenAI 直连 Ark
+- 支持将 `OPENAI_API_KEY` / `OPENAI_BASE_URL` / `OPENAI_MODEL` 直接配置为 Ark 豆包的密钥和端点
+- 走标准 OpenAI-compatible 协议直连调用，不走 fallback，响应更快
+- 测试通过：AI 帮写 ~8s，风格分析 ~15s
+
+### Docker
+- 镜像标签 9.7 → 9.8
+- GitHub Action 自动打 `9.8` + `latest` 双标签
+
+---
+
 ## v9.7 (2026-05-02)
 
 ### 积分发放修复 (Critical Bugfix)
@@ -104,6 +130,7 @@
 
 | 版本 | 标签 | 日期 |
 |---|---|---|
+| v9.8 | `9.8`, `latest` | 2026-05-02 |
 | v9.7 | `9.7`, `latest` | 2026-05-02 |
 | v9.6 | `9.6`, `latest` | 2026-05-02 |
 | v9.5 | `9.5`, `latest` | 2026-05-01 |

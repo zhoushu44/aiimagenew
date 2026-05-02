@@ -39,9 +39,12 @@ CHAT_COMPLETION_FALLBACK_ERROR_TOKENS = (
     'usage limit', 'usage_limit_reached', 'HTTPSConnectionPool',
     'SSLError', 'SSLEOFError', 'EOF occurred in violation of protocol',
     'Max retries exceeded', '524',
-    '401', 'authentication_error', 'auth_unavailable',
+    '401', '403', '503',
+    'authentication_error', 'auth_unavailable',
     'token is expired', 'Invalid API Key', 'Incorrect API key',
     'invalid_api_key',
+    'model_not_found', 'No available channel', 'new_api_error',
+    'Expecting value', 'JSONDecodeError',
 )
 
 
@@ -89,7 +92,20 @@ def _run_chat_completion(client: OpenAI, model: str, system_prompt: str, user_co
 
 def _run_chat_completion_http(api_key: str, base_url: str, model: str, system_prompt: str, user_content, temperature: float, timeout_seconds: int):
     normalized_base_url = str(base_url or '').strip().rstrip('/') + '/'
-    session = create_chat_completion_session()
+    retry = Retry(
+        total=1,
+        connect=1,
+        read=1,
+        status=0,
+        backoff_factor=0.5,
+        allowed_methods=frozenset({'POST'}),
+        status_forcelist=frozenset(),
+        raise_on_status=False,
+    )
+    adapter = HTTPAdapter(max_retries=retry)
+    session = requests.Session()
+    session.mount('https://', adapter)
+    session.mount('http://', adapter)
     try:
         response = session.post(
             f'{normalized_base_url}chat/completions',
@@ -104,6 +120,7 @@ def _run_chat_completion_http(api_key: str, base_url: str, model: str, system_pr
                     {'role': 'user', 'content': user_content},
                 ],
                 'temperature': temperature,
+                'stream': False,
             },
             timeout=timeout_seconds,
         )

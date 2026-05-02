@@ -3051,5 +3051,5 @@ if __name__ == '__main__':
     host = get_supabase_setting('HOST', get_optional_env('HOST', '0.0.0.0')) or '0.0.0.0'
     port = get_supabase_setting_int('PORT', get_optional_int_env('PORT', 5078))
     debug = get_supabase_setting_bool('FLASK_DEBUG', get_optional_bool_env('FLASK_DEBUG', False))
-    app.run(host=host, port=port, debug=debug)
+    app.run(host=host, port=port, debug=debug, threaded=True)
 

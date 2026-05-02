@@ -88,8 +88,8 @@ python app.py
 
 | 触发条件 | 标签 |
 |----------|------|
-| 推送到 `main` 分支 | `9.7` + `latest` |
-| GitHub Actions 手动触发 | `9.7` + `latest` |
+| 推送到 `main` 分支 | `9.8` + `latest` |
+| GitHub Actions 手动触发 | `9.8` + `latest` |
 
 - 构建平台：`linux/amd64` + `linux/arm64`
 - `.dockerignore` 已排除 `.env` 和 `.env.*`
@@ -340,6 +340,14 @@ POST {MODE3_OPENAI_BASE_URL}/images/edits
 ---
 
 ## 近期更新
+
+### 2026-05-02 · v9.8
+
+- **Flask 多线程**：`app.run()` 新增 `threaded=True`，AI 帮写等长耗时请求不再阻塞其他用户的页面加载和 API 调用
+- **Chat HTTP 重试优化**：主 API 调用不再对 HTTP 错误码（503 等）做自动重试，失败立刻走 fallback，节省 4-6s 额外延迟
+- **SSE/流式兼容 + Fallback 完善**：新增 SSE 流式格式解析支持，扩展 fallback token（新增 model_not_found / JSONDecodeError 等），通用 API 兼容性大幅提升
+- **OpenAI 直连 Ark**：支持将 `OPENAI_API_KEY` / `OPENAI_BASE_URL` / `OPENAI_MODEL` 直接配置为 Ark 豆包的密钥和端点，不走 fallback 直连调用
+- **Docker 镜像标签**：9.7 → 9.8，自动打 `9.8` + `latest` 双标签
 
 ### 2026-05-02 · v9.7
 
