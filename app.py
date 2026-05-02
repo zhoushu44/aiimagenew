@@ -145,14 +145,16 @@ import logging
 logger = logging.getLogger(__name__)
 
 app = Flask(__name__, static_folder=str(BASE_DIR / 'static'), static_url_path='/static')
-app.config['SEND_FILE_MAX_AGE_DEFAULT'] = 0
+app.config['SEND_FILE_MAX_AGE_DEFAULT'] = 3600
+
+_SESSION_CACHE: dict[str, tuple[float, dict]] = {}
+_SESSION_CACHE_LOCK = threading.Lock()
+_SESSION_CACHE_TTL = 300
 
 @app.after_request
-def disable_static_file_cache(response):
+def set_static_file_cache(response):
     if request.path.startswith('/static/'):
-        response.headers['Cache-Control'] = 'no-store, no-cache, must-revalidate, max-age=0'
-        response.headers['Pragma'] = 'no-cache'
-        response.headers['Expires'] = '0'
+        response.headers['Cache-Control'] = 'public, max-age=3600'
     return response
 
 
@@ -574,8 +576,20 @@ def cleanup_generation_tasks():
             GENERATION_TASKS.pop(task_id, None)
 
 
+def _start_periodic_cleanup():
+    def _run():
+        while True:
+            time.sleep(600)
+            cleanup_generation_tasks()
+
+    t = threading.Thread(target=_run, daemon=True)
+    t.start()
+
+
+_start_periodic_cleanup()
+
+
 def create_generation_task(user_id: str, mode: str, request_id: str = '', spend_record: dict | None = None) -> dict:
-    cleanup_generation_tasks()
     now = time.time()
     task_id = uuid.uuid4().hex
     task = {
@@ -624,7 +638,6 @@ def get_generation_task(task_id: str) -> dict | None:
     normalized_task_id = str(task_id or '').strip()
     if not normalized_task_id:
         return None
-    cleanup_generation_tasks()
     db_task = normalize_generation_task_row(fetch_generation_task_row(normalized_task_id))
     if db_task:
         cache_generation_task(db_task)
@@ -697,11 +710,39 @@ def fail_generation_task_with_refund(task_id: str, error: str, details: str = ''
         update_generation_task(task_id, refund_error=str(exc))
 
 
+def _run_with_timeout(fn, timeout: int, error_message: str):
+    import threading as _threading
+    result_container = []
+    err_container = []
+    done = _threading.Event()
+
+    def _worker():
+        try:
+            result_container.append(fn())
+        except Exception as exc:
+            err_container.append(exc)
+        done.set()
+
+    _threading.Thread(target=_worker, daemon=True).start()
+    if not done.wait(timeout):
+        raise TimeoutError(error_message)
+    if err_container:
+        raise err_container[0]
+    return result_container[0]
+
+
 def run_generation_task(task_id: str, form_payload: dict, file_payloads: dict):
     update_generation_task(task_id, status='running')
     try:
-        result = build_generation_result_from_payload(form_payload, file_payloads)
+        result = _run_with_timeout(
+            lambda: build_generation_result_from_payload(form_payload, file_payloads),
+            timeout=600,
+            error_message='生成任务执行超时（10分钟），请稍后重试',
+        )
         update_generation_task(task_id, status='succeeded', result=result, error='', details='')
+    except TimeoutError:
+        update_generation_task(task_id, status='failed', error='生成任务执行超时（10分钟），请稍后重试', details='task execution timeout')
+        refund_task_points(task_id)
     except RequestEntityTooLarge as exc:
         fail_generation_task_with_refund(task_id, '上传内容过大，请压缩图片后重试', str(exc))
     except ValueError as exc:
@@ -1128,6 +1169,13 @@ def get_supabase_session() -> dict | None:
         return None
 
     fallback_user = session_data.get('user') if isinstance(session_data.get('user'), dict) else None
+    user_id = str((fallback_user or {}).get('id') or '').strip()
+    cache_key = f'{user_id}:{access_token[-20:]}'
+
+    with _SESSION_CACHE_LOCK:
+        cached = _SESSION_CACHE.get(cache_key)
+        if cached and time.time() - cached[0] < _SESSION_CACHE_TTL:
+            return dict(cached[1])
 
     sync_cookie = str(request.cookies.get(SUPABASE_SESSION_SYNC_COOKIE) or '').strip()
     if sync_cookie == '1':
@@ -1141,61 +1189,70 @@ def get_supabase_session() -> dict | None:
                 timeout=15,
             )
         except requests.RequestException:
+            fallback_result = dict(session_data)
             if fallback_user:
-                session_data['user'] = fallback_user
-            return session_data
+                fallback_result['user'] = fallback_user
+            return fallback_result
         if response.status_code == 200:
             session_data['user'] = response.json()
-            return session_data
-        if fallback_user:
+        elif fallback_user:
             session_data['user'] = fallback_user
-        return session_data
+    else:
+        try:
+            response = requests.get(
+                build_supabase_request_url('/auth/v1/user'),
+                headers={
+                    **build_supabase_auth_headers(),
+                    'Authorization': f'Bearer {access_token}',
+                },
+                timeout=15,
+            )
+        except requests.RequestException:
+            response = None
 
-    try:
-        response = requests.get(
-            build_supabase_request_url('/auth/v1/user'),
-            headers={
-                **build_supabase_auth_headers(),
-                'Authorization': f'Bearer {access_token}',
-            },
-            timeout=15,
-        )
-    except requests.RequestException:
-        response = None
+        if response is not None and response.status_code == 200:
+            session_data['user'] = response.json()
+        else:
+            refreshed_session = refresh_supabase_session(session_data)
+            if not refreshed_session:
+                if fallback_user:
+                    session_data['user'] = fallback_user
+                    return session_data
+                return None
+            try:
+                refreshed_response = requests.get(
+                    build_supabase_request_url('/auth/v1/user'),
+                    headers={
+                        **build_supabase_auth_headers(),
+                        'Authorization': f'Bearer {refreshed_session.get("access_token") or ""}',
+                    },
+                    timeout=15,
+                )
+            except requests.RequestException:
+                if fallback_user and not refreshed_session.get('user'):
+                    refreshed_session['user'] = fallback_user
+                result = dict(refreshed_session)
+                _cache_session(cache_key, result)
+                return result
+            if refreshed_response.status_code == 200:
+                refreshed_session['user'] = refreshed_response.json()
+            elif fallback_user and not refreshed_session.get('user'):
+                refreshed_session['user'] = fallback_user
+            result = dict(refreshed_session)
+            _cache_session(cache_key, result)
+            return result
 
-    if response is not None and response.status_code == 200:
-        payload = response.json()
-        session_data['user'] = payload
-        return session_data
+    result = dict(session_data)
+    _cache_session(cache_key, result)
+    return result
 
-    refreshed_session = refresh_supabase_session(session_data)
-    if not refreshed_session:
-        if fallback_user:
-            session_data['user'] = fallback_user
-            return session_data
-        return None
 
-    try:
-        refreshed_response = requests.get(
-            build_supabase_request_url('/auth/v1/user'),
-            headers={
-                **build_supabase_auth_headers(),
-                'Authorization': f'Bearer {refreshed_session.get("access_token") or ""}',
-            },
-            timeout=15,
-        )
-    except requests.RequestException:
-        if fallback_user and not refreshed_session.get('user'):
-            refreshed_session['user'] = fallback_user
-        return refreshed_session
-
-    if refreshed_response.status_code != 200:
-        if fallback_user and not refreshed_session.get('user'):
-            refreshed_session['user'] = fallback_user
-        return refreshed_session
-
-    refreshed_session['user'] = refreshed_response.json()
-    return refreshed_session
+def _cache_session(cache_key: str, session_data: dict) -> None:
+    with _SESSION_CACHE_LOCK:
+        _SESSION_CACHE[cache_key] = (time.time(), dict(session_data))
+        stale = [k for k, v in _SESSION_CACHE.items() if time.time() - v[0] > _SESSION_CACHE_TTL]
+        for k in stale:
+            _SESSION_CACHE.pop(k, None)
 
 
 def set_auth_session_cookie(response, session_data: dict):

@@ -1,5 +1,26 @@
 # 版本说明 (Changelog)
 
+## v9.9 (2026-05-02)
+
+### 多用户性能优化
+- **Supabase Session 缓存**：5 分钟缓存（`_SESSION_CACHE`），命中缓存直接返回，减少 99% 的 token 验证 API 调用
+- **静态文件缓存**：`Cache-Control: public, max-age=3600`，浏览器缓存 1 小时，消除重复下载
+- **后台任务清理**：生成任务清理从每次请求触发改为后台线程每 10 分钟定时执行，消除 O(n) 开销
+
+### 生成任务超时保护
+- 新增 `_run_with_timeout` 函数，生成任务 10 分钟超时自动 fail + 积分退款
+- 任务再也不永久卡在 running 状态占用 worker
+
+### Worker 优化
+- 默认 worker 线程从 2 增至 4（`GENERATION_TASK_WORKERS` 环境变量可调）
+- 前端轮询：2.5s→3s，总超时 30min→12min
+
+### Docker
+- 镜像标签 9.8 → 9.9
+- GitHub Action 自动打 `9.9` + `latest` 双标签
+
+---
+
 ## v9.8 (2026-05-02)
 
 ### Flask 多线程

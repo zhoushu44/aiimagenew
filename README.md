@@ -88,8 +88,8 @@ python app.py
 
 | 触发条件 | 标签 |
 |----------|------|
-| 推送到 `main` 分支 | `9.8` + `latest` |
-| GitHub Actions 手动触发 | `9.8` + `latest` |
+| 推送到 `main` 分支 | `9.9` + `latest` |
+| GitHub Actions 手动触发 | `9.9` + `latest` |
 
 - 构建平台：`linux/amd64` + `linux/arm64`
 - `.dockerignore` 已排除 `.env` 和 `.env.*`
@@ -340,6 +340,14 @@ POST {MODE3_OPENAI_BASE_URL}/images/edits
 ---
 
 ## 近期更新
+
+### 2026-05-02 · v9.9
+
+- **多用户性能优化**：Supabase 会话缓存 5 分钟（减少 99% token 验证请求），静态文件浏览器缓存 1 小时，生成任务清理改为后台定时（每 10 分钟），彻底消除多用户场景下的 IO 瓶颈
+- **生成任务超时保护**：新增 10 分钟超时自动 fail + 积分退款，任务再也不永久卡在 running 状态占用 worker
+- **Worker 线程提升**：默认从 2 增至 4，支持 `GENERATION_TASK_WORKERS` 环境变量自定义
+- **前端轮询优化**：任务轮询 2.5s→3s，总超时 30min→12min
+- **Docker 镜像标签**：9.8 → 9.9，自动打 `9.9` + `latest` 双标签
 
 ### 2026-05-02 · v9.8
 

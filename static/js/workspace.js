@@ -315,8 +315,8 @@ document.addEventListener('DOMContentLoaded', () => {
       label: '请选择模特',
     };
     const STORAGE_KEY = `aiDesignState:${PAGE_MODE}`;
-    const PENDING_GENERATION_POLL_INTERVAL = 2500;
-    const PENDING_GENERATION_TIMEOUT = 30 * 60 * 1000;
+    const PENDING_GENERATION_POLL_INTERVAL = 3000;
+    const PENDING_GENERATION_TIMEOUT = 12 * 60 * 1000;
     let pendingGenerationTask = null;
     let pendingGenerationPollTimer = null;
     let isRestoringState = false;

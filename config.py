@@ -80,7 +80,7 @@ GENERATION_TASK_TTL_SECONDS = max(int(os.getenv('GENERATION_TASK_TTL_SECONDS') o
 GENERATION_TASK_POLL_RETENTION_SECONDS = max(int(os.getenv('GENERATION_TASK_POLL_RETENTION_SECONDS') or 86400), 3600)
 GENERATION_TASKS: dict[str, dict] = {}
 GENERATION_TASKS_LOCK = threading.Lock()
-GENERATION_TASK_EXECUTOR = concurrent.futures.ThreadPoolExecutor(max_workers=max(int(os.getenv('GENERATION_TASK_WORKERS') or 2), 1))
+GENERATION_TASK_EXECUTOR = concurrent.futures.ThreadPoolExecutor(max_workers=max(int(os.getenv('GENERATION_TASK_WORKERS') or 4), 2))
 ZPAY_PID = (os.getenv('ZPAY_PID') or '').strip()
 ZPAY_KEY = (os.getenv('ZPAY_KEY') or '').strip()
 ZPAY_GATEWAY = (os.getenv('ZPAY_GATEWAY') or 'https://zpayz.cn/submit.php').strip()
