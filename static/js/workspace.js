@@ -1278,6 +1278,7 @@ document.addEventListener('DOMContentLoaded', () => {
       statusErrorMessage = '任务状态查询失败',
       timeoutMessage = '任务等待超时，请稍后重试',
       onPending,
+      onProgress,
       onSuccess,
       onFailed,
     } = {}) => {
@@ -1296,6 +1297,9 @@ document.addEventListener('DOMContentLoaded', () => {
           throw new Error(result?.error || statusErrorMessage);
         }
         const task = result.task || {};
+        if (typeof onProgress === 'function') {
+          onProgress(task.result || {}, task);
+        }
         if (task.status === 'succeeded') {
           if (typeof onSuccess === 'function') {
             onSuccess(task.result || {}, task);
@@ -3106,18 +3110,35 @@ document.addEventListener('DOMContentLoaded', () => {
             runningMessage: 'AI 文案生成中，请稍候…',
             statusErrorMessage: 'AI 文案任务状态查询失败',
             timeoutMessage: 'AI 文案生成等待超时，请稍后重试',
-            onPending: (message) => {
+            onPending: (message, task) => {
+              const partialResult = task?.result && typeof task.result === 'object' ? task.result : null;
+              const partialText = typeof partialResult?.text === 'string' ? partialResult.text : '';
+              if (partialText) {
+                sellingInput.value = partialText;
+                sellingMessage.textContent = '';
+                sellingMessage.className = 'field-message';
+                return;
+              }
               sellingMessage.textContent = message || 'AI 文案生成中，请稍候…';
               sellingMessage.className = 'field-message';
               sellingInput.value = '生成中';
+            },
+            onProgress: (taskResult) => {
+              const partialText = typeof taskResult?.text === 'string' ? taskResult.text : '';
+              if (!partialText) {
+                return;
+              }
+              sellingInput.value = partialText;
+              sellingMessage.textContent = '';
+              sellingMessage.className = 'field-message';
             },
             onSuccess: (taskResult) => {
               sellingInput.value = taskResult?.text || '';
               currentProductJson = taskResult?.product_json && typeof taskResult.product_json === 'object'
                 ? taskResult.product_json
                 : null;
-              sellingMessage.textContent = 'AI 文案已生成';
-              sellingMessage.className = 'field-message success';
+              sellingMessage.textContent = '';
+              sellingMessage.className = 'field-message';
               persistState();
             },
           });

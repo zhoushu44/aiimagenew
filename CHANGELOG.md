@@ -1,5 +1,33 @@
 # 版本说明 (Changelog)
 
+## v10.2 (2026-05-03)
+
+### AI 帮写性能优化：并发 + 先返回卖点
+
+- **AI 帮写改为并发执行**：卖点文案生成与商品结构化提取（product_json）同时启动，不再串行等待
+- **卖点先展示**：卖点生成完成后立即写入任务结果，前端轮询时先回填卖点文案，product_json 在后台继续生成
+- **前端静默补齐**：product_json 完成后静默写入 `currentProductJson`，用户无感知，后续 A+/生图正常复用
+- **实测提速**：串行 23s → 并发 8.88s，总耗时节省 61.4%；首屏等待从 12.77s 降到 6.46s
+
+### A+ 图片生成 Bug 修复
+
+- 修复 `generation/aplus.py` 中 `save_generated_image` 返回 4 个值但只解包 3 个导致的 `too many values to unpack (expected 3)` 错误
+- 修复后首屏主视觉、使用场景图等 A+ 模块可正常生成
+
+### 后端新增
+
+- `update_generation_task_partial_result`：支持在任务未最终完成时写入中间结果
+- `pollGenericTaskResult` 新增 `onProgress` 回调：前端可在任务运行中读取部分结果
+
+### Docker
+
+- 镜像标签 10.1 → 10.2
+- GitHub Action 自动打 `10.2` + `latest` 双标签
+- 推送仍由 GitHub Action 自动完成，本地不执行 Docker 推送操作
+- `.dockerignore` 继续排除 `.env` 和 `.env.*`
+
+***
+
 ## v10.1 (2026-05-02)
 
 ### 生成任务异步链路增强
@@ -225,6 +253,7 @@
 
 | 版本    | 标签               | 日期         |
 | ----- | ---------------- | ---------- |
+| v10.1 | `10.1`, `latest` | 2026-05-02 |
 | v10.0 | `10.0`, `latest` | 2026-05-02 |
 | v9.9  | `9.9`, `latest`  | 2026-05-02 |
 | v9.8  | `9.8`, `latest`  | 2026-05-02 |

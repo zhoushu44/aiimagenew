@@ -939,6 +939,16 @@ def run_background_generation_task(task_id: str, builder, timeout: int = 600, ti
         fail_generation_task_with_refund(task_id, f'服务端异常：{exc}', str(exc))
 
 
+def update_generation_task_partial_result(task_id: str, result_patch: dict | None = None, stage: str = '', extra: dict | None = None) -> dict | None:
+    patch = {}
+    if isinstance(result_patch, dict):
+        patch['result'] = result_patch
+    task = update_generation_task(task_id, **patch) if patch else get_generation_task(task_id)
+    if stage:
+        task = update_generation_task(task_id, **_build_task_trace_patch(task, stage, extra=extra))
+    return task
+
+
 
 def run_generation_task(task_id: str, form_payload: dict, file_payloads: dict):
     run_background_generation_task(
@@ -2462,6 +2472,66 @@ def ai_write():
                 )
             return {'success': True, 'mode': 'ai-write', 'text': text, 'product_json': product_json}
 
+        def build_ai_write_async_result(task_id: str):
+            text_container: dict[str, str] = {}
+
+            def build_text_result() -> str:
+                text_value = call_chat_completion(
+                    SYSTEM_PROMPT,
+                    build_multimodal_content(
+                        USER_PROMPT_TEMPLATE.format(selling_text=selling_text or '（未填写）'),
+                        image_payloads,
+                    ),
+                    temperature=0.7,
+                )
+                text_container['text'] = text_value
+                update_generation_task_partial_result(
+                    task_id,
+                    {
+                        'success': True,
+                        'mode': 'ai-write',
+                        'text': text_value,
+                        'product_json': None,
+                        'product_json_pending': True,
+                    },
+                    'ai_write_text_ready',
+                    {'product_json_pending': True},
+                )
+                return text_value
+
+            def build_product_json_result() -> dict | None:
+                product_selling_text = selling_text or '（未填写）'
+                if not image_payloads and not product_selling_text:
+                    return None
+                product_json, _response_text = call_chat_json_with_repair(
+                    PRODUCT_JSON_SYSTEM_PROMPT,
+                    build_multimodal_content(
+                        PRODUCT_JSON_USER_PROMPT_TEMPLATE.format(selling_text=product_selling_text),
+                        image_payloads,
+                    ),
+                    parse_product_json,
+                    '商品结构化信息格式异常',
+                    temperature=0.2,
+                    timeout_seconds=60,
+                    repair_attempts=1,
+                )
+                return product_json
+
+            with concurrent.futures.ThreadPoolExecutor(max_workers=2) as executor:
+                text_future = executor.submit(build_text_result)
+                product_json_future = executor.submit(build_product_json_result)
+                text = text_future.result()
+                text_container['text'] = text
+                product_json = product_json_future.result()
+
+            return {
+                'success': True,
+                'mode': 'ai-write',
+                'text': text_container.get('text') or '',
+                'product_json': product_json,
+                'product_json_pending': False,
+            }
+
         if run_async:
             session_data = g.get('supabase_session') or get_supabase_session()
             user_id = _get_supabase_user_id(session_data)
@@ -2471,7 +2541,7 @@ def ai_write():
             GENERATION_TASK_EXECUTOR.submit(
                 run_background_generation_task,
                 task['task_id'],
-                build_ai_write_result,
+                lambda: build_ai_write_async_result(task['task_id']),
                 180,
                 'AI 文案生成超时（3分钟），请稍后重试',
             )

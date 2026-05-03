@@ -95,8 +95,8 @@ gunicorn -w 4 -b 0.0.0.0:5078 --timeout 300 --access-logfile - app:app
 
 | 触发条件 | 标签 |
 |----------|------|
-| 推送到 `main` 分支 | `10.0` + `latest` |
-| GitHub Actions 手动触发 | `10.0` + `latest` |
+| 推送到 `main` 分支 | `10.2` + `latest` |
+| GitHub Actions 手动触发 | `10.2` + `latest` |
 
 - 构建平台：`linux/amd64` + `linux/arm64`
 - 镜像内使用 Gunicorn 运行 Flask 应用：`gunicorn -w 4 -b 0.0.0.0:5078 --timeout 300 --access-logfile - app:app`
@@ -136,6 +136,38 @@ proxy_buffering off;
 GitHub 仓库需要配置 Secrets：
 - `DOCKER_HUB_USERNAME` — Docker Hub 用户名
 - `DOCKER_HUB_TOKEN` — Docker Hub Access Token
+
+## 生成任务耗时排查
+
+异步生成任务会记录完整 trace，用于拆分“生成完成”和“页面显示完成”的延迟来源。
+
+后端任务日志会输出：
+
+```text
+Generation task trace summary succeeded: {...}
+Generation task trace summary polled_succeeded: {...}
+```
+
+前端浏览器控制台会输出：
+
+```text
+[generation-trace] render_done_summary {...}
+[generation-trace] image_loaded_summary {...}
+```
+
+重点耗时字段：
+
+| 字段 | 含义 |
+|------|------|
+| `task_queue_ms` | 任务创建到后台开始执行 |
+| `backend_until_ready_ms` | 后台开始执行到结果 ready |
+| `storage_ms` | 图片保存/COS 上传耗时 |
+| `poll_after_success_ms` | 后端成功后多久被轮询发现 |
+| `frontendPollDetectMs` | 前端检测到任务成功的延迟 |
+| `frontendRenderMs` | 前端结果卡片渲染耗时 |
+| `frontendImageLoadMs` | 图片元素渲染后到 load 完成 |
+| `frontendDisplayDelayMs` | 后端成功到图片真正显示完成 |
+| `totalEndToEndMs` | 任务创建到图片显示完成总耗时 |
 
 ---
 

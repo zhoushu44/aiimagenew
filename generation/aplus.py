@@ -40,7 +40,7 @@ def generate_aplus_images(plan: dict, image_payloads, task_id: str, image_size_r
         )
         generated_item = generated_items[0]
         image_bytes, mime_type = decode_generated_image(generated_item)
-        download_name, relative_path, image_url = save_generated_image(task_id, plan_item['sort'], plan_item['type'], image_bytes, mime_type)
+        download_name, relative_path, image_url, _ = save_generated_image(task_id, plan_item['sort'], plan_item['type'], image_bytes, mime_type)
         return {
             'sort': plan_item['sort'],
             'kind': 'generated',
