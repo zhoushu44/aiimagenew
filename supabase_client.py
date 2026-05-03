@@ -523,6 +523,42 @@ def fetch_generation_task_row(task_id: str, _logger: logging.Logger | None = Non
         return None
 
 
+def fetch_user_generation_tasks(user_id: str, limit: int = 20, offset: int = 0, mode: str | None = None, status: str | None = None, _logger: logging.Logger | None = None) -> list[dict]:
+    log = _logger or logger
+    if not is_generation_task_persistence_enabled():
+        return []
+    normalized_user_id = str(user_id or '').strip()
+    if not normalized_user_id:
+        return []
+    query_params = {
+        'select': '*',
+        'user_id': f'eq.{normalized_user_id}',
+        'order': 'created_at.desc',
+        'limit': str(max(1, min(int(limit or 20), 100))),
+        'offset': str(max(0, int(offset or 0))),
+    }
+    if mode:
+        query_params['mode'] = f'eq.{str(mode).strip()}'
+    if status:
+        query_params['status'] = f'eq.{str(status).strip()}'
+    try:
+        response = requests.get(
+            build_supabase_request_url(f'/rest/v1/{SUPABASE_GENERATION_TASKS_TABLE}'),
+            headers=_build_supabase_service_headers(),
+            params=query_params,
+            timeout=20,
+        )
+        if response.status_code >= 400:
+            log.warning('Failed to fetch user generation tasks for %s: status=%s body=%s', normalized_user_id, response.status_code, response.text)
+            return []
+        payload = response.json()
+        rows = payload if isinstance(payload, list) else []
+        return [task for task in (normalize_generation_task_row(row) for row in rows) if task]
+    except Exception as exc:
+        log.warning('Failed to fetch user generation tasks for %s: %s', normalized_user_id, exc)
+        return []
+
+
 def normalize_generation_task_row(row: dict | None) -> dict | None:
     if not isinstance(row, dict):
         return None

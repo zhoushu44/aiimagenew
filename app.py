@@ -37,6 +37,7 @@ from supabase_client import (
     get_user_points_balance, fetch_vip_plan_config, grant_payment_points_once,
     is_generation_task_persistence_enabled, build_generation_task_db_payload,
     persist_generation_task, fetch_generation_task_row, normalize_generation_task_row,
+    fetch_user_generation_tasks,
     fetch_latest_active_subscription, create_payment_order_record,
     fetch_payment_order_by_out_trade_no, update_payment_order,
     fetch_user_profile_by_user_id, upsert_user_subscription_profile,
@@ -1976,6 +1977,11 @@ def settings_page():
     return render_html_page('settings.html')
 
 
+@app.get('/generation-record')
+def generation_record_page():
+    return render_html_page('generation-record.html')
+
+
 @app.get('/generated/<path:path>')
 def serve_generated_file(path: str):
     if is_cos_enabled() and not (GENERATED_SUITES_DIR / path).is_file():
@@ -3436,6 +3442,23 @@ def generate_suite():
         return jsonify({'success': False, 'error': f'请求失败：{exc}'}), 502
     except Exception as exc:
         return jsonify({'success': False, 'error': f'服务端异常：{exc}'}), 500
+
+
+@app.get('/api/generation-tasks')
+def generation_tasks_list():
+    session_data = g.get('supabase_session') or get_supabase_session()
+    user_id = _get_supabase_user_id(session_data)
+    if not user_id:
+        return jsonify({'success': False, 'error': '请先登录'}), 401
+    limit = request.args.get('limit', 20)
+    offset = request.args.get('offset', 0)
+    mode = request.args.get('mode') or None
+    status = request.args.get('status') or None
+    try:
+        tasks = fetch_user_generation_tasks(user_id, limit=int(limit), offset=int(offset), mode=mode, status=status)
+        return jsonify({'success': True, 'tasks': [serialize_generation_task(task) for task in tasks]})
+    except ValueError:
+        return jsonify({'success': False, 'error': '分页参数无效'}), 400
 
 
 @app.get('/api/generation-tasks/<task_id>')

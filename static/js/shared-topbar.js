@@ -17,6 +17,7 @@
     fashion: SHARED_TOPBAR_CONFIG,
     auth: SHARED_TOPBAR_CONFIG,
     settings: SHARED_TOPBAR_CONFIG,
+    'generation-record': SHARED_TOPBAR_CONFIG,
   };
 
   const PATH_TO_MODE = {
@@ -25,6 +26,7 @@
     '/aplus': 'aplus',
     '/fashion': 'fashion',
     '/settings': 'settings',
+    '/generation-record': 'generation-record',
   };
 
   const ACCOUNT_PANEL_ID = 'shared-account-panel';
@@ -2856,6 +2858,8 @@
     updateAccountTriggers();
     return browserSession;
   }
+
+  window.__sharedTopbarSyncServerSession = syncServerSessionFromBrowser;
 
   async function requestPointsBalance() {
     const pointsResponse = await fetch('/api/points/balance', {

@@ -1,0 +1,1207 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>生成记录中心</title>
+  <script src="/static/js/shared-topbar.js" defer></script>
+  <style>
+    :root {
+      --bg: #0b0f14;
+      --bg-soft: #111722;
+      --panel: rgba(18, 24, 34, 0.86);
+      --line: rgba(255, 255, 255, 0.1);
+      --line-strong: rgba(255, 255, 255, 0.16);
+      --text: #e9eef6;
+      --muted: #92a0b3;
+      --accent: #7ee0c3;
+      --accent-2: #7da4ff;
+      --danger: #ff6b6b;
+      --warning: #ffc45c;
+      --shadow: 0 20px 60px rgba(0, 0, 0, 0.38);
+      --radius-xl: 28px;
+      --radius-lg: 20px;
+      --radius-md: 14px;
+      --radius-sm: 10px;
+    }
+
+    * { box-sizing: border-box; }
+
+    html, body {
+      margin: 0;
+      min-height: 100%;
+      background: linear-gradient(180deg, #ffffff 0%, #f7f8fa 100%);
+      color: var(--text);
+      font-family: "Georgia", "Times New Roman", serif;
+    }
+
+    body::before,
+    body::after {
+      content: "";
+      position: fixed;
+      inset: 0;
+      pointer-events: none;
+    }
+
+    body::before {
+      background-image:
+        linear-gradient(rgba(255, 255, 255, 0.028) 1px, transparent 1px),
+        linear-gradient(90deg, rgba(255, 255, 255, 0.028) 1px, transparent 1px);
+      background-size: 38px 38px;
+      mask-image: radial-gradient(circle at center, black 52%, transparent 100%);
+      opacity: 0.35;
+    }
+
+    body::after {
+      background: repeating-linear-gradient(
+        180deg,
+        rgba(255, 255, 255, 0.03) 0,
+        rgba(255, 255, 255, 0.03) 1px,
+        transparent 1px,
+        transparent 4px
+      );
+      mix-blend-mode: soft-light;
+      opacity: 0.08;
+    }
+
+    a { color: inherit; }
+
+    .page {
+      position: relative;
+      width: min(1560px, calc(100vw - 24px));
+      margin: 0 auto;
+      padding: 14px 0 28px;
+      color: #ffffff;
+    }
+
+    .topbar {
+      position: sticky;
+      top: 12px;
+      z-index: 20;
+      display: grid;
+      grid-template-columns: 1.2fr 1fr 1.25fr;
+      gap: 14px;
+      align-items: center;
+      padding: 16px 18px;
+      margin-bottom: 18px;
+      border-radius: 24px;
+      background: linear-gradient(180deg, rgba(21, 27, 38, 0.92), rgba(14, 18, 25, 0.88));
+      border: 1px solid rgba(255, 255, 255, 0.09);
+      box-shadow: 0 18px 42px rgba(0, 0, 0, 0.34);
+      backdrop-filter: blur(18px);
+    }
+
+    .topbar-section { min-width: 0; }
+
+    .menu-links,
+    .filter-tags,
+    .toolbar-actions {
+      display: flex;
+      flex-wrap: wrap;
+      gap: 10px;
+      align-items: center;
+    }
+
+    .menu-link,
+    .filter-tag,
+    .tool-btn {
+      border: 1px solid rgba(255,255,255,0.1);
+      background: rgba(255,255,255,0.04);
+      color: var(--text);
+      border-radius: 999px;
+      padding: 10px 14px;
+      font-size: 12px;
+      letter-spacing: 0.02em;
+      text-decoration: none;
+      cursor: pointer;
+      transition: transform .18s ease, border-color .18s ease, background .18s ease, opacity .18s ease;
+      white-space: nowrap;
+      user-select: none;
+    }
+
+    .menu-link:hover,
+    .filter-tag:hover,
+    .tool-btn:hover {
+      transform: translateY(-1px);
+      border-color: rgba(17,24,39,0.18);
+      box-shadow: 0 8px 18px rgba(17,24,39,0.06);
+    }
+
+    .menu-link.active,
+    .filter-tag.active {
+      background: rgba(126,224,195,0.16);
+      border-color: rgba(126,224,195,0.4);
+      color: #eafff7;
+    }
+
+    .toolbar-actions {
+      justify-content: flex-end;
+    }
+
+    .tool-btn.primary {
+      background: linear-gradient(135deg, rgba(126,224,195,0.96), rgba(125,164,255,0.96));
+      color: #071017;
+      border-color: transparent;
+      font-weight: 700;
+    }
+
+    .tool-btn.danger.active {
+      background: #ffffff;
+      border-color: rgba(220,38,38,0.28);
+      color: #000000;
+    }
+
+    .tool-btn.disabled,
+    .tool-btn:disabled {
+      opacity: 0.42;
+      cursor: not-allowed;
+      transform: none;
+    }
+
+    .shell {
+      display: grid;
+      grid-template-columns: 1fr;
+      gap: 18px;
+    }
+
+    .hero {
+      padding: 24px;
+      border-radius: var(--radius-xl);
+      background: linear-gradient(180deg, rgba(255,255,255,0.05), rgba(255,255,255,0.025));
+      border: 1px solid var(--line);
+      box-shadow: var(--shadow);
+      backdrop-filter: blur(18px);
+      overflow: hidden;
+      position: relative;
+    }
+
+    .hero::before {
+      content: none;
+    }
+
+    .hero-inner {
+      position: relative;
+      display: grid;
+      grid-template-columns: 1.2fr 0.8fr;
+      gap: 18px;
+      align-items: end;
+    }
+
+    .eyebrow {
+      color: var(--accent);
+      text-transform: uppercase;
+      letter-spacing: 0.18em;
+      font-size: 12px;
+      margin-bottom: 14px;
+    }
+
+    .hero h1 {
+      margin: 0;
+      font-size: clamp(34px, 4vw, 58px);
+      line-height: 0.98;
+      letter-spacing: -0.04em;
+      max-width: 10ch;
+    }
+
+    .hero p {
+      margin: 16px 0 0;
+      color: var(--muted);
+      font-size: 14px;
+      line-height: 1.8;
+      max-width: 68ch;
+    }
+
+    .hero-stats {
+      display: grid;
+      gap: 10px;
+      justify-self: end;
+      width: min(100%, 420px);
+    }
+
+    .hero-card {
+      padding: 16px 18px;
+      border-radius: 18px;
+      background: #ffffff;
+      border: 1px solid rgba(17,24,39,0.08);
+      display: flex;
+      justify-content: space-between;
+      gap: 12px;
+      align-items: center;
+    }
+
+    .hero-card strong { font-size: 14px; }
+    .hero-card span { display: block; margin-top: 4px; color: var(--muted); font-size: 12px; }
+
+    .stat-badge {
+      display: inline-flex;
+      align-items: center;
+      justify-content: center;
+      min-width: 72px;
+      padding: 8px 10px;
+      border-radius: 999px;
+      background: #ffffff;
+      border: 1px solid rgba(17,24,39,0.16);
+      color: #000000;
+      font-size: 12px;
+    }
+
+    .timeline-block {
+      display: flex;
+      flex-direction: column;
+      gap: 16px;
+    }
+
+    .timeline-group {
+      padding: 0;
+      background: transparent;
+      border: 0;
+      box-shadow: none;
+      backdrop-filter: none;
+      position: relative;
+      overflow: visible;
+    }
+
+    .timeline-group::before {
+      content: "";
+      position: absolute;
+      left: 18px;
+      top: 0;
+      bottom: 0;
+      width: 1px;
+      background: linear-gradient(180deg, rgba(17,24,39,0.16), transparent 90%);
+      opacity: .35;
+    }
+
+    .group-head {
+      display: flex;
+      align-items: center;
+      gap: 12px;
+      padding-left: 18px;
+      margin-bottom: 16px;
+    }
+
+    .group-head h2 {
+      margin: 0;
+      font-size: 16px;
+      line-height: 1.2;
+      letter-spacing: 0;
+      color: #000000;
+      font-weight: 600;
+    }
+
+    .waterfall-grid {
+      padding-left: 18px;
+      display: flex;
+      flex-wrap: wrap;
+      gap: 5px;
+      justify-content: flex-start;
+      align-items: flex-start;
+      width: 100%;
+      box-sizing: border-box;
+    }
+
+    .image-card {
+      position: relative;
+      width: 108px;
+      height: 108px;
+      border-radius: 18px;
+      overflow: hidden;
+      background: rgba(255,255,255,0.03);
+      border: 1px solid rgba(255,255,255,0.08);
+      cursor: pointer;
+      transition: transform .2s ease, border-color .2s ease, box-shadow .2s ease;
+      animation: floatIn .45s ease both;
+      user-select: none;
+      touch-action: manipulation;
+    }
+
+    .image-card:hover {
+      transform: translateY(-2px);
+      border-color: rgba(17,24,39,0.14);
+      box-shadow: 0 10px 22px rgba(17,24,39,0.08);
+    }
+
+    .thumb,
+    .select-box {
+      pointer-events: none;
+    }
+
+    .thumb::after {
+      content: none;
+    }
+
+    .select-box {
+      position: absolute;
+      left: 4px;
+      top: 4px;
+      width: 14px;
+      height: 14px;
+      border-radius: 4px;
+      background: rgba(255,255,255,0.86);
+      border: 1px solid rgba(17,24,39,0.22);
+      display: grid;
+      place-items: center;
+      color: transparent;
+      font-size: 10px;
+      z-index: 2;
+      backdrop-filter: blur(4px);
+    }
+
+    .image-card.selected .select-box {
+      background: rgba(126,224,195,0.92);
+      border-color: rgba(126,224,195,0.92);
+      color: #081019;
+    }
+
+    .image-card.drag-over {
+      border-color: rgba(125,164,255,0.9);
+      box-shadow: 0 0 0 1px rgba(125,164,255,0.3), 0 18px 34px rgba(0,0,0,0.25);
+    }
+
+    .image-card.previewing .thumb {
+      outline: 2px solid rgba(125,164,255,0.55);
+      outline-offset: -2px;
+    }
+
+    .card-meta {
+      padding: 12px 12px 14px;
+      display: grid;
+      gap: 8px;
+    }
+
+    .card-labels {
+      display: flex;
+      flex-wrap: wrap;
+      gap: 6px;
+    }
+
+    .tag {
+      display: inline-flex;
+      align-items: center;
+      gap: 6px;
+      max-width: 100%;
+      padding: 7px 9px;
+      border-radius: 999px;
+      font-size: 11px;
+      color: #000000;
+      background: #ffffff;
+      border: 1px solid rgba(17,24,39,0.08);
+      white-space: nowrap;
+      overflow: hidden;
+      text-overflow: ellipsis;
+    }
+
+    .tag.primary {
+      background: rgba(126,224,195,0.12);
+      border-color: rgba(126,224,195,0.22);
+    }
+
+    .tag.subtle {
+      color: var(--muted);
+    }
+
+    .card-caption {
+      color: var(--text);
+      font-size: 12px;
+      line-height: 1.6;
+    }
+
+    .card-meta {
+      padding: 12px 12px 14px;
+      display: grid;
+      gap: 8px;
+    }
+
+    .card-labels {
+      display: flex;
+      flex-wrap: wrap;
+      gap: 6px;
+    }
+
+    .tag {
+      display: inline-flex;
+      align-items: center;
+      gap: 6px;
+      max-width: 100%;
+      padding: 7px 9px;
+      border-radius: 999px;
+      font-size: 11px;
+      color: var(--text);
+      background: rgba(255,255,255,0.04);
+      border: 1px solid rgba(255,255,255,0.08);
+      white-space: nowrap;
+      overflow: hidden;
+      text-overflow: ellipsis;
+    }
+
+    .tag.primary {
+      background: rgba(126,224,195,0.12);
+      border-color: rgba(126,224,195,0.3);
+      color: #defbf2;
+    }
+
+    .tag.subtle {
+      color: var(--muted);
+    }
+
+    .card-caption {
+      color: var(--muted);
+      font-size: 12px;
+      line-height: 1.6;
+    }
+
+    .selection-status {
+      color: var(--muted);
+      font-size: 12px;
+    }
+
+    .selection-status strong {
+      color: var(--text);
+    }
+
+    .range-overlay {
+      position: fixed;
+      inset: 0;
+      pointer-events: none;
+      z-index: 40;
+      display: none;
+    }
+
+    .range-overlay.active { display: block; }
+
+    .range-box {
+      position: absolute;
+      border: 1px solid rgba(125,164,255,0.8);
+      background: rgba(125,164,255,0.12);
+      box-shadow: 0 0 0 1px rgba(125,164,255,0.22), inset 0 0 0 1px rgba(125,164,255,0.18);
+      border-radius: 10px;
+    }
+
+    .preview-modal {
+      position: fixed;
+      inset: 0;
+      display: none;
+      align-items: center;
+      justify-content: center;
+      padding: 20px;
+      background: rgba(5, 8, 12, 0.74);
+      backdrop-filter: blur(14px);
+      z-index: 60;
+    }
+
+    .preview-modal.open { display: flex; }
+
+    .preview-card {
+      width: min(1120px, 100%);
+      border-radius: 28px;
+      overflow: hidden;
+      background: linear-gradient(180deg, rgba(18,24,34,0.98), rgba(11,15,20,0.98));
+      border: 1px solid rgba(255,255,255,0.12);
+      box-shadow: 0 30px 90px rgba(0,0,0,0.52);
+    }
+
+    .preview-head {
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+      gap: 12px;
+      padding: 16px 18px;
+      border-bottom: 1px solid rgba(255,255,255,0.08);
+    }
+
+    .preview-head strong { font-size: 15px; }
+    .preview-head span { color: var(--muted); font-size: 12px; }
+
+    .preview-body {
+      display: grid;
+      grid-template-columns: 1.18fr 0.82fr;
+    }
+
+    .preview-stage {
+      min-height: 560px;
+      display: grid;
+      place-items: center;
+      padding: 28px;
+      background:
+        radial-gradient(circle at 20% 20%, rgba(126,224,195,0.2), transparent 28%),
+        radial-gradient(circle at 80% 30%, rgba(125,164,255,0.22), transparent 30%),
+        linear-gradient(135deg, #16202d 0%, #111722 48%, #0b0f14 100%);
+    }
+
+    .preview-frame {
+      width: min(78%, 440px);
+      aspect-ratio: 1 / 1.24;
+      border-radius: 26px;
+      border: 1px solid rgba(255,255,255,0.12);
+      background:
+        linear-gradient(160deg, rgba(126,224,195,0.24), rgba(125,164,255,0.24)),
+        radial-gradient(circle at top, rgba(255,255,255,0.26), transparent 30%);
+      box-shadow: inset 0 0 0 1px rgba(255,255,255,0.08), 0 20px 50px rgba(0,0,0,0.4);
+    }
+
+    .load-more-bar {
+      display: none;
+      justify-content: center;
+      padding: 18px 0 6px;
+    }
+
+    .load-more-bar .tool-btn {
+      min-width: 168px;
+    }
+
+    .preview-side {
+      padding: 18px;
+      border-left: 1px solid rgba(255,255,255,0.08);
+      display: grid;
+      gap: 12px;
+    }
+
+    .side-card {
+      padding: 14px;
+      border-radius: 18px;
+      background: rgba(255,255,255,0.03);
+      border: 1px solid rgba(255,255,255,0.08);
+    }
+
+    .side-card h4 { margin: 0 0 8px; font-size: 13px; }
+    .side-card p { margin: 0; color: var(--muted); font-size: 12px; line-height: 1.7; }
+
+    .preview-actions {
+      display: grid;
+      gap: 10px;
+    }
+
+    .preview-btn {
+      border: 0;
+      border-radius: 14px;
+      padding: 13px 14px;
+      font-weight: 700;
+      cursor: pointer;
+    }
+
+    .preview-btn.primary {
+      background: linear-gradient(135deg, #7ee0c3, #7da4ff);
+      color: #071017;
+    }
+
+    .preview-btn.ghost {
+      background: rgba(255,255,255,0.04);
+      border: 1px solid rgba(255,255,255,0.1);
+      color: var(--text);
+    }
+
+    @keyframes floatIn {
+      from { opacity: 0; transform: translateY(8px); }
+      to { opacity: 1; transform: translateY(0); }
+    }
+
+    @media (max-width: 1320px) {
+      .topbar,
+      .hero-inner,
+      .preview-body {
+        grid-template-columns: 1fr;
+      }
+
+      .toolbar-actions {
+        justify-content: flex-start;
+      }
+
+      .hero-stats {
+        justify-self: stretch;
+        width: 100%;
+      }
+
+      .preview-side {
+        border-left: 0;
+        border-top: 1px solid rgba(255,255,255,0.08);
+      }
+    }
+
+    @media (max-width: 1100px) {
+      .waterfall-grid { grid-template-columns: repeat(3, minmax(0, 1fr)); }
+    }
+
+    @media (max-width: 860px) {
+      .page { width: min(100vw - 16px, 1560px); }
+      .waterfall-grid { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+      .topbar { padding: 14px; }
+    }
+
+    @media (max-width: 640px) {
+      .waterfall-grid { grid-template-columns: 1fr; }
+      .hero h1 { max-width: none; }
+      .menu-links, .filter-tags, .toolbar-actions { gap: 8px; }
+      .menu-link, .filter-tag, .tool-btn { padding: 9px 11px; }
+      .preview-stage { min-height: 420px; }
+    }
+  </style>
+</head>
+<body data-page-mode="generation-record">
+  <div class="page">
+    <header class="topbar">
+        <div class="topbar-section">
+          <div class="menu-links" id="menuLinks">
+            <button class="menu-link active" data-mode="aplus">A+详情页生成</button>
+            <button class="menu-link" data-mode="fashion">服饰穿戴图生成</button>
+            <button class="menu-link" data-mode="suite">商品套图生成</button>
+          </div>
+        </div>
+
+        <div class="topbar-section">
+          <div class="filter-tags" id="filterTags">
+            <button class="filter-tag active" data-filter="all">所有图片</button>
+            <button class="filter-tag" data-filter="favorite">我的收藏</button>
+          </div>
+        </div>
+
+        <div class="topbar-section">
+          <div class="toolbar-actions">
+            <span class="selection-status" id="selectionStatus">已选择 <strong>0</strong> 项内容</span>
+            <button class="tool-btn danger disabled" id="deleteBtn" disabled>删除</button>
+            <button class="tool-btn disabled" id="downloadBtn" disabled>下载</button>
+            <button class="tool-btn disabled" id="publishBtn" disabled>发布</button>
+            <button class="tool-btn disabled" id="favoriteBtn" disabled>收藏</button>
+            <button class="tool-btn disabled" id="clearBtn" disabled>取消选择</button>
+          </div>
+        </div>
+      </header>
+
+    <main class="timeline-block" id="timelineBlock"></main>
+  </div>
+
+  <div class="range-overlay" id="rangeOverlay">
+    <div class="range-box" id="rangeBox"></div>
+  </div>
+
+  <div class="preview-modal" id="previewModal" aria-hidden="true">
+    <div class="preview-card">
+      <div class="preview-head">
+        <div>
+          <strong id="previewTitle">图片预览</strong><br>
+          <span id="previewSubTitle">COS 直链预览</span>
+        </div>
+        <button class="tool-btn" id="closePreviewBtn">关闭</button>
+      </div>
+      <div class="preview-body">
+        <div class="preview-stage">
+          <div class="preview-frame" id="previewFrame"></div>
+        </div>
+        <aside class="preview-side">
+          <div class="side-card">
+            <h4>图片信息</h4>
+            <p id="previewInfo">支持查看标签、分类、日期和来源信息。</p>
+          </div>
+          <div class="side-card">
+            <h4>标签</h4>
+            <p id="previewTags">六并发复测 #1/2/3</p>
+          </div>
+          <div class="side-card">
+            <h4>来源</h4>
+            <p id="previewSource">COS / generated</p>
+          </div>
+          <div class="preview-actions">
+            <button class="preview-btn primary" id="previewDownloadBtn">下载当前图片</button>
+            <button class="preview-btn ghost" id="previewSelectBtn">选择 / 取消选择</button>
+          </div>
+        </aside>
+      </div>
+    </div>
+  </div>
+
+  <script>
+    const state = {
+      mode: 'aplus',
+      filter: 'all',
+      selected: new Set(),
+      previewId: null,
+      sourceReady: false,
+      loadingMore: false,
+      offset: 0,
+      limit: 50,
+      hasMore: false,
+      visibleDays: 5,
+      dayStep: 5,
+      totalDays: 0,
+    };
+
+    const timelineBlock = document.getElementById('timelineBlock');
+    const selectionStatus = document.getElementById('selectionStatus');
+    const deleteBtn = document.getElementById('deleteBtn');
+    const downloadBtn = document.getElementById('downloadBtn');
+    const publishBtn = document.getElementById('publishBtn');
+    const favoriteBtn = document.getElementById('favoriteBtn');
+    const clearBtn = document.getElementById('clearBtn');
+    const previewModal = document.getElementById('previewModal');
+    const previewTitle = document.getElementById('previewTitle');
+    const previewSubTitle = document.getElementById('previewSubTitle');
+    const previewInfo = document.getElementById('previewInfo');
+    const previewTags = document.getElementById('previewTags');
+    const previewSource = document.getElementById('previewSource');
+    const previewFrame = document.getElementById('previewFrame');
+    const rangeOverlay = document.getElementById('rangeOverlay');
+    const rangeBox = document.getElementById('rangeBox');
+    const loadMoreBar = document.createElement('div');
+    loadMoreBar.className = 'load-more-bar';
+    loadMoreBar.innerHTML = '<button class="tool-btn" id="loadMoreBtn">加载更多</button>';
+    timelineBlock.parentNode.appendChild(loadMoreBar);
+    const loadMoreBtn = loadMoreBar.querySelector('#loadMoreBtn');
+
+    function getTaskImages(task) {
+      const result = task?.result || {};
+      const images = [];
+      const pools = [result.images, result.reference_images, result.items, result.outputs];
+      pools.forEach((pool) => {
+        if (!Array.isArray(pool)) return;
+        pool.forEach((image, index) => {
+          const url = image?.url || image?.image_url || image?.cos_url || image?.src || image?.href || image?.download_url || '';
+          if (!url) return;
+          images.push({
+            id: image?.id || image?.key || `${task.task_id}-image-${images.length + index}`,
+            url,
+            title: image?.title || image?.label || task.details || task.mode || '历史图片',
+            tags: image?.tags || [],
+          });
+        });
+      });
+      return images;
+    }
+
+    function toGalleryGroups(tasks) {
+      const sortedTasks = [...tasks].sort((a, b) => new Date(b.created_at || 0) - new Date(a.created_at || 0));
+      const bucket = new Map();
+      sortedTasks.forEach((task) => {
+        const createdAt = task.created_at ? new Date(task.created_at) : null;
+        const dateKey = createdAt && !Number.isNaN(createdAt.getTime()) ? createdAt.toISOString().slice(0, 10) : 'unknown';
+        const label = dateKey === 'unknown' ? '未知日期' : `${createdAt.getMonth() + 1}月${createdAt.getDate()}日`;
+        if (!bucket.has(dateKey)) {
+          bucket.set(dateKey, { date: dateKey, label, items: [] });
+        }
+        const taskImages = getTaskImages(task);
+        const imageItems = taskImages.length ? taskImages : [{ id: `${task.task_id}-task`, url: '', title: task.details || task.mode || '历史记录', tags: [] }];
+        imageItems.forEach((image, index) => {
+          bucket.get(dateKey).items.push({
+            id: `${task.task_id}-${index}`,
+            title: image.title || task.details || task.mode || '历史记录',
+            tags: [...(image.tags || []), task.mode || 'history', task.status || 'pending'],
+            source: image.url ? 'COS' : '任务记录',
+            kind: task.status === 'succeeded' ? 'generated' : 'reference',
+            favorite: false,
+            imageUrl: image.url,
+            task,
+          });
+        });
+      });
+      return [...bucket.values()].sort((a, b) => b.date.localeCompare(a.date));
+    }
+
+    let galleryData = [];
+
+    async function ensureServerSession() {
+      if (!window.__sharedTopbarSyncServerSession) return;
+      try {
+        await window.__sharedTopbarSyncServerSession();
+      } catch (error) {
+      }
+    }
+
+    async function loadHistoryData(reset = false) {
+      if (state.loadingMore) return;
+      state.loadingMore = true;
+      updateLoadMoreState();
+      if (reset) {
+        state.offset = 0;
+        state.hasMore = false;
+        state.visibleDays = 5;
+        galleryData = [];
+      }
+      await ensureServerSession();
+      const response = await fetch(`/api/generation-tasks?limit=${state.limit}&offset=${state.offset}`, { credentials: 'same-origin' });
+      const payload = await response.json();
+      if (!response.ok || !payload.success) {
+        state.loadingMore = false;
+        updateLoadMoreState();
+        throw new Error(payload.error || '读取历史生成数据失败');
+      }
+      const nextGroups = toGalleryGroups(payload.tasks || []);
+      const merged = new Map();
+      [...galleryData, ...nextGroups].forEach((group) => {
+        if (!merged.has(group.date)) {
+          merged.set(group.date, { date: group.date, label: group.label, items: [] });
+        }
+        const current = merged.get(group.date);
+        group.items.forEach((item) => {
+          if (!current.items.some((existing) => existing.id === item.id)) {
+            current.items.push(item);
+          }
+        });
+      });
+      galleryData = [...merged.values()].sort((a, b) => b.date.localeCompare(a.date));
+      state.totalDays = galleryData.length;
+      state.offset += payload.tasks ? payload.tasks.length : 0;
+      state.hasMore = (payload.tasks || []).length === state.limit || state.visibleDays < state.totalDays;
+      state.sourceReady = true;
+      state.loadingMore = false;
+      renderTimeline();
+      renderTopbarState();
+      updateLoadMoreState();
+    }
+
+    function updateLoadMoreState() {
+      if (!loadMoreBtn) return;
+      const canRevealMoreDays = state.visibleDays < state.totalDays;
+      loadMoreBtn.disabled = state.loadingMore || (!state.hasMore && !canRevealMoreDays);
+      loadMoreBtn.textContent = state.loadingMore ? '加载中...' : ((state.hasMore || canRevealMoreDays) ? '加载更多' : '没有更多了');
+      loadMoreBar.style.display = state.sourceReady ? 'flex' : 'none';
+    }
+
+    function getAllItems() {
+      return galleryData.flatMap((group) => group.items.map((item) => ({ ...item, date: group.date, dateLabel: group.label })));
+    }
+
+    function getVisibleItems() {
+      const items = getAllItems();
+      if (state.filter === 'favorite') return items.filter((item) => item.favorite);
+      return items;
+    }
+
+    function getItemById(id) {
+      return getAllItems().find((item) => item.id === id);
+    }
+
+    function randomHeight(id) {
+      const seed = id.split('').reduce((acc, ch) => acc + ch.charCodeAt(0), 0);
+      return 220 + (seed % 110);
+    }
+
+    function buildThumbStyle(item) {
+      if (item.imageUrl) {
+        return `background-image:url('${item.imageUrl.replace(/'/g, '%27')}'); background-size:cover; background-position:center;`;
+      }
+      const hue = (item.id.split('').reduce((acc, ch) => acc + ch.charCodeAt(0), 0) * 17) % 360;
+      const angle = (item.id.charCodeAt(0) % 2 === 0 ? 145 : 160);
+      return `background: linear-gradient(${angle}deg, hsla(${hue}, 70%, 78%, 0.9), hsla(${(hue + 32) % 360}, 78%, 92%, 0.9));`;
+    }
+
+    function renderTopbarState() {
+      const count = state.selected.size;
+      selectionStatus.innerHTML = `已选择 <strong>${count}</strong> 项内容`;
+      const hasSelection = count > 0;
+      [deleteBtn, downloadBtn, publishBtn, favoriteBtn, clearBtn].forEach((btn) => {
+        btn.disabled = !hasSelection;
+        btn.classList.toggle('disabled', !hasSelection);
+      });
+      deleteBtn.classList.toggle('active', hasSelection);
+      downloadBtn.classList.toggle('active', hasSelection);
+      publishBtn.classList.toggle('active', hasSelection);
+      favoriteBtn.classList.toggle('active', hasSelection);
+      clearBtn.classList.toggle('active', hasSelection);
+    }
+
+    function renderTimeline() {
+      const visibleItems = getVisibleItems();
+      const visibleDates = new Set(galleryData.slice(0, state.visibleDays).map((group) => group.date));
+      const groupedVisible = galleryData
+        .filter((group) => visibleDates.has(group.date))
+        .map((group) => ({
+          ...group,
+          items: group.items.filter((item) => visibleItems.some((visible) => visible.id === item.id)),
+        }))
+        .filter((group) => group.items.length > 0);
+
+      if (!groupedVisible.length) {
+        timelineBlock.innerHTML = '<div style="color:#000;padding:40px 0;">暂无历史生成记录。请先在生成页发起一次真实生成，或确认当前登录账号是否一致。</div>';
+        return;
+      }
+
+      timelineBlock.innerHTML = groupedVisible.map((group) => `
+        <section class="timeline-group" data-group-date="${group.date}">
+          <div class="group-head">
+            <div>
+              <h2>${group.label}</h2>
+            </div>
+          </div>
+          <div class="waterfall-grid">
+            ${group.items.map((item, itemIndex) => renderCard(item, itemIndex)).join('')}
+          </div>
+        </section>
+      `).join('');
+
+      bindCardEvents();
+      syncSelectionUI();
+    }
+
+    function renderCard(item, itemIndex) {
+      const selected = state.selected.has(item.id) ? 'selected' : '';
+      const previewing = state.previewId === item.id ? 'previewing' : '';
+      const delay = itemIndex * 35;
+      return `
+        <article class="image-card ${selected} ${previewing}" data-id="${item.id}" data-date="${item.date}" data-favorite="${item.favorite ? '1' : '0'}" style="animation-delay:${delay}ms;">
+          <span class="select-box">✓</span>
+          <div class="thumb" style="${buildThumbStyle(item)}"></div>
+        </article>
+      `;
+    }
+
+    function bindCardEvents() {
+      document.querySelectorAll('.image-card').forEach((card) => {
+        const id = card.dataset.id;
+        card.addEventListener('click', (event) => {
+          event.preventDefault();
+          event.stopPropagation();
+        });
+      });
+    }
+
+    function syncSelectionUI() {
+      document.querySelectorAll('.image-card').forEach((card) => {
+        card.classList.toggle('selected', state.selected.has(card.dataset.id));
+      });
+    }
+
+    function toggleSelect(id) {
+      if (state.selected.has(id)) {
+        state.selected.delete(id);
+      } else {
+        state.selected.add(id);
+      }
+      renderTopbarState();
+      syncSelectionUI();
+    }
+
+    function openPreview(id) {
+      state.previewId = id;
+      const item = getItemById(id);
+      if (!item) return;
+      previewTitle.textContent = item.title;
+      previewSubTitle.textContent = `${item.dateLabel} · ${item.kind === 'generated' ? '生成图' : '参考图'}`;
+      previewInfo.textContent = `日期：${item.dateLabel}，来源：${item.source}，当前标签数：${item.tags.length}`;
+      previewTags.textContent = item.tags.join(' / ');
+      previewSource.textContent = `${item.source} / ${item.kind}`;
+      previewModal.classList.add('open');
+      previewModal.setAttribute('aria-hidden', 'false');
+      renderPreview();
+    }
+
+    function closePreview() {
+      previewModal.classList.remove('open');
+      previewModal.setAttribute('aria-hidden', 'true');
+      state.previewId = null;
+    }
+
+    function renderPreview() {
+      const item = state.previewId ? getItemById(state.previewId) : null;
+      if (!item) return;
+      if (item.imageUrl) {
+        previewFrame.style.background = `url('${item.imageUrl.replace(/'/g, '%27')}') center / contain no-repeat, #fff`;
+        return;
+      }
+      previewFrame.style.background = `
+        linear-gradient(160deg, rgba(126,224,195,0.22), rgba(125,164,255,0.22)),
+        radial-gradient(circle at top, rgba(255,255,255,0.28), transparent 30%)
+      `;
+    }
+
+    function setMode(mode) {
+      state.mode = mode;
+      document.querySelectorAll('[data-mode]').forEach((btn) => btn.classList.toggle('active', btn.dataset.mode === mode));
+      const labels = {
+        aplus: 'A+详情页生成',
+        fashion: '服饰穿戴图生成',
+        suite: '商品套图生成',
+      };
+      document.querySelector('.hero h1').textContent = `${labels[mode]} 的图片时间线。`;
+    }
+
+    function setFilter(filter) {
+      state.filter = filter;
+      document.querySelectorAll('[data-filter]').forEach((btn) => btn.classList.toggle('active', btn.dataset.filter === filter));
+      renderTimeline();
+    }
+
+    document.querySelectorAll('[data-filter]').forEach((btn) => {
+      btn.classList.toggle('active', btn.dataset.filter === 'all');
+    });
+
+    function getSelectedIds() {
+      return [...state.selected];
+    }
+
+    function clearSelection() {
+      state.selected.clear();
+      renderTopbarState();
+      syncSelectionUI();
+    }
+
+    function selectInRange(startId, endId) {
+      const visibleIds = getVisibleItems().map((item) => item.id);
+      const startIndex = visibleIds.indexOf(startId);
+      const endIndex = visibleIds.indexOf(endId);
+      if (startIndex < 0 || endIndex < 0) return;
+      const [from, to] = startIndex < endIndex ? [startIndex, endIndex] : [endIndex, startIndex];
+      visibleIds.slice(from, to + 1).forEach((id) => state.selected.add(id));
+      renderTopbarState();
+      syncSelectionUI();
+    }
+
+    document.getElementById('menuLinks').addEventListener('click', (event) => {
+      const btn = event.target.closest('[data-mode]');
+      if (!btn) return;
+      setMode(btn.dataset.mode);
+    });
+
+    document.getElementById('filterTags').addEventListener('click', (event) => {
+      const btn = event.target.closest('[data-filter]');
+      if (!btn) return;
+      setFilter(btn.dataset.filter);
+    });
+
+    deleteBtn.addEventListener('click', () => {
+      if (!state.selected.size) return;
+      const selected = getSelectedIds();
+      selected.forEach((id) => state.selected.delete(id));
+      renderTopbarState();
+      syncSelectionUI();
+      alert(`已删除 ${selected.length} 项（占位逻辑）`);
+    });
+
+    downloadBtn.addEventListener('click', () => {
+      if (!state.selected.size) return;
+      alert(`已触发 ${state.selected.size} 项下载（占位逻辑）`);
+    });
+
+    publishBtn.addEventListener('click', () => {
+      if (!state.selected.size) return;
+      alert(`已触发 ${state.selected.size} 项发布（占位逻辑）`);
+    });
+
+    favoriteBtn.addEventListener('click', () => {
+      if (!state.selected.size) return;
+      alert(`已触发 ${state.selected.size} 项收藏（占位逻辑）`);
+    });
+
+    clearBtn.addEventListener('click', clearSelection);
+    loadMoreBtn.addEventListener('click', () => {
+      if (state.loadingMore) return;
+      if (state.visibleDays < state.totalDays) {
+        state.visibleDays += state.dayStep;
+        renderTimeline();
+        updateLoadMoreState();
+        return;
+      }
+      if (!state.hasMore) return;
+      loadHistoryData(false).catch((error) => {
+        console.error(error);
+        alert('加载更多失败');
+      });
+    });
+
+    document.getElementById('closePreviewBtn').addEventListener('click', closePreview);
+    document.getElementById('previewDownloadBtn').addEventListener('click', () => {
+      if (!state.previewId) return;
+      alert('当前图片下载（占位逻辑）');
+    });
+    document.getElementById('previewSelectBtn').addEventListener('click', () => {
+      if (!state.previewId) return;
+      toggleSelect(state.previewId);
+    });
+    previewModal.addEventListener('click', (event) => {
+      if (event.target === previewModal) closePreview();
+    });
+
+    let dragState = null;
+    let dragTargetId = null;
+    let dragCandidateIds = [];
+    let dragActivated = false;
+    const DRAG_THRESHOLD = 5;
+
+    document.addEventListener('mousedown', (event) => {
+      const card = event.target.closest('.image-card');
+      const isLeftButton = event.button === 0;
+      if (!isLeftButton) return;
+      if (!card) {
+        dragState = {
+          x: event.clientX,
+          y: event.clientY,
+        };
+        dragTargetId = null;
+        dragCandidateIds = [];
+        dragActivated = false;
+        event.preventDefault();
+        return;
+      }
+      dragState = {
+        x: event.clientX,
+        y: event.clientY,
+      };
+      dragTargetId = card.dataset.id;
+      dragCandidateIds = [dragTargetId];
+      dragActivated = false;
+      event.preventDefault();
+    });
+
+    document.addEventListener('mousemove', (event) => {
+      if (!dragState) return;
+      const deltaX = Math.abs(event.clientX - dragState.x);
+      const deltaY = Math.abs(event.clientY - dragState.y);
+      const movedEnough = deltaX >= DRAG_THRESHOLD || deltaY >= DRAG_THRESHOLD;
+      if (!dragActivated && !movedEnough) return;
+      if (!dragActivated) {
+        dragActivated = true;
+        rangeOverlay.classList.add('active');
+      }
+      const left = Math.min(dragState.x, event.clientX);
+      const top = Math.min(dragState.y, event.clientY);
+      const width = Math.abs(event.clientX - dragState.x);
+      const height = Math.abs(event.clientY - dragState.y);
+      rangeBox.style.left = `${left}px`;
+      rangeBox.style.top = `${top}px`;
+      rangeBox.style.width = `${width}px`;
+      rangeBox.style.height = `${height}px`;
+
+      const rect = { left, top, right: left + width, bottom: top + height };
+      dragCandidateIds = [];
+      document.querySelectorAll('.image-card').forEach((card) => {
+        const cardRect = card.getBoundingClientRect();
+        const overlap = !(cardRect.right < rect.left || cardRect.left > rect.right || cardRect.bottom < rect.top || cardRect.top > rect.bottom);
+        card.classList.toggle('drag-over', overlap);
+        if (overlap) dragCandidateIds.push(card.dataset.id);
+      });
+    });
+
+    document.addEventListener('mouseup', () => {
+      if (!dragState) return;
+      if (!dragActivated) {
+        if (dragTargetId) {
+          toggleSelect(dragTargetId);
+        }
+        dragState = null;
+        dragTargetId = null;
+        dragCandidateIds = [];
+        return;
+      }
+      dragState = null;
+      dragActivated = false;
+      rangeOverlay.classList.remove('active');
+      document.querySelectorAll('.image-card').forEach((card) => card.classList.remove('drag-over'));
+      const selectedIds = new Set(dragCandidateIds);
+      const onlySelected = dragCandidateIds.length > 0 && dragCandidateIds.every((id) => state.selected.has(id));
+      if (onlySelected) {
+        dragCandidateIds.forEach((id) => state.selected.delete(id));
+      } else {
+        dragCandidateIds.forEach((id) => state.selected.add(id));
+      }
+      dragCandidateIds = [];
+      renderTopbarState();
+      syncSelectionUI();
+    });
+
+    setMode('aplus');
+    state.filter = 'all';
+    document.querySelectorAll('[data-filter]').forEach((btn) => btn.classList.toggle('active', btn.dataset.filter === 'all'));
+    loadHistoryData(true).catch((error) => {
+      console.error(error);
+      timelineBlock.innerHTML = '<div style="color:#000">读取历史生成数据失败</div>';
+    });
+  </script>
+</body>
+</html>
