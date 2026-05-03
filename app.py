@@ -937,6 +937,9 @@ def run_background_generation_task(task_id: str, builder, timeout: int = 600, ti
     except Exception as exc:
         logger.exception('Generation task failed: %s', task_id)
         fail_generation_task_with_refund(task_id, f'服务端异常：{exc}', str(exc))
+    finally:
+        import gc
+        gc.collect()
 
 
 def update_generation_task_partial_result(task_id: str, result_patch: dict | None = None, stage: str = '', extra: dict | None = None) -> dict | None:
@@ -3217,13 +3220,12 @@ def build_generation_result_from_payload(form_payload: dict, file_payloads: dict
                 if not generated_items:
                     continue
                 image_bytes, mime_type = decode_generated_image(generated_items[0])
-                generated_payload = {
-                    'filename': f'fashion-look-{index:02d}.png',
-                    'mime_type': mime_type,
-                    'bytes': image_bytes,
-                    'base64': base64.b64encode(image_bytes).decode('utf-8'),
-                    'data_url': f'data:{mime_type};base64,{base64.b64encode(image_bytes).decode("utf-8")}',
-                }
+                from image_utils import LazyImagePayload
+                generated_payload = LazyImagePayload(
+                    filename=f'fashion-look-{index:02d}.png',
+                    mime_type=mime_type,
+                    content=image_bytes,
+                )
                 verification = verify_fashion_generated_output(
                     generated_payload,
                     selected_model_payload,

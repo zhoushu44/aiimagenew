@@ -4,7 +4,9 @@ import io
 import json
 import logging
 import re
+import threading
 import time
+from pathlib import Path
 
 import requests
 from openai import OpenAI
@@ -428,22 +430,47 @@ def get_mode3_image_edit_size(image_size_ratio: str = '') -> str:
     return '2048x2048'
 
 
+_BLANK_CANVAS_DIR = Path(__file__).resolve().parent.parent / 'static' / 'blank'
+_BLANK_CANVAS_CACHE: dict[str, 'LazyImagePayload'] = {}
+_BLANK_CANVAS_CACHE_LOCK = threading.Lock()
+
+
+def _get_or_create_blank_canvas(size_key: str, width: int, height: int):
+    from image_utils import LazyImagePayload
+    with _BLANK_CANVAS_CACHE_LOCK:
+        cached = _BLANK_CANVAS_CACHE.get(size_key)
+        if cached is not None:
+            return cached
+        file_path = _BLANK_CANVAS_DIR / f'blank-{size_key}.png'
+        if file_path.exists():
+            image_bytes = file_path.read_bytes()
+        else:
+            image = Image.new('RGB', (width, height), (255, 255, 255))
+            buffer = io.BytesIO()
+            image.save(buffer, format='PNG', optimize=True)
+            image_bytes = buffer.getvalue()
+            del image
+            del buffer
+        payload = LazyImagePayload(
+            filename=f'blank-{size_key}.png',
+            mime_type='image/png',
+            content=image_bytes,
+        )
+        _BLANK_CANVAS_CACHE[size_key] = payload
+        return payload
+
+
+def _create_blank_canvas_payload(prefix: str, width: int, height: int):
+    return _get_or_create_blank_canvas(f'{width}x{height}', width, height)
+
+
 def create_mode1_blank_canvas_payload(image_size_ratio: str = ''):
     size = _resolve_image_size(image_size_ratio)
     width, height = 2048, 2048
     match = re.fullmatch(r'(\d+)x(\d+)', size)
     if match:
         width, height = int(match.group(1)), int(match.group(2))
-    image = Image.new('RGB', (width, height), (255, 255, 255))
-    buffer = io.BytesIO()
-    image.save(buffer, format='PNG')
-    image_bytes = buffer.getvalue()
-    return {
-        'filename': f'mode1-blank-{width}x{height}.png',
-        'mime_type': 'image/png',
-        'bytes': image_bytes,
-        'data_url': f'data:image/png;base64,{base64.b64encode(image_bytes).decode("ascii")}',
-    }
+    return _create_blank_canvas_payload('mode1', width, height)
 
 
 def create_mode2_blank_canvas_payload(ratio: str = '', resolution: str = ''):
@@ -452,16 +479,7 @@ def create_mode2_blank_canvas_payload(ratio: str = '', resolution: str = ''):
     match = re.fullmatch(r'(\d+)x(\d+)', size)
     if match:
         width, height = int(match.group(1)), int(match.group(2))
-    image = Image.new('RGB', (width, height), (255, 255, 255))
-    buffer = io.BytesIO()
-    image.save(buffer, format='PNG')
-    image_bytes = buffer.getvalue()
-    return {
-        'filename': f'mode2-blank-{width}x{height}.png',
-        'mime_type': 'image/png',
-        'bytes': image_bytes,
-        'data_url': f'data:image/png;base64,{base64.b64encode(image_bytes).decode("ascii")}',
-    }
+    return _create_blank_canvas_payload('mode2', width, height)
 
 
 def create_mode3_blank_canvas_payload(image_size_ratio: str = ''):
@@ -470,16 +488,7 @@ def create_mode3_blank_canvas_payload(image_size_ratio: str = ''):
     match = re.fullmatch(r'(\d+)x(\d+)', size)
     if match:
         width, height = int(match.group(1)), int(match.group(2))
-    image = Image.new('RGB', (width, height), (255, 255, 255))
-    buffer = io.BytesIO()
-    image.save(buffer, format='PNG')
-    image_bytes = buffer.getvalue()
-    return {
-        'filename': f'mode3-blank-{width}x{height}.png',
-        'mime_type': 'image/png',
-        'bytes': image_bytes,
-        'data_url': f'data:image/png;base64,{base64.b64encode(image_bytes).decode("ascii")}',
-    }
+    return _create_blank_canvas_payload('mode3', width, height)
 
 
 def build_mode1_reference_anchor_prompt(reference_count: int) -> str:

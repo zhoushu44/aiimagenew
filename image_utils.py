@@ -186,25 +186,56 @@ def file_to_data_url(file_storage) -> str:
     return f'data:{mime_type};base64,{encoded}'
 
 
+class LazyImagePayload:
+    __slots__ = ('filename', 'mime_type', '_bytes', '_base64', '_data_url', 'source_url')
+
+    def __init__(self, filename: str, mime_type: str, content: bytes):
+        self.filename = filename
+        self.mime_type = mime_type
+        self._bytes = content
+        self._base64 = None
+        self._data_url = None
+
+    @property
+    def bytes(self) -> bytes:
+        return self._bytes
+
+    @property
+    def base64(self) -> str:
+        if self._base64 is None:
+            self._base64 = base64.b64encode(self._bytes).decode('utf-8')
+        return self._base64
+
+    @property
+    def data_url(self) -> str:
+        if self._data_url is None:
+            self._data_url = f'data:{self.mime_type};base64,{self.base64}'
+        return self._data_url
+
+    def get(self, key, default=None):
+        return getattr(self, key, default)
+
+    def __getitem__(self, key):
+        try:
+            return getattr(self, key)
+        except AttributeError:
+            raise KeyError(key)
+
+
 def create_image_payload(file_storage):
     content = file_storage.read()
     mime_type = validate_image_file(file_storage, content)
     filename = file_storage.filename or 'image'
-    encoded = base64.b64encode(content).decode('utf-8')
-    return {
-        'filename': filename,
-        'mime_type': mime_type,
-        'bytes': content,
-        'base64': encoded,
-        'data_url': f'data:{mime_type};base64,{encoded}',
-    }
+    return LazyImagePayload(filename=filename, mime_type=mime_type, content=content)
 
 
 def build_multimodal_content(prompt_text: str, image_files):
     content = [{'type': 'text', 'text': prompt_text}]
 
     for image_file in image_files:
-        if isinstance(image_file, dict):
+        if hasattr(image_file, 'data_url'):
+            image_url = image_file.data_url
+        elif isinstance(image_file, dict):
             image_url = image_file.get('data_url')
         else:
             image_url = file_to_data_url(image_file)
@@ -290,15 +321,9 @@ def _fetch_url_to_image_payload(image_url: str):
         extension = guess_extension(mime_type)
         filename = f'{Path(filename).stem or "reference-image"}{extension}'
 
-    encoded = base64.b64encode(content).decode('utf-8')
-    return {
-        'filename': filename,
-        'mime_type': mime_type,
-        'bytes': content,
-        'base64': encoded,
-        'data_url': f'data:{mime_type};base64,{encoded}',
-        'source_url': image_url,
-    }
+    payload = LazyImagePayload(filename=filename, mime_type=mime_type, content=content)
+    payload.source_url = image_url
+    return payload
 
 
 # ---------------------------------------------------------------------------

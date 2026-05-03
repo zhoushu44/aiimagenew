@@ -1,5 +1,42 @@
 # 版本说明 (Changelog)
 
+## v10.3 (2026-05-03)
+
+### OOM 修复与内存优化（Critical）
+
+- **LazyImagePayload**：新增延迟加载图片数据类，base64/data_url 仅在首次访问时计算，单张 8MB 图片内存从 ~30MB 降至 ~8MB（节省 73%）
+- **Fashion 生成结果**：改用 `LazyImagePayload`，消除 base64 双重编码
+- **`build_multimodal_content`**：优先检测 `data_url` 属性，兼容 `LazyImagePayload` 和 dict
+- **`gc.collect()`**：生成任务完成后 `finally` 块主动回收内存
+- **实测**：峰值内存从 ~2.2GB 降至 ~320MB，降低约 84%，彻底消除 Worker 被 SIGKILL 的问题
+
+### 白底图预生成
+
+- 4 种尺寸白底图预生成到 `static/blank/` 目录（2048x2048、1728x2304、1440x2560、2560x1440）
+- 运行时优先从磁盘读取（10ms），缓存命中 0.09ms，PIL 生成仅作兜底（110ms）
+- 线程安全缓存：double-checked locking，跨 mode1/2/3 共享同一缓存实例
+
+### 8 核 16G 服务器配置
+
+- Gunicorn Workers：2 → **8**（匹配 8 核 CPU）
+- `--max-requests`：50 → **500**（16GB 内存充裕，减少重启频率）
+- `--max-requests-jitter`：10 → **50**
+- `GENERATION_TASK_WORKERS`：2 → **3**（8 Worker × 3 线程 = 24 并发生成任务）
+- 支持 50-100 人同时使用
+
+### Ark API 超时优化
+
+- `call_chat_completion` 默认超时 60s → **120s**，减少因超时导致的 fallback
+
+### Docker
+
+- 镜像标签 10.2 → 10.3
+- GitHub Action 自动打 `10.3` + `latest` 双标签
+- 推送仍由 GitHub Action 自动完成，本地不执行 Docker 推送操作
+- `.dockerignore` 继续排除 `.env` 和 `.env.*`
+
+***
+
 ## v10.2 (2026-05-03)
 
 ### AI 帮写性能优化：并发 + 先返回卖点

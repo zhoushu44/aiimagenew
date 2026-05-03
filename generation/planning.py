@@ -144,7 +144,7 @@ def get_suite_plan_timeout_seconds() -> int:
     return max(get_supabase_setting_int('SUITE_PLAN_TIMEOUT_SECONDS', get_optional_int_env('SUITE_PLAN_TIMEOUT_SECONDS', 180)), 60)
 
 
-def call_chat_completion(system_prompt: str, user_content, temperature: float = 0.7, timeout_seconds: int = 60):
+def call_chat_completion(system_prompt: str, user_content, temperature: float = 0.7, timeout_seconds: int = 120):
     primary_api_key = get_supabase_setting('OPENAI_API_KEY', get_env('OPENAI_API_KEY'))
     primary_base_url = get_supabase_setting('OPENAI_BASE_URL', get_env('OPENAI_BASE_URL'))
     primary_model = get_supabase_setting('OPENAI_MODEL', get_env('OPENAI_MODEL'))

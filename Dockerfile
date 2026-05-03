@@ -14,4 +14,4 @@ COPY . ./
 
 EXPOSE 5078
 
-CMD ["gunicorn", "-w", "4", "-b", "0.0.0.0:5078", "--timeout", "300", "--access-logfile", "-", "app:app"]
+CMD ["gunicorn", "-w", "8", "-b", "0.0.0.0:5078", "--timeout", "300", "--max-requests", "500", "--max-requests-jitter", "50", "--access-logfile", "-", "app:app"]
