@@ -317,8 +317,10 @@ document.addEventListener('DOMContentLoaded', () => {
     const STORAGE_KEY = `aiDesignState:${PAGE_MODE}`;
     const PENDING_GENERATION_POLL_INTERVAL = 1000;
     const PENDING_GENERATION_TIMEOUT = 12 * 60 * 1000;
+    const PENDING_GENERATION_MAX_STATUS_FAILURES = 3;
     let pendingGenerationTask = null;
     let pendingGenerationPollTimer = null;
+    let pendingGenerationPollFailureCount = 0;
     let isRestoringState = false;
 
     const escapeHtml = (value = '') => String(value)
@@ -1433,6 +1435,7 @@ document.addEventListener('DOMContentLoaded', () => {
 
     const completePendingGenerationTask = (task) => {
       stopGenerationProgress();
+      resetPendingGenerationPollState();
       const result = task?.result;
       if (!result || !Array.isArray(result.images)) {
         return false;
@@ -1486,6 +1489,10 @@ document.addEventListener('DOMContentLoaded', () => {
       }
     };
 
+    const resetPendingGenerationPollState = () => {
+      pendingGenerationPollFailureCount = 0;
+    };
+
     const pollPendingGenerationTask = async ({ immediate = false } = {}) => {
       stopPendingGenerationPolling();
       if (!pendingGenerationTask?.taskId) {
@@ -1496,6 +1503,7 @@ document.addEventListener('DOMContentLoaded', () => {
         const staleTask = pendingGenerationTask;
         stopPendingGenerationPolling();
         pendingGenerationTask = null;
+        resetPendingGenerationPollState();
         stopGenerationProgress();
         setResultStatus('生成任务等待超时，请重新发起生成；如已扣分但没有结果，请联系客服核查。', 'error');
         if (staleTask?.mode === 'fashion') {
@@ -1514,6 +1522,7 @@ document.addEventListener('DOMContentLoaded', () => {
         if (!response.ok || !result.success) {
           throw new Error(result.error || '生成任务状态查询失败');
         }
+        pendingGenerationPollFailureCount = 0;
         const task = result.task || {};
         markTaskTraceEvent(task, 'frontend_poll_received', {
           status: task.status || '',
@@ -1533,6 +1542,7 @@ document.addEventListener('DOMContentLoaded', () => {
           const refunded = Boolean(task.refunded);
           stopPendingGenerationPolling();
           pendingGenerationTask = null;
+          resetPendingGenerationPollState();
           resetResultState();
           if (task.mode === 'fashion') {
             syncFashionState({ fashionFlowStep: 'scene' });
@@ -1547,13 +1557,30 @@ document.addEventListener('DOMContentLoaded', () => {
         }
         setResultStatus(task.status === 'running' ? getCurrentModeConfig().imageProgress : '生成任务已提交，正在排队处理，请勿关闭页面。');
       } catch (error) {
-        setResultStatus(`正在等待生成任务完成，状态查询暂时失败：${error.message || error}`);
+        pendingGenerationPollFailureCount += 1;
+        const failureMessage = `正在等待生成任务完成，状态查询暂时失败：${error.message || error}`;
+        setResultStatus(pendingGenerationPollFailureCount >= PENDING_GENERATION_MAX_STATUS_FAILURES
+          ? `${failureMessage}；连续查询失败已自动停止，请稍后手动刷新页面或重新发起生成。`
+          : failureMessage);
+        if (pendingGenerationPollFailureCount >= PENDING_GENERATION_MAX_STATUS_FAILURES) {
+          stopPendingGenerationPolling();
+          pendingGenerationTask = null;
+          resetPendingGenerationPollState();
+          stopGenerationProgress();
+          if (generateBtn && currentMode !== 'fashion') {
+            generateBtn.disabled = false;
+            updateGenerateButtonLabel();
+          }
+          saveStateToLocalStorage();
+          return;
+        }
       }
       pendingGenerationPollTimer = window.setTimeout(() => pollPendingGenerationTask(), immediate ? 500 : PENDING_GENERATION_POLL_INTERVAL);
     };
 
     const savePendingGenerationTask = (taskId, spendRecord, mode = PAGE_MODE) => {
       startGenerationProgress();
+      resetPendingGenerationPollState();
       pendingGenerationTask = {
         taskId,
         mode,
@@ -3219,6 +3246,9 @@ document.addEventListener('DOMContentLoaded', () => {
 
     if (generateBtn) {
       generateBtn.addEventListener('click', async () => {
+        if (generateBtn.disabled || pendingGenerationTask?.taskId) {
+          return;
+        }
         if (currentMode === 'fashion') {
           const fashionState = getFashionSelectionState();
           applyFashionGenerateButtonState(fashionState);

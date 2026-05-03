@@ -625,18 +625,32 @@ def call_mode3_image_edit(client: OpenAI, prompt: str, image_payloads, image_siz
         len(files),
         base_url,
     )
-    response = requests.post(
-        request_url,
-        headers={'Authorization': f'Bearer {api_key}'},
-        data=data,
-        files=files,
-        timeout=get_mode3_timeout_seconds(),
-    )
+    try:
+        response = requests.post(
+            request_url,
+            headers={'Authorization': f'Bearer {api_key}'},
+            data=data,
+            files=files,
+            timeout=get_mode3_timeout_seconds(),
+        )
+    except Exception as exc:
+        log.exception('Mode3 image edit request failed before response: model=%s size=%s reference_count=%s base_url=%s error=%s', model, size, len(files), base_url, exc)
+        raise
     if response.status_code >= 400:
+        log.warning(
+            'Mode3 image edit response error: model=%s size=%s reference_count=%s base_url=%s status=%s body=%s',
+            model,
+            size,
+            len(files),
+            base_url,
+            response.status_code,
+            response.text[:500],
+        )
         raise ValueError(f'mode3 图生图接口错误 {response.status_code}：{response.text[:500]}')
     try:
         payload = response.json()
     except ValueError as exc:
+        log.warning('Mode3 image edit response json parse failed: model=%s size=%s reference_count=%s base_url=%s body=%s', model, size, len(files), base_url, response.text[:500])
         raise ValueError('mode3 图生图接口返回了无效 JSON') from exc
     return pick_generated_image_item(payload), model
 
@@ -665,10 +679,35 @@ def call_mode1_single_image_with_retry(prompt: str, image_payloads, image_size_r
             last_exc = exc
             should_retry = attempt < retry_attempts and is_retryable_mode1_error(exc)
             if not should_retry:
+                log.warning(
+                    'Mode1 single image failed without retry: attempt=%s/%s image_type=%s reference_count=%s plan_type=%s error=%s',
+                    attempt + 1,
+                    retry_attempts + 1,
+                    image_type or '',
+                    len(image_payloads or []),
+                    str((plan_item or {}).get('type') or ''),
+                    exc,
+                )
                 raise
             wait_seconds = retry_delay_seconds * (attempt + 1)
-            log.warning('Mode1 single image failed, retrying in %.2fs (%s/%s): %s', wait_seconds, attempt + 1, retry_attempts, exc)
+            log.warning(
+                'Mode1 single image failed, retrying in %.2fs (%s/%s): image_type=%s reference_count=%s plan_type=%s error=%s',
+                wait_seconds,
+                attempt + 1,
+                retry_attempts,
+                image_type or '',
+                len(image_payloads or []),
+                str((plan_item or {}).get('type') or ''),
+                exc,
+            )
             time.sleep(wait_seconds)
+    log.exception(
+        'Mode1 single image failed after retries: retry_attempts=%s image_type=%s reference_count=%s plan_type=%s',
+        retry_attempts,
+        image_type or '',
+        len(image_payloads or []),
+        str((plan_item or {}).get('type') or ''),
+    )
     raise last_exc
 
 
@@ -717,6 +756,7 @@ def call_mode1_images_parallel_with_partial_retry(prompt: str, image_payloads, m
 
     if len(generated_items) < target_count:
         error_text = '；'.join(failures[:3]) if failures else '未知错误'
+        log.warning('Mode1 parallel generation failed: image_type=%s reference_count=%s plan_type=%s success=%s/%s failures=%s', image_type or '', len(image_payloads or []), str((plan_item or {}).get('type') or ''), len(generated_items), target_count, error_text)
         raise ValueError(f'mode1 部分图片生成失败，已成功 {len(generated_items)}/{target_count}：{error_text}')
     return generated_items[:target_count]
 
@@ -739,10 +779,35 @@ def call_mode2_single_image_with_retry(prompt: str, image_payloads, image_size_r
             last_exc = exc
             should_retry = attempt < retry_attempts and is_retryable_mode2_error(exc)
             if not should_retry:
+                log.warning(
+                    'Mode2 single image failed without retry: attempt=%s/%s image_type=%s reference_count=%s plan_type=%s error=%s',
+                    attempt + 1,
+                    retry_attempts + 1,
+                    image_type or '',
+                    len(image_payloads or []),
+                    str((plan_item or {}).get('type') or ''),
+                    exc,
+                )
                 raise
             wait_seconds = retry_delay_seconds * (attempt + 1)
-            log.warning('Mode2 single image failed, retrying in %.2fs (%s/%s): %s', wait_seconds, attempt + 1, retry_attempts, exc)
+            log.warning(
+                'Mode2 single image failed, retrying in %.2fs (%s/%s): image_type=%s reference_count=%s plan_type=%s error=%s',
+                wait_seconds,
+                attempt + 1,
+                retry_attempts,
+                image_type or '',
+                len(image_payloads or []),
+                str((plan_item or {}).get('type') or ''),
+                exc,
+            )
             time.sleep(wait_seconds)
+    log.exception(
+        'Mode2 single image failed after retries: retry_attempts=%s image_type=%s reference_count=%s plan_type=%s',
+        retry_attempts,
+        image_type or '',
+        len(image_payloads or []),
+        str((plan_item or {}).get('type') or ''),
+    )
     raise last_exc
 
 
@@ -812,10 +877,35 @@ def call_mode3_single_image_with_retry(prompt: str, image_payloads, image_size_r
             last_exc = exc
             should_retry = attempt < retry_attempts and is_retryable_mode3_error(exc)
             if not should_retry:
+                log.warning(
+                    'Mode3 single image failed without retry: attempt=%s/%s image_type=%s reference_count=%s plan_type=%s error=%s',
+                    attempt + 1,
+                    retry_attempts + 1,
+                    image_type or '',
+                    len(image_payloads or []),
+                    str((plan_item or {}).get('type') or ''),
+                    exc,
+                )
                 raise
             wait_seconds = retry_delay_seconds * (attempt + 1)
-            log.warning('Mode3 single image failed, retrying in %.2fs (%s/%s): %s', wait_seconds, attempt + 1, retry_attempts, exc)
+            log.warning(
+                'Mode3 single image failed, retrying in %.2fs (%s/%s): image_type=%s reference_count=%s plan_type=%s error=%s',
+                wait_seconds,
+                attempt + 1,
+                retry_attempts,
+                image_type or '',
+                len(image_payloads or []),
+                str((plan_item or {}).get('type') or ''),
+                exc,
+            )
             time.sleep(wait_seconds)
+    log.exception(
+        'Mode3 single image failed after retries: retry_attempts=%s image_type=%s reference_count=%s plan_type=%s',
+        retry_attempts,
+        image_type or '',
+        len(image_payloads or []),
+        str((plan_item or {}).get('type') or ''),
+    )
     raise last_exc
 
 

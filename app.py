@@ -1124,7 +1124,7 @@ def process_success_payment(order_row: dict, callback_trade_no: str) -> dict:
     callback_payload = normalize_callback_payload()
     payment_method = str((callback_payload or {}).get('type') or '').strip() or str((order_row or {}).get('payment_method') or '').strip() or None
     patch_payload = {
-        'status': 'paid',
+        'status': 'success',
         'zpay_trade_no': str(callback_trade_no or '').strip() or None,
         'paid_at': datetime.now(timezone.utc).isoformat(),
         'payment_method': payment_method,
@@ -1821,6 +1821,10 @@ def pay_notify_api():
             logger.warning('ZPAY notify order not found: out_trade_no=%s payload=%s', out_trade_no, payload)
             return 'fail', 404
         if is_order_success(order_row):
+            existing_trade_no = get_payment_trade_no(order_row)
+            if existing_trade_no and callback_trade_no and existing_trade_no == callback_trade_no:
+                logger.warning('ZPAY notify duplicate success ignored: out_trade_no=%s trade_no=%s', out_trade_no, callback_trade_no)
+                return 'success', 200
             try:
                 grant_payment_points_once(order_row)
             except Exception:

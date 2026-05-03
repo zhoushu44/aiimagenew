@@ -375,27 +375,38 @@ def grant_payment_points_once(order_row: dict, _logger: logging.Logger | None = 
     user_id = str((order_row or {}).get('user_id') or '').strip()
     order_no = str((order_row or {}).get('order_no') or (order_row or {}).get('out_trade_no') or '').strip()
     package_id = str((order_row or {}).get('package_id') or (order_row or {}).get('product_id') or '').strip()
+    trade_no = str((order_row or {}).get('zpay_trade_no') or (order_row or {}).get('trade_no') or '').strip()
 
     from app import get_payment_points_amount
     points_amount = get_payment_points_amount(package_id)
     if not user_id or not order_no or points_amount <= 0:
         return None
-    existing_response = requests.get(
-        build_supabase_request_url('/rest/v1/user_points_transactions'),
-        headers=_build_supabase_service_headers(),
-        params={
-            'select': 'id',
-            'user_id': f'eq.{user_id}',
-            'transaction_type': 'eq.purchase',
-            'metadata': f"cs.{json.dumps({'order_no': order_no}, separators=(',', ':'), ensure_ascii=False)}",
-            'limit': '1',
-        },
-        timeout=20,
-    )
-    existing_response.raise_for_status()
-    existing_payload = existing_response.json()
-    if isinstance(existing_payload, list) and existing_payload:
-        return get_user_points_balance(user_id, _logger=log)
+    existing_conditions = [
+        {'key': 'user_id', 'value': f'eq.{user_id}'},
+        {'key': 'transaction_type', 'value': 'eq.purchase'},
+    ]
+    metadata_candidates = [
+        {'order_no': order_no},
+    ]
+    if trade_no:
+        metadata_candidates.append({'order_no': order_no, 'zpay_trade_no': trade_no})
+    for metadata in metadata_candidates:
+        existing_response = requests.get(
+            build_supabase_request_url('/rest/v1/user_points_transactions'),
+            headers=_build_supabase_service_headers(),
+            params={
+                'select': 'id',
+                'user_id': f'eq.{user_id}',
+                'transaction_type': 'eq.purchase',
+                'metadata': f"cs.{json.dumps(metadata, separators=(',', ':'), ensure_ascii=False)}",
+                'limit': '1',
+            },
+            timeout=20,
+        )
+        existing_response.raise_for_status()
+        existing_payload = existing_response.json()
+        if isinstance(existing_payload, list) and existing_payload:
+            return get_user_points_balance(user_id, _logger=log)
 
     from app import add_user_points
     return add_user_points(
@@ -407,7 +418,7 @@ def grant_payment_points_once(order_row: dict, _logger: logging.Logger | None = 
             'order_no': order_no,
             'package_id': package_id,
             'amount': str((order_row or {}).get('amount') or ''),
-            'zpay_trade_no': str((order_row or {}).get('zpay_trade_no') or (order_row or {}).get('trade_no') or ''),
+            'zpay_trade_no': trade_no,
         },
     )
 
