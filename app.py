@@ -97,7 +97,7 @@ from config import (
     SUPABASE_USER_PROFILES_TABLE, SUPABASE_POINTS_TABLE, SUPABASE_PAYMENTS_TABLE,
     SUPABASE_GENERATION_TASKS_TABLE, GENERATION_TASK_TTL_SECONDS,
     GENERATION_TASK_POLL_RETENTION_SECONDS, GENERATION_TASKS, GENERATION_TASKS_LOCK,
-    GENERATION_TASK_EXECUTOR, ZPAY_PID, ZPAY_KEY, ZPAY_GATEWAY, ZPAY_NOTIFY_URL,
+    GENERATION_TASK_CANCEL_EVENTS, GENERATION_TASK_EXECUTOR, ZPAY_PID, ZPAY_KEY, ZPAY_GATEWAY, ZPAY_NOTIFY_URL,
     ZPAY_RETURN_URL, ZPAY_DEFAULT_CHANNEL, ZPAY_SUCCESS_STATUSES, VIP_PLAN_CONFIG_TABLE,
     MAX_IMAGE_UPLOADS, ALLOWED_IMAGE_MIME_TYPES, ALLOWED_IMAGE_EXTENSIONS, IMAGE_SIGNATURES,
 )
@@ -723,6 +723,8 @@ def create_generation_task(user_id: str, mode: str, request_id: str = '', spend_
     }
     cache_generation_task(task)
     persist_generation_task(task)
+    with GENERATION_TASKS_LOCK:
+        GENERATION_TASK_CANCEL_EVENTS[task_id] = threading.Event()
     return serialize_generation_task(task)
 
 
@@ -747,10 +749,15 @@ def update_generation_task(task_id: str, **patch) -> dict | None:
     return snapshot
 
 
-def get_generation_task(task_id: str) -> dict | None:
+def get_generation_task(task_id: str, prefer_cache: bool = False) -> dict | None:
     normalized_task_id = str(task_id or '').strip()
     if not normalized_task_id:
         return None
+    if prefer_cache:
+        with GENERATION_TASKS_LOCK:
+            task = GENERATION_TASKS.get(normalized_task_id)
+            if task:
+                return dict(task)
     db_task = normalize_generation_task_row(fetch_generation_task_row(normalized_task_id))
     if db_task:
         cache_generation_task(db_task)
@@ -786,7 +793,7 @@ def serialize_generation_task(task: dict | None) -> dict:
 def _extract_history_image_url(image: dict) -> str:
     if not isinstance(image, dict):
         return ''
-    for key in ('thumb_url', 'thumbnail_url', 'image_url', 'url', 'cos_url', 'src', 'href', 'download_url'):
+    for key in ('image_url', 'url', 'cos_url', 'src', 'href', 'download_url', 'thumbnail_url', 'thumb_url'):
         value = str(image.get(key) or '').strip()
         if value:
             return value
@@ -816,7 +823,7 @@ def _build_history_thumb_url(image_url: str) -> str:
         return ''
     if 'aiimg.86969678.xyz' in normalized_url and 'imageMogr2/' not in normalized_url:
         separator = '&' if '?' in normalized_url else '?'
-        return f'{normalized_url}{separator}imageMogr2/thumbnail/360x360/format/webp'
+        return f'{normalized_url}{separator}imageMogr2/thumbnail/800x800/format/webp'
     return normalized_url
 
 
@@ -910,7 +917,7 @@ def serialize_generation_history_items(task: dict | None) -> list[dict]:
     return items
 
 
-def fail_generation_task_with_refund(task_id: str, error: str, details: str = ''):
+def fail_generation_task_with_refund(task_id: str, error: str, details: str = '', skip_refund: bool = False):
     failed_at = time.time()
     task = update_generation_task(
         task_id,
@@ -924,6 +931,9 @@ def fail_generation_task_with_refund(task_id: str, error: str, details: str = ''
         task = update_generation_task(task_id, **_build_task_trace_patch(task, 'task_failed', now_ts=failed_at, extra={'error': str(error or '生成失败')}))
         logger.warning('Generation task %s failed: mode=%s error=%s', task_id, (task or {}).get('mode') or '', str(error or '生成失败'))
     if not task:
+        return
+    if skip_refund:
+        update_generation_task(task_id, refund_error='任务已在执行中取消，积分不予返还')
         return
     spend_record = task.get('spend_record') if isinstance(task.get('spend_record'), dict) else None
     if not spend_record or bool(spend_record.get('skipped')) or int(spend_record.get('amount') or 0) <= 0:
@@ -988,8 +998,22 @@ def _run_with_timeout(fn, timeout: int, error_message: str):
     return result_container[0]
 
 
+def is_generation_task_cancelled(task_id: str) -> bool:
+    cancel_event = GENERATION_TASK_CANCEL_EVENTS.get(task_id)
+    return cancel_event is not None and cancel_event.is_set()
+
+
+def check_generation_task_cancelled(task_id: str) -> None:
+    if is_generation_task_cancelled(task_id):
+        raise RuntimeError('生成任务已取消')
+
+
 def run_background_generation_task(task_id: str, builder, timeout: int = 600, timeout_error: str = '生成任务执行超时（10分钟），请稍后重试'):
-    task = update_generation_task(task_id, status='running')
+    cancel_event = GENERATION_TASK_CANCEL_EVENTS.get(task_id)
+    if cancel_event and cancel_event.is_set():
+        logger.info('Generation task %s was cancelled before starting', task_id)
+        return
+    task = update_generation_task(task_id, status='running', generation_started=False)
     task = update_generation_task(task_id, **_build_task_trace_patch(task, 'task_running', extra={'timeout_seconds': timeout}))
     started_at = time.time()
     logger.info('Generation task %s started: mode=%s timeout=%ss', task_id, (task or {}).get('mode') or '', timeout)
@@ -1000,6 +1024,10 @@ def run_background_generation_task(task_id: str, builder, timeout: int = 600, ti
             error_message=timeout_error,
         )
         finished_at = time.time()
+        current_task = get_generation_task(task_id)
+        if current_task and current_task.get('status') == 'failed':
+            logger.info('Generation task %s was cancelled, discarding result', task_id)
+            return
         result_payload = result if isinstance(result, dict) else {'value': result}
         trace_payload = result_payload.get('trace') if isinstance(result_payload.get('trace'), dict) else {}
         trace_events = list(trace_payload.get('events') or [])
@@ -3888,14 +3916,19 @@ def generation_task_cancel(task_id):
     user_id = _get_supabase_user_id(session_data)
     if not user_id:
         return jsonify({'success': False, 'error': '请先登录'}), 401
-    task = get_generation_task(task_id)
+    task = get_generation_task(task_id, prefer_cache=True)
     if not task:
         return jsonify({'success': False, 'error': '生成任务不存在或已过期'}), 404
     if str(task.get('user_id') or '') != str(user_id):
         return jsonify({'success': False, 'error': '无权访问该生成任务'}), 403
     if task.get('status') in {'succeeded', 'failed'}:
         return jsonify({'success': True, 'task': serialize_generation_task(task)})
-    fail_generation_task_with_refund(task_id, '生成已取消')
+    generation_started = bool(task.get('generation_started'))
+    skip_refund = generation_started
+    cancel_event = GENERATION_TASK_CANCEL_EVENTS.get(task_id)
+    if cancel_event:
+        cancel_event.set()
+    fail_generation_task_with_refund(task_id, '生成已取消', skip_refund=skip_refund)
     updated_task = get_generation_task(task_id)
     return jsonify({'success': True, 'task': serialize_generation_task(updated_task)})
 

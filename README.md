@@ -1,18 +1,18 @@
 # AI Image New
 
-基于 Flask 的 AI 图片生成与会员支付项目，支持 Supabase 登录、积分、会员套餐、ZPay 支付、支付回调、订阅续期和前端账号面板。
+基于 Flask + Gunicorn 的 AI 图片生成与会员支付项目，支持 Supabase 登录、积分、会员套餐、ZPay 支付、支付回调、订阅续期和前端账号面板。
 
 ## 功能概览
 
-- Flask 2.x 后端，模块化代码结构（`app.py` 仅 3044 行）
+- Flask 2.x 后端，Docker 生产镜像使用 Gunicorn 启动（`app:app`）
 - Supabase Auth 登录与后端 session 同步（httpOnly Cookie）
 - 积分系统：注册奖励、每日签到、按量消费、失败自动退款
 - AI 图片生成：3 种 App Mode（mode1/mode2/mode3），支持文生图/图生图
-- 生成记录中心：独立历史图片表、WebP 缩略图、分页加载、选中原图异步 ZIP 打包下载
 - 套图（Suite）生成：6 张电商详情页套图，LLM 规划 + 并行生成
 - A+ 详情页生成：结构化电商 A+ 模块图文
 - 服饰穿搭（Fashion）：AI 模特生成、场景规划、成图质检
 - 生成任务持久化：支持刷新恢复、状态轮询、失败自动返还积分
+- 任务链路耗时打点：后端生成、图片存储、前端轮询、渲染和图片加载均可拆分排查
 - LLM Chat 双模式：Ark 直连为主，自动 fallback 到备选接口
 - ZPay 支付：创建订单、异步回调验签、一次性/订阅购买
 - 订阅续期自动叠加，会员状态实时展示
@@ -51,8 +51,6 @@
 │   └── aplus.py              # A+ 模块生成编排
 │
 ├── static/
-│   ├── blank/
-│   │   └── blank-*.png        # 预生成白底图（4 种尺寸）
 │   ├── css/
 │   │   ├── landing.css       # 首页样式
 │   │   └── workspace.css     # 工作台样式
@@ -83,7 +81,13 @@ pip install -r requirements.txt
 python app.py
 ```
 
-默认监听 `http://127.0.0.1:5078`。可通过 `.env` 中 `HOST` / `PORT` 配置。
+本地开发可直接使用 `python app.py` 启动 Flask 开发服务，默认监听 `http://127.0.0.1:5078`。可通过 `.env` 中 `HOST` / `PORT` 配置。
+
+生产/Docker 镜像已加入 Gunicorn，并通过 `app:app` 启动：
+
+```bash
+gunicorn -w 4 -b 0.0.0.0:5078 --timeout 300 --access-logfile - app:app
+```
 
 ## Docker 镜像发布
 
@@ -91,16 +95,79 @@ python app.py
 
 | 触发条件 | 标签 |
 |----------|------|
-| 推送到 `main` 分支 | `10.6` + `latest` |
-| GitHub Actions 手动触发 | `10.6` + `latest` |
+| 推送到 `main` 分支 | `10.7` + `latest` |
+| GitHub Actions 手动触发 | `10.7` + `latest` |
 
 - 构建平台：`linux/amd64` + `linux/arm64`
+- 镜像内使用 Gunicorn 运行 Flask 应用：`gunicorn -w 4 -b 0.0.0.0:5078 --timeout 300 --access-logfile - app:app`
+- 宝塔 Docker 部署时如果容器 `command` 被手动设置为 `python app.py`，需要改为上面的 Gunicorn 命令，否则仍会启动 Flask 开发服务器
 - `.dockerignore` 已排除 `.env` 和 `.env.*`
 - 工作流文件：[docker-publish.yml](.github/workflows/docker-publish.yml)
+
+### 宝塔 Docker 部署检查
+
+容器启动命令应为：
+
+```bash
+gunicorn -w 4 -b 0.0.0.0:5078 --timeout 300 --access-logfile - app:app
+```
+
+正确启动日志应包含：
+
+```text
+[INFO] Starting gunicorn
+[INFO] Listening at: http://0.0.0.0:5078
+[INFO] Booting worker with pid: ...
+```
+
+如果日志仍出现 `WARNING: This is a development server.`，说明容器仍在运行 `python app.py`，Gunicorn 生产启动方式未生效。
+
+推荐 Nginx 反代到本机容器端口：
+
+```nginx
+proxy_pass http://127.0.0.1:5078;
+proxy_connect_timeout 60s;
+proxy_send_timeout 600s;
+proxy_read_timeout 600s;
+send_timeout 600s;
+proxy_buffering off;
+```
 
 GitHub 仓库需要配置 Secrets：
 - `DOCKER_HUB_USERNAME` — Docker Hub 用户名
 - `DOCKER_HUB_TOKEN` — Docker Hub Access Token
+
+## 生成任务耗时排查
+
+异步生成任务会记录完整 trace，用于拆分“生成完成”和“页面显示完成”的延迟来源。
+
+后端任务日志会输出：
+
+```text
+Generation task trace summary succeeded: {...}
+Generation task trace summary polled_succeeded: {...}
+```
+
+前端浏览器控制台会输出：
+
+```text
+[generation-trace] render_done_summary {...}
+[generation-trace] image_loaded_summary {...}
+```
+
+重点耗时字段：
+
+| 字段 | 含义 |
+|------|------|
+| `task_queue_ms` | 任务创建到后台开始执行 |
+| `backend_until_ready_ms` | 后台开始执行到结果 ready |
+| `storage_ms` | 图片保存/COS 上传耗时 |
+| `poll_after_success_ms` | 后端成功后多久被轮询发现 |
+| `frontendPollDetectMs` | 前端检测到任务成功的延迟 |
+| `frontendRenderMs` | 前端结果卡片渲染耗时 |
+| `frontendImageLoadMs` | 图片元素渲染后到 load 完成 |
+| `frontendDisplayDelayMs` | 后端成功到图片真正显示完成 |
+| `totalEndToEndMs` | 任务创建到图片显示完成总耗时 |
 
 ---
 
@@ -113,7 +180,11 @@ GitHub 仓库需要配置 Secrets：
 | `HOST` | `0.0.0.0` | 监听地址 |
 | `PORT` | `5078` | 监听端口 |
 | `FLASK_DEBUG` | `false` | 调试模式 |
-| `APP_MODE` | `mode3` | 生图模式：`mode1` / `mode2` / `mode3`（可在 Settings 页面切换） |
+| `APP_MODE` | `mode1` | 生图模式：`mode1` / `mode2` / `mode3`（可在 Settings 页面切换） |
+| `UPLOAD_MAX_BYTES` | `15728640` | 上传总大小限制（15MB），可以在 Settings 页面调整 |
+| `UPLOAD_MAX_FILE_BYTES` | `8388608` | 单张图片大小限制（8MB） |
+| `GENERATED_SUITE_RETENTION_DAYS` | `7` | 生成图片保留天数 |
+| `GENERATED_SUITE_RETENTION_COUNT` | `20` | 最多保留的任务目录数 |
 
 ### OpenAI 兼容接口（Chat / 套图规划 / 风格分析）
 
@@ -153,10 +224,6 @@ GitHub 仓库需要配置 Secrets：
 | `MODE3_IMAGE_API_KEY` | — | API 密钥 |
 | `MODE3_IMAGE_BASE_URL` | `https://code.ciyuanapi.xyz/v1` | 接口地址 |
 | `MODE3_IMAGE_MODEL` | `gpt-image-2` | 生图模型 |
-| `MODE3_IMAGE_EDIT_SIZE` | `2048x2048` | `/images/edits` 图生图尺寸 |
-| `MODE3_IMAGE_GENERATION_SIZE` | — | `/images/generations` 文生图固定尺寸；为空时按比例映射，`3:4` 默认 `1024x1536` |
-| `MODE3_IMAGE_QUALITY` | — | 透传给生图接口的质量参数 |
-| `MODE3_IMAGE_WATERMARK` | `false` | 是否透传水印参数 |
 
 以上均支持 fallback 到 `IMAGE_API_KEY` / `IMAGE_BASE_URL` / `IMAGE_MODEL`（通用配置），即只需要在对应 mode 不同时才写 `MODE?_` 前缀。
 
@@ -179,13 +246,6 @@ GitHub 仓库需要配置 Secrets：
 |--------|--------|------|
 | `FASHION_OUTPUT_MAX_VERIFY_ATTEMPTS` | `3` | 成图质检最大重试次数 |
 
-### 生成记录下载
-
-| 配置项 | 默认值 | 说明 |
-|--------|--------|------|
-| `HISTORY_IMAGE_ALLOWED_HOST` | `aiimg.86969678.xyz` | 生成记录 ZIP 下载允许的图片域名 |
-| `ZIP_DOWNLOAD_MAX_ITEMS` | `50` | 单次异步 ZIP 打包图片上限 |
-
 ### Supabase
 
 | 配置项 | 必填 | 说明 |
@@ -200,10 +260,13 @@ GitHub 仓库需要配置 Secrets：
 |--------|--------|------|
 | `POINTS_SIGNUP_BONUS` | `100` | 注册奖励 |
 | `POINTS_DAILY_FREE` | `10` | 每日签到 |
-| `POINTS_RULE` | `{"key":"default","label":"AI 生图","unit_cost":4,"minimum_cost":4}` | 通用积分规则，所有生成模式默认使用这一条 |
+| `POINTS_RULE_SUITE` | `{"key":"suite","label":"套图","unit_cost":4,"minimum_cost":4,"metric":"output_count"}` | 套图积分规则 |
+| `POINTS_RULE_MODE2` | `{"key":"mode2","label":"AI 生图","unit_cost":4,"minimum_cost":4,"metric":"output_count"}` | mode2 规则 |
+| `POINTS_RULE_APLUS` | `{"key":"aplus","label":"A+ 模块","unit_cost":4,"minimum_cost":4,"metric":"selected_modules_count"}` | A+ 规则 |
+| `POINTS_RULE_FASHION` | `{"key":"fashion","label":"服饰场景","unit_cost":4,"minimum_cost":4,"metric":"selected_scene_count"}` | 服饰规则 |
 | `GENERATION_TASK_TTL_SECONDS` | `7200` | 任务内存 TTL |
 | `GENERATION_TASK_POLL_RETENTION_SECONDS` | `86400` | 轮询保留时间 |
-| `GENERATION_TASK_WORKERS` | `3` | 异步任务线程数 |
+| `GENERATION_TASK_WORKERS` | `2` | 异步任务线程数 |
 
 #### 积分规则 JSON 字段
 
@@ -213,7 +276,7 @@ GitHub 仓库需要配置 Secrets：
 | `label` | string | 前端名称 |
 | `unit_cost` | int | 每单位消耗积分 |
 | `minimum_cost` | int | 最低消耗 |
-| `metric` | string | 计数方式；通用 `POINTS_RULE` 可省略，由不同生成流程自动使用默认计数方式 |
+| `metric` | string | 计数方式 |
 
 积分读取优先级：Supabase `api_settings` 表 → `.env` → 代码默认值。
 
@@ -235,8 +298,10 @@ GitHub 仓库需要配置 Secrets：
 | `COS_SECRET_ID` | 否 | 腾讯云 SecretId |
 | `COS_SECRET_KEY` | 否 | 腾讯云 SecretKey |
 | `COS_REGION` | 否 | 地域（如 `ap-guangzhou`） |
-| `COS_BUCKET` | 否 | 存储桶名 |
-| `COS_CDN_DOMAIN` | 否 | CDN 域名（不带协议头） |
+| `COS_BUCKET` | 否 | **存储桶名**（纯名称，不含域名，如 `aiimg-1234567890`） |
+| `COS_CDN_DOMAIN` | 否 | CDN 域名（不带协议头，如 `cdn.example.com`） |
+
+> **注意**：`COS_BUCKET` 填腾讯云控制台的纯桶名，不要填域名。CDN 加速域名填在 `COS_CDN_DOMAIN`。COS 配置支持 `.env` 和 Settings 页面 `config.json` 两种方式，`cos_utils` 优先读环境变量，其次读取 `config.json` 的 `LOCAL_CONFIG`。
 
 ### 管理员
 
@@ -253,7 +318,6 @@ GitHub 仓库需要配置 Secrets：
   GET    /                                          landing 首页
   GET    /suite           /aplus       /fashion     工作台页面
   GET    /settings        /auth         /logout      页面 / 登录入口
-  GET    /generation-record                         生成记录中心
 
   GET    /api/app-mode                               当前模式查询
   POST   /api/auth/login    /register                邮箱密码登录/注册
@@ -267,10 +331,6 @@ GitHub 仓库需要配置 Secrets：
   POST   /api/style-analysis                         风格分析
   POST   /api/ai-write                               文案生成
   POST   /api/download-zip                           批量下载
-  GET    /api/generation-history                     生成记录图片分页
-  POST   /api/generation-history/zip-tasks           创建异步 ZIP 打包任务
-  GET    /api/generation-history/zip-tasks/<id>      查询异步 ZIP 状态
-  GET    /api/generation-history/zip-tasks/<id>/download 下载异步 ZIP
   GET    /api/generation-tasks/<id>                  任务查询
   POST   /api/generation-tasks/<id>/cancel           任务取消
   POST   /api/pay/create                             创建支付
@@ -300,7 +360,6 @@ GitHub 仓库需要配置 Secrets：
 | `zpay_transactions` | ZPay 订单 |
 | `vip_plan_config` | VIP 套餐配置 |
 | `generation_tasks` | 生成任务持久化 |
-| `generation_history_images` | 生成记录图片读模型，支撑历史页分页、缩略图和下载 |
 
 迁移 SQL 位于 `supabase/migrations/`。
 
@@ -332,24 +391,13 @@ on conflict (config_key) do update set ... ;
 
 ## Mode3 技术参考
 
-Mode3 按是否存在真实参考图分流：
+Mode3 使用 OpenAI-compatible 的 multipart `images/edits` 接口：
 
-| 场景 | 接口 | 请求格式 | 默认尺寸 |
-|------|------|----------|----------|
-| 有参考图的图生图 | `POST {MODE3_IMAGE_BASE_URL}/images/edits` | `multipart/form-data`，包含 `image` 文件 | `MODE3_IMAGE_EDIT_SIZE`，默认 `2048x2048` |
-| 无参考图的文生图 | `POST {MODE3_IMAGE_BASE_URL}/images/generations` | JSON body | 按比例映射，`3:4` 默认 `1024x1536` |
+```
+POST {MODE3_OPENAI_BASE_URL}/images/edits
+```
 
-`/images/generations` 不使用空白画布，也不使用 multipart；生成模特属于无参考图文生图，因此走 JSON 请求。返回格式为 `{ data: [{ url: "..." }] }`。
-
-文生图比例默认映射：
-
-| 比例 | 尺寸 |
-|------|------|
-| `1:1` | `1024x1024` |
-| `3:4` | `1024x1536` |
-| `4:3` | `1536x1024` |
-| `9:16` | `1024x1792` |
-| `16:9` | `1792x1024` |
+请求格式 `multipart/form-data`，返回 `{ data: [{ url: "..." }] }`。
 
 套图性能基准（6 张，mode3 并行）：
 
@@ -363,6 +411,13 @@ Mode3 按是否存在真实参考图分流：
 
 ## 近期更新
 
+### 2026-05-04 · v10.7
+
+- **Docker 镜像标签更新**：10.6 → 10.7
+- **GitHub Action 自动构建**：推送 `main` 分支或手动触发时自动打 `10.7` + `latest` 双标签
+- **.dockerignore**：继续排除 `.env` 和 `.env.*`
+- **Docker 镜像 10.7 + latest**
+
 ### 2026-05-04 · v10.6
 
 - **IO 与性能优化**：前端轮询频率从 1 秒改为 3-5 秒，状态查询接口改为只读，大模型响应日志从完整 body 改为结构化摘要，磁盘 IO 预计降低 70-90%
@@ -374,30 +429,63 @@ Mode3 按是否存在真实参考图分流：
 - **生成模特 mode3 修复**：无参考图生成模特改走 `/images/generations` 文生图接口，使用 JSON body，不再补空白画布走 `/images/edits`
 - **mode3 文生图尺寸独立映射**：`3:4` 默认 `1024x1536`，避免 `/images/generations` 继续复用 `2048x2048` 导致上游断开或 `bad_response_status_code`
 - **生成记录中心优化**：新增独立 `generation_history_images` 读模型，历史页按 50 张分页加载，列表使用 WebP 缩略图，预览使用 WebP，原图保留下载
-- **异步 ZIP 下载**：生成记录选中图片打包改为异步任务，单次上限 50 张，只允许下载 `aiimg.86969678.xyz` 域名图片
-- **共享顶部通栏**：`/suite`、`/aplus`、`/fashion`、`/generation-record` 共用 `shared-topbar.js`，统一“生成记录”和“账号面板”按钮样式
 - **Docker 镜像 10.5 + latest**
 
-### 2026-05-03 · v10.3
+### 2026-05-04 · v10.4
 
-- **OOM 修复**：`LazyImagePayload` 延迟加载，单张图片内存从 ~30MB 降至 ~8MB，峰值内存降低 84%
-- **白底图预生成**：4 种尺寸预置到 `static/blank/`，磁盘读取 10ms（PIL 生成 110ms）
-- **8 核 16G 配置**：8 Workers + 3 任务线程 = 24 并发生成，支持 50-100 人同时使用
-- **Ark API 超时**：60s → 120s，减少 fallback
-- **Docker 镜像 10.3 + latest**
+- **生成任务取消功能**：进度条取消按钮、智能积分返还（API 调用前返还，调用后不返还）、后台任务终止
+- **轮询优化**：动态轮询间隔（2s→4s→6s），减少约 40% 请求
+- **API 重试优化**：502 错误指数退避（1.5s→3s→6s）
+- **图片显示修复**：URL 优先级修复、缩略图 360→800
+- **前端验证增强**：产品图为空提示
+- **Bug 修复**：Supabase JSONB 查询 URL 编码问题
+- **Docker 镜像 10.4 + latest**
 
-### 2026-05-02 · v9.5
+### 2026-05-03 · v10.2
 
-- **Docker 镜像 9.5 + latest**：GitHub Actions 自动构建并推送，`.dockerignore` 继续排除 `.env` / `.env.*`
-- `.env` 配置精简：mode1/mode2/mode3 图片接口按 `API_KEY` / `BASE_URL` / `MODEL` 分段维护
-- 并行生成配置统一为 `PARALLEL_WORKERS`、`RETRY_ATTEMPTS`、`RETRY_DELAY_SECONDS`、`PARTIAL_RETRY_ATTEMPTS`、`SEQUENTIAL_GENERATION`、`TIMEOUT_SECONDS`
-- 积分规则统一为通用 `POINTS_RULE`，不同生成流程自动使用对应计数方式
-- 工作台新增通用蓝色细进度条，生成中显示，完成或失败后自动隐藏
-- 服饰“我的模特”预览图改为 `contain + center`，长图完整居中显示
-- 修复模块拆分后的漏导入问题：Suite / A+ / Fashion 规划函数在 `app.py` 中统一导入
-- A+ / Suite / Fashion 生图入口不再提前要求旧 `ARK_API_KEY`，按当前 `APP_MODE` 分发到 mode1/mode2/mode3
+- **AI 帮写并发优化**：卖点文案与商品结构化提取改为并发执行，总耗时节省 61.4%，首屏等待从 12.77s 降到 6.46s
+- **卖点先展示**：卖点生成完成后立即展示，product_json 后台静默补齐
+- **A+ 图片生成修复**：修复 `save_generated_image` 返回值解包错误导致首屏主视觉、使用场景图生成失败的问题
+- **Docker 镜像标签**：10.1 → 10.2，GitHub Action 自动打 `10.2` + `latest` 双标签
 
-### 2026-05-01 · v9.4
+### 2026-05-02 · v10.0
+
+- **生产启动方式升级**：Docker 镜像加入 Gunicorn，使用 `gunicorn -w 4 -b 0.0.0.0:5078 --timeout 300 --access-logfile - app:app` 运行 Flask 应用
+- **宝塔 Docker 部署确认**：容器 `command` 需要使用 Gunicorn 命令，线上日志已确认出现 `Starting gunicorn`、`Booting worker`，不再使用 Flask 开发服务器
+- **Docker 镜像标签**：9.9 → 10.0，GitHub Action 自动打 `10.0` + `latest` 双标签
+
+### 2026-05-02 · v9.9
+
+- **多用户性能优化**：Supabase 会话缓存 5 分钟（减少 99% token 验证请求），静态文件浏览器缓存 1 小时，生成任务清理改为后台定时（每 10 分钟），彻底消除多用户场景下的 IO 瓶颈
+- **生成任务超时保护**：新增 10 分钟超时自动 fail + 积分退款，任务再也不永久卡在 running 状态占用 worker
+- **Worker 线程提升**：默认从 2 增至 4，支持 `GENERATION_TASK_WORKERS` 环境变量自定义
+- **前端轮询优化**：任务轮询 2.5s→3s，总超时 30min→12min
+- **Docker 镜像标签**：9.8 → 9.9，自动打 `9.9` + `latest` 双标签
+
+### 2026-05-02 · v9.8
+
+- **Flask 多线程**：`app.run()` 新增 `threaded=True`，AI 帮写等长耗时请求不再阻塞其他用户的页面加载和 API 调用
+- **Chat HTTP 重试优化**：主 API 调用不再对 HTTP 错误码（503 等）做自动重试，失败立刻走 fallback，节省 4-6s 额外延迟
+- **SSE/流式兼容 + Fallback 完善**：新增 SSE 流式格式解析支持，扩展 fallback token（新增 model_not_found / JSONDecodeError 等），通用 API 兼容性大幅提升
+- **OpenAI 直连 Ark**：支持将 `OPENAI_API_KEY` / `OPENAI_BASE_URL` / `OPENAI_MODEL` 直接配置为 Ark 豆包的密钥和端点，不走 fallback 直连调用
+- **Docker 镜像标签**：9.7 → 9.8，自动打 `9.8` + `latest` 双标签
+
+### 2026-05-02 · v9.7
+
+- **积分发放修复**：修复 `grant_payment_points_once` 中错误从 `points_rules` 导入不存在的函数，导致支付回调积分永远不到账的严重 Bug；调整执行顺序为先发积分再标记订单 paid，并对重试回调补发积分
+- **COS 配置增强**：新增 `config.json` 兜底读取链路，Docker 中无 `.env` 时自动从 Settings 页面写入的 `config.json` 读取 COS 密钥；恢复 `load_dotenv` 确保本地 `.env` 正常加载
+- **COS 桶名校验**：`COS_BUCKET` 必须填腾讯云控制台的纯桶名（如 `aiimg-1234567890`），不能填 CDN 域名
+- **Docker 镜像标签**：9.6 → 9.7，自动打 `9.7` + `latest` 双标签
+
+### 2026-05-02 · v9.6
+
+- **COS 图片存储优化**：COS 客户端改为运行时懒加载，每次通过 `os.getenv()` 实时读取配置，避免 Settings 页面修改后不生效的问题
+- **Chat Fallback 增强**：新增 401 / authentication_error / auth_unavailable / token is expired 等认证类错误 token，主接口 Key 过期时自动切换到 Ark Chat 备用接口
+- **AI 帮写按钮修复**：页面初始化时自动启用按钮，不再出现加载后 disabled 的情况
+- **Docker 镜像标签**：9.5 → 9.6，自动打 `9.6` + `latest` 双标签
+- **VIP 系统文档**：补充完整的 Supabase 建表 SQL、AI 提示词配置、积分规则与支付链路教程
+
+### 2026-05-01 · v9.5
 
 - **代码重构**：`app.py` 从 7326 行降至 3044 行（-58%），提取 `supabase_client.py`（887 行）和 `generation/` 包（2570 行）
 - `generation/modes.py`：mode1/2/3 客户端工厂、单图/并行生成、重试逻辑
@@ -406,10 +494,10 @@ Mode3 按是否存在真实参考图分流：
 - `app.logger` → 可注入 `logging.Logger`，所有模块独立日志
 - HTML 页面归入 `pages/` 目录
 - 删除 4 个旧测试文件，项目更整洁
-- **Docker 镜像 9.4**
+- **Docker 镜像 9.5 + latest**
 - 重构后全部 42 个路由回归测试通过，认证/积分/生图全链路正常
 
-### 2026-05-01 · v9.3
+### 2026-05-01 · v9.4
 
 - LLM 全模式切 doubao-seed-2-0-mini（Ark 直连），成本 ¥0.008/套
 - 套图规划 prompt 精简 63%（7KB→2.6KB），规划耗时 -34s
@@ -430,16 +518,13 @@ Mode3 按是否存在真实参考图分流：
 
 ```bash
 # Python 语法检查
-python -m py_compile generation/modes.py app.py
+python -m py_compile app.py
 
 # 全部模块导入
 python -c "import app; print(len(list(app.app.url_map.iter_rules())), 'routes')"
 
 # COS 连通性
 python -c "import cos_utils; print(cos_utils.is_cos_enabled())"
-
-# mode3 生成模特核心链路
-python -c "from generation.planning import build_fashion_model_prompt; from generation.modes import call_app_mode_image_generation; prompt=build_fashion_model_prompt('女','青年（18-35岁）','欧美白人','标准',''); print(bool(call_app_mode_image_generation(None,prompt,[],'3:4','无文字','中国',None,'fashion-model',max_images=1)[0].get('url')))"
 ```
 
 ---
@@ -452,10 +537,9 @@ python -c "from generation.planning import build_fashion_model_prompt; from gene
 3. `/api/pay/notify` 是否返回 `fail`（查看服务端日志中的 ZPAY 日志）
 
 ### 生成后刷新页面看不到结果
-1. Supabase 是否执行了 `generation_tasks` 和 `generation_history_images` 建表 SQL
+1. Supabase 是否执行了 `generation_tasks` 建表 SQL
 2. `SUPABASE_SERVICE_ROLE_KEY` 是否正确
 3. `/api/generation-tasks/<task_id>` 返回 401/404 表示未登录或任务过期
-4. `/api/generation-history` 会优先读取 `generation_history_images`，旧数据需要迁移后才有独立分页记录
 
 ### 前端提示 Supabase 配置缺失
 确保页面通过 Flask 返回（`http://127.0.0.1:5078/`），不是直接双击 HTML 文件。

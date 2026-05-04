@@ -248,7 +248,10 @@
                 </div>
                 <p class="result-meta" id="resultMeta">系统将根据平台策略、卖点、参考图与所选模块生成 A+ 模块结果。</p>
                 <div class="result-status-message" id="resultStatusMessage"></div>
-                <div class="progress-bar" id="generationProgressBar" hidden><div class="progress-bar-fill"></div></div>
+                <div class="progress-bar-wrapper" id="generationProgressBar" hidden>
+                  <div class="progress-bar"><div class="progress-bar-fill"></div></div>
+                  <button class="progress-cancel-btn" id="progressCancelBtn" type="button" title="取消生成">×</button>
+                </div>
                 <div class="title-suggestion-panel" id="titleSuggestionPanel" hidden></div>
               </div>
             </div>

@@ -912,23 +912,23 @@ def find_refundable_spend_transaction(user_id: str, request_id: str, amount: int
     normalized_transaction_type = str(transaction_type or '').strip()
     if not normalized_user_id or not normalized_request_id:
         return None
-    params = {
-        'select': '*',
-        'user_id': f'eq.{normalized_user_id}',
-        'metadata': f"cs.{json.dumps({'request_id': normalized_request_id}, separators=(',', ':'), ensure_ascii=False)}",
-        'order': 'created_at.desc',
-        'limit': '1',
-    }
+    query_parts = [
+        'select=*',
+        f'user_id=eq.{normalized_user_id}',
+        f'metadata->>request_id=eq.{normalized_request_id}',
+        'order=created_at.desc',
+        'limit=1',
+    ]
     if normalized_transaction_type:
-        params['transaction_type'] = f'eq.{normalized_transaction_type}'
+        query_parts.append(f'transaction_type=eq.{normalized_transaction_type}')
     if amount is not None:
-        params['amount'] = f'eq.-{abs(int(amount))}'
-    response = requests.get(
-        build_supabase_request_url('/rest/v1/user_points_transactions'),
-        headers=_build_supabase_service_headers(),
-        params=params,
-        timeout=20,
-    )
+        query_parts.append(f'amount=eq.-{abs(int(amount))}')
+    query_string = '&'.join(query_parts)
+    url = f"{build_supabase_request_url('/rest/v1/user_points_transactions')}?{query_string}"
+    req = requests.Request('GET', url, headers=_build_supabase_service_headers())
+    prepared_req = req.prepare()
+    prepared_req.url = url
+    response = requests.Session().send(prepared_req, timeout=20)
     response.raise_for_status()
     payload = response.json()
     return _extract_single_supabase_row(payload)
@@ -940,18 +940,18 @@ def find_refund_transaction_for_request(user_id: str, request_id: str, _logger: 
     normalized_request_id = str(request_id or '').strip()
     if not normalized_user_id or not normalized_request_id:
         return None
-    response = requests.get(
-        build_supabase_request_url('/rest/v1/user_points_transactions'),
-        headers=_build_supabase_service_headers(),
-        params={
-            'select': '*',
-            'user_id': f'eq.{normalized_user_id}',
-            'transaction_type': 'eq.refund',
-            'metadata': f"cs.{json.dumps({'request_id': normalized_request_id}, separators=(',', ':'), ensure_ascii=False)}",
-            'limit': '1',
-        },
-        timeout=20,
-    )
+    query_string = '&'.join([
+        'select=*',
+        f'user_id=eq.{normalized_user_id}',
+        'transaction_type=eq.refund',
+        f'metadata->>request_id=eq.{normalized_request_id}',
+        'limit=1',
+    ])
+    url = f"{build_supabase_request_url('/rest/v1/user_points_transactions')}?{query_string}"
+    req = requests.Request('GET', url, headers=_build_supabase_service_headers())
+    prepared_req = req.prepare()
+    prepared_req.url = url
+    response = requests.Session().send(prepared_req, timeout=20)
     response.raise_for_status()
     payload = response.json()
     return _extract_single_supabase_row(payload)

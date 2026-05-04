@@ -8,6 +8,12 @@ from image_utils import build_enriched_image_prompt, build_generated_suite_image
 logger = logging.getLogger(__name__)
 
 
+def _check_task_cancelled(task_id: str) -> None:
+    from app import is_generation_task_cancelled
+    if is_generation_task_cancelled(task_id):
+        raise RuntimeError('生成任务已取消')
+
+
 def generate_mode1_suite_images_parallel(plan: dict, image_payloads, task_id: str, image_size_ratio: str, text_type: str, country: str, product_json=None, all_plan_types=None, _logger: logging.Logger | None = None):
     from generation.modes import (
         call_mode1_single_image_with_retry,
@@ -26,6 +32,7 @@ def generate_mode1_suite_images_parallel(plan: dict, image_payloads, task_id: st
     failures = []
 
     def run_one(plan_item: dict):
+        _check_task_cancelled(task_id)
         generated_item = call_mode1_single_image_with_retry(
             build_enriched_image_prompt(
                 plan_item['prompt'], image_size_ratio, text_type, country,
@@ -41,6 +48,7 @@ def generate_mode1_suite_images_parallel(plan: dict, image_payloads, task_id: st
     for attempt_index in range(partial_retry_attempts + 1):
         if not pending_items:
             break
+        _check_task_cancelled(task_id)
         batch_workers = min(len(pending_items), workers)
         batch_results = []
         batch_failures = []
@@ -87,6 +95,7 @@ def generate_mode2_suite_images_parallel(plan: dict, image_payloads, task_id: st
     failures = []
 
     def run_one(plan_item: dict):
+        _check_task_cancelled(task_id)
         generated_item = call_mode2_single_image_with_retry(
             build_enriched_image_prompt(
                 plan_item['prompt'], image_size_ratio, text_type, country,
@@ -102,6 +111,7 @@ def generate_mode2_suite_images_parallel(plan: dict, image_payloads, task_id: st
     for attempt_index in range(partial_retry_attempts + 1):
         if not pending_items:
             break
+        _check_task_cancelled(task_id)
         batch_workers = min(len(pending_items), workers)
         batch_results = []
         batch_failures = []
@@ -148,6 +158,7 @@ def generate_mode3_suite_images_parallel(plan: dict, image_payloads, task_id: st
     failures = []
 
     def run_one(plan_item: dict):
+        _check_task_cancelled(task_id)
         generated_item = call_mode3_single_image_with_retry(
             build_enriched_image_prompt(
                 plan_item['prompt'], image_size_ratio, text_type, country,
@@ -163,6 +174,7 @@ def generate_mode3_suite_images_parallel(plan: dict, image_payloads, task_id: st
     for attempt_index in range(partial_retry_attempts + 1):
         if not pending_items:
             break
+        _check_task_cancelled(task_id)
         batch_workers = min(len(pending_items), workers)
         batch_results = []
         batch_failures = []
@@ -196,7 +208,9 @@ def generate_suite_images(plan: dict, image_payloads, task_id: str, image_size_r
         get_ark_client,
         call_app_mode_image_generation,
     )
+    from app import update_generation_task
     log = _logger or logger
+    update_generation_task(task_id, generation_started=True)
     images = []
     all_plan_types = [str(item.get('type', '')).strip() for item in plan.get('items', []) if str(item.get('type', '')).strip()]
     plan_items = list(plan.get('items') or [])

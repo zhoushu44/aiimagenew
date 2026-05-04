@@ -368,6 +368,20 @@ def is_retryable_mode3_error(exc: Exception) -> bool:
     return status_code in {408, 409, 425, 429, 500, 502, 503, 504, 524}
 
 
+def is_server_error(exc: Exception) -> bool:
+    status_code = getattr(exc, 'status_code', None)
+    if status_code in {500, 502, 503, 504, 524}:
+        return True
+    message = str(exc or '').lower()
+    return '502' in message or 'bad_response_status_code' in message
+
+
+def compute_retry_delay(base_delay: float, attempt: int, exc: Exception) -> float:
+    if is_server_error(exc):
+        return min(base_delay * (2 ** attempt), 30.0)
+    return base_delay * (attempt + 1)
+
+
 def get_mode2_response_error(response) -> str:
     if response is None:
         return ''
@@ -752,7 +766,7 @@ def call_mode1_single_image_with_retry(prompt: str, image_payloads, image_size_r
                     exc,
                 )
                 raise
-            wait_seconds = retry_delay_seconds * (attempt + 1)
+            wait_seconds = compute_retry_delay(retry_delay_seconds, attempt, exc)
             log.warning(
                 'Mode1 single image failed, retrying in %.2fs (%s/%s): image_type=%s reference_count=%s plan_type=%s error=%s',
                 wait_seconds,
@@ -852,7 +866,7 @@ def call_mode2_single_image_with_retry(prompt: str, image_payloads, image_size_r
                     exc,
                 )
                 raise
-            wait_seconds = retry_delay_seconds * (attempt + 1)
+            wait_seconds = compute_retry_delay(retry_delay_seconds, attempt, exc)
             log.warning(
                 'Mode2 single image failed, retrying in %.2fs (%s/%s): image_type=%s reference_count=%s plan_type=%s error=%s',
                 wait_seconds,
@@ -953,7 +967,7 @@ def call_mode3_single_image_with_retry(prompt: str, image_payloads, image_size_r
                     exc,
                 )
                 raise
-            wait_seconds = retry_delay_seconds * (attempt + 1)
+            wait_seconds = compute_retry_delay(retry_delay_seconds, attempt, exc)
             log.warning(
                 'Mode3 single image failed, retrying in %.2fs (%s/%s): image_type=%s reference_count=%s plan_type=%s error=%s',
                 wait_seconds,

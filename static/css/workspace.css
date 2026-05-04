@@ -1377,6 +1377,37 @@ body.fashion-page .result-view.active {
 .progress-bar.is-active .progress-bar-fill {
   animation: progress-pulse 1.8s ease-in-out infinite;
 }
+.progress-cancel-btn {
+  position: absolute;
+  right: 0;
+  top: 50%;
+  transform: translateY(-50%);
+  width: 20px;
+  height: 20px;
+  border: none;
+  border-radius: 50%;
+  background: rgba(239, 68, 68, 0.15);
+  color: #ef4444;
+  font-size: 14px;
+  line-height: 1;
+  cursor: pointer;
+  transition: all 0.2s ease;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  z-index: 10;
+}
+.progress-cancel-btn:hover {
+  background: #ef4444;
+  color: #fff;
+}
+.progress-cancel-btn:active {
+  transform: translateY(-50%) scale(0.9);
+}
+.progress-bar-wrapper {
+  position: relative;
+  width: 100%;
+}
 @keyframes progress-pulse {
   0% { opacity: 0.6; }
   50% { opacity: 1; }

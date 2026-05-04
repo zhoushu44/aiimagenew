@@ -7,6 +7,7 @@ document.addEventListener('DOMContentLoaded', () => {
     const resultStatusMessage = document.getElementById('resultStatusMessage');
     const generationProgressBar = document.getElementById('generationProgressBar');
     const generationProgressFill = generationProgressBar ? generationProgressBar.querySelector('.progress-bar-fill') : null;
+    const progressCancelBtn = document.getElementById('progressCancelBtn');
     const taskSummaryLine = document.getElementById('taskSummaryLine');
     const taskOutputCount = document.getElementById('taskOutputCount');
     const taskSelectedCount = document.getElementById('taskSelectedCount');
@@ -315,9 +316,16 @@ document.addEventListener('DOMContentLoaded', () => {
       label: '请选择模特',
     };
     const STORAGE_KEY = `aiDesignState:${PAGE_MODE}`;
-    const PENDING_GENERATION_POLL_INTERVAL = 3000;
+    const PENDING_GENERATION_POLL_INTERVAL_MIN = 2000;
+    const PENDING_GENERATION_POLL_INTERVAL_MAX = 6000;
     const PENDING_GENERATION_TIMEOUT = 12 * 60 * 1000;
     const PENDING_GENERATION_MAX_STATUS_FAILURES = 3;
+
+    const getDynamicPollInterval = (elapsedMs) => {
+      if (elapsedMs < 30000) return 2000;
+      if (elapsedMs < 120000) return 4000;
+      return 6000;
+    };
     let pendingGenerationTask = null;
     let pendingGenerationPollTimer = null;
     let pendingGenerationPollFailureCount = 0;
@@ -1273,7 +1281,7 @@ document.addEventListener('DOMContentLoaded', () => {
     const pollGenericTaskResult = async ({
       taskId,
       timeoutMs = PENDING_GENERATION_TIMEOUT,
-      intervalMs = PENDING_GENERATION_POLL_INTERVAL,
+      intervalMs,
       loadingMessage = '任务已提交，正在处理中，请稍候…',
       pendingMessage = '任务已提交，正在排队处理，请稍候…',
       runningMessage = '任务处理中，请稍候…',
@@ -1317,7 +1325,9 @@ document.addEventListener('DOMContentLoaded', () => {
         if (typeof onPending === 'function') {
           onPending(task.status === 'running' ? runningMessage : pendingMessage, task);
         }
-        await new Promise((resolve) => window.setTimeout(resolve, intervalMs));
+        const elapsedMs = Date.now() - startedAt;
+        const currentInterval = typeof intervalMs === 'number' ? intervalMs : getDynamicPollInterval(elapsedMs);
+        await new Promise((resolve) => window.setTimeout(resolve, currentInterval));
       }
       throw new Error(timeoutMessage);
     };
@@ -1493,6 +1503,54 @@ document.addEventListener('DOMContentLoaded', () => {
       pendingGenerationPollFailureCount = 0;
     };
 
+    const cancelPendingGenerationTask = async () => {
+      const task = pendingGenerationTask;
+      if (!task?.taskId) {
+        return;
+      }
+      const taskId = task.taskId;
+      let refundInfo = '';
+      try {
+        const response = await fetch(`/api/generation-tasks/${encodeURIComponent(taskId)}/cancel`, {
+          method: 'POST',
+          credentials: 'same-origin',
+        });
+        const result = await parseJsonResponse(response);
+        if (!response.ok || !result.success) {
+          console.warn('Cancel task request failed:', result.error);
+        }
+        if (result?.task?.refunded) {
+          refundInfo = '，积分已返还';
+        } else if (result?.task?.refund_error) {
+          refundInfo = '，积分未返还';
+        }
+      } catch (error) {
+        console.warn('Cancel task request error:', error);
+      }
+      stopPendingGenerationPolling();
+      pendingGenerationTask = null;
+      resetPendingGenerationPollState();
+      stopGenerationProgress();
+      resetResultState();
+      setResultStatus(`生成已取消${refundInfo}，可重新发起生成。`, '');
+      if (task?.mode === 'fashion') {
+        syncFashionState({ fashionFlowStep: 'scene' });
+        applyFashionGenerateButtonState();
+      } else if (generateBtn) {
+        generateBtn.disabled = false;
+        updateGenerateButtonLabel();
+      }
+      saveStateToLocalStorage();
+    };
+
+    if (progressCancelBtn) {
+      progressCancelBtn.addEventListener('click', () => {
+        if (pendingGenerationTask?.taskId) {
+          cancelPendingGenerationTask();
+        }
+      });
+    }
+
     const pollPendingGenerationTask = async ({ immediate = false } = {}) => {
       stopPendingGenerationPolling();
       if (!pendingGenerationTask?.taskId) {
@@ -1575,7 +1633,9 @@ document.addEventListener('DOMContentLoaded', () => {
           return;
         }
       }
-      pendingGenerationPollTimer = window.setTimeout(() => pollPendingGenerationTask(), immediate ? 500 : PENDING_GENERATION_POLL_INTERVAL);
+      const elapsedMs = Date.now() - startedAt;
+      const nextInterval = immediate ? 500 : getDynamicPollInterval(elapsedMs);
+      pendingGenerationPollTimer = window.setTimeout(() => pollPendingGenerationTask(), nextInterval);
     };
 
     const savePendingGenerationTask = (taskId, spendRecord, mode = PAGE_MODE) => {
@@ -3247,6 +3307,11 @@ document.addEventListener('DOMContentLoaded', () => {
     if (generateBtn) {
       generateBtn.addEventListener('click', async () => {
         if (generateBtn.disabled || pendingGenerationTask?.taskId) {
+          return;
+        }
+        const productFiles = getProductFiles();
+        if (!productFiles || productFiles.length === 0) {
+          setResultStatus('请先上传产品图片后再生成。', 'error');
           return;
         }
         if (currentMode === 'fashion') {
