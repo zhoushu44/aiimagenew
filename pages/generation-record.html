@@ -4,7 +4,7 @@
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
   <title>生成记录中心</title>
-  <link rel="stylesheet" href="/static/css/workspace.css?v=topbar-record-20260504">
+  <link rel="stylesheet" href="/static/css/workspace.css?v=history-download-fetch-20260504-4">
   <style>
     :root {
       --bg: #0b0f14;
@@ -482,6 +482,23 @@
         linear-gradient(160deg, rgba(126,224,195,0.24), rgba(125,164,255,0.24)),
         radial-gradient(circle at top, rgba(255,255,255,0.26), transparent 30%);
       box-shadow: inset 0 0 0 1px rgba(255,255,255,0.08), 0 20px 50px rgba(0,0,0,0.4);
+      display: grid;
+      place-items: center;
+      overflow: hidden;
+    }
+
+    .preview-frame img {
+      width: 100%;
+      height: 100%;
+      object-fit: contain;
+      display: block;
+      background: #ffffff;
+    }
+
+    .preview-frame.empty {
+      background:
+        linear-gradient(160deg, rgba(126,224,195,0.24), rgba(125,164,255,0.24)),
+        radial-gradient(circle at top, rgba(255,255,255,0.26), transparent 30%);
     }
 
     .load-more-bar {
@@ -592,7 +609,7 @@
       .preview-stage { min-height: 420px; }
     }
   </style>
-  <script src="/static/js/shared-topbar.js?v=topbar-record-20260504" defer></script>
+  <script src="/static/js/shared-topbar.js?v=history-download-fetch-20260504-4" defer></script>
 </head>
 <body data-page-mode="generation-record">
   <div class="page">
@@ -866,21 +883,124 @@
       return item?.originalUrl || item?.original_url || item?.imageUrl || '';
     }
 
+    function stripImageProcessQuery(url) {
+      const rawUrl = String(url || '').trim();
+      if (!rawUrl) return '';
+      try {
+        const parsed = new URL(rawUrl, window.location.origin);
+        const query = parsed.search || '';
+        if (query.includes('imageMogr2') || query.includes('x-oss-process')) {
+          parsed.search = '';
+        }
+        return parsed.href;
+      } catch (error) {
+        return rawUrl.split('?imageMogr2')[0].split('?x-oss-process')[0];
+      }
+    }
+
+    function getOriginalDownloadUrl(item) {
+      return stripImageProcessQuery(getOriginalUrl(item));
+    }
+
+    function buildDownloadFilename(item, fallbackExt = 'png') {
+      const sourceUrl = getOriginalDownloadUrl(item) || getDisplayUrl(item);
+      let name = String(item?.title || '').trim();
+      try {
+        const parsed = new URL(sourceUrl, window.location.origin);
+        const pathName = decodeURIComponent(parsed.pathname.split('/').pop() || '');
+        if (pathName) name = pathName;
+      } catch (error) {
+      }
+      name = name.replace(/[\\/:*?"<>|]+/g, '-').replace(/\s+/g, ' ').trim();
+      if (!name) name = `generation-image-${Date.now()}.${fallbackExt}`;
+      if (!/\.[a-z0-9]{2,5}$/i.test(name)) name = `${name}.${fallbackExt}`;
+      return name;
+    }
+
+    function buildAppUrl(path) {
+      return new URL(path, window.location.origin).href;
+    }
+
+    function downloadBlobUrl(url, filename) {
+      const link = document.createElement('a');
+      link.href = url;
+      link.download = filename || '';
+      link.style.display = 'none';
+      document.body.appendChild(link);
+      link.click();
+      link.remove();
+    }
+
+    async function downloadZipSynchronously(urls) {
+      const response = await fetch(buildAppUrl('/api/generation-history/download-zip'), {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json', Accept: 'application/zip, application/json' },
+        credentials: 'same-origin',
+        body: JSON.stringify({ urls }),
+      });
+      const contentType = response.headers.get('content-type') || '';
+      if (!response.ok) {
+        if (contentType.includes('application/json')) {
+          const payload = await response.json().catch(() => ({}));
+          throw new Error(payload.error || '同步打包下载失败');
+        }
+        const text = await response.text().catch(() => '');
+        throw new Error(text || '同步打包下载失败');
+      }
+      const blob = await response.blob();
+      if (!blob.size) {
+        throw new Error('打包文件为空');
+      }
+      const blobUrl = URL.createObjectURL(blob);
+      const filename = `generation-history-originals-${Date.now()}.zip`;
+      downloadBlobUrl(blobUrl, filename);
+      setTimeout(() => URL.revokeObjectURL(blobUrl), 1000);
+    }
+
+    async function triggerZipDownload(downloadUrl) {
+      if (!downloadUrl) return;
+      try {
+        const response = await fetch(buildAppUrl(downloadUrl), {
+          method: 'GET',
+          credentials: 'same-origin',
+          cache: 'no-store',
+        });
+        if (!response.ok) {
+          const contentType = response.headers.get('content-type') || '';
+          if (contentType.includes('application/json')) {
+            const payload = await response.json().catch(() => ({}));
+            throw new Error(payload.error || '下载打包文件失败');
+          }
+          throw new Error(`下载失败：${response.status} ${response.statusText}`);
+        }
+        const blob = await response.blob();
+        if (!blob.size) {
+          throw new Error('打包文件为空');
+        }
+        const blobUrl = URL.createObjectURL(blob);
+        downloadBlobUrl(blobUrl, `generation-history-originals-${Date.now()}.zip`);
+        setTimeout(() => URL.revokeObjectURL(blobUrl), 1000);
+      } catch (error) {
+        alert(error.message || '下载打包文件失败');
+      }
+    }
+
     async function waitForZipTask(taskId) {
       for (let index = 0; index < 120; index += 1) {
-        const response = await fetch(`/api/generation-history/zip-tasks/${encodeURIComponent(taskId)}`, {
+        const response = await fetch(buildAppUrl(`/api/generation-history/zip-tasks/${encodeURIComponent(taskId)}`), {
           credentials: 'same-origin',
           cache: 'no-store',
         });
         const payload = await response.json().catch(() => ({}));
+        const task = payload?.task || {};
         if (!response.ok || !payload.success) {
           throw new Error(payload.error || '查询打包任务失败');
         }
-        if (payload.status === 'succeeded' && payload.download_url) {
-          return payload.download_url;
+        if (task.status === 'succeeded' && task.download_url) {
+          return task.download_url;
         }
-        if (payload.status === 'failed') {
-          throw new Error(payload.error || '打包下载失败');
+        if (task.status === 'failed') {
+          throw new Error(task.error || payload.error || '打包下载失败');
         }
         await new Promise((resolve) => setTimeout(resolve, 1000));
       }
@@ -893,7 +1013,7 @@
         alert('请先选择要打包下载的图片');
         return;
       }
-      const urls = selectedItems.map((item) => getOriginalUrl(item)).filter(Boolean);
+      const urls = selectedItems.map((item) => getOriginalDownloadUrl(item)).filter(Boolean);
       if (!urls.length) {
         alert('选中的图片没有可下载的原图地址');
         return;
@@ -902,21 +1022,25 @@
       downloadBtn.classList.add('disabled');
       downloadBtn.textContent = '打包中...';
       try {
-        const response = await fetch('/api/generation-history/zip-tasks', {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json', Accept: 'application/json' },
-          credentials: 'same-origin',
-          body: JSON.stringify({ urls }),
-        });
-        const payload = await response.json().catch(() => ({}));
-        if (!response.ok || !payload.success) {
-          throw new Error(payload.error || '创建打包任务失败');
-        }
-        downloadBtn.textContent = '打包中...';
-        const downloadUrl = await waitForZipTask(payload.task_id);
-        window.location.href = downloadUrl;
+        await downloadZipSynchronously(urls);
       } catch (error) {
-        alert(error.message || '打包下载失败');
+        try {
+          downloadBtn.textContent = '重试打包中...';
+          const response = await fetch(buildAppUrl('/api/generation-history/zip-tasks'), {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json', Accept: 'application/json' },
+            credentials: 'same-origin',
+            body: JSON.stringify({ urls }),
+          });
+          const payload = await response.json().catch(() => ({}));
+          if (!response.ok || !payload.success) {
+            throw new Error(payload.error || '异步打包任务创建失败');
+          }
+          const downloadUrl = await waitForZipTask(payload.task_id);
+          await triggerZipDownload(downloadUrl);
+        } catch (fallbackError) {
+          alert(fallbackError.message || error.message || '打包下载失败');
+        }
       } finally {
         updateDownloadButtonState();
       }
@@ -926,10 +1050,38 @@
       return item?.imageUrl || item?.thumbUrl || getOriginalUrl(item);
     }
 
-    function downloadSingleDisplayImage(item) {
-      const url = getDisplayUrl(item);
+    function getPreviewDisplayUrl(item) {
+      return item?.thumbUrl || item?.imageUrl || getOriginalUrl(item);
+    }
+
+    async function downloadSingleDisplayImage(item) {
+      const url = getOriginalDownloadUrl(item) || stripImageProcessQuery(getDisplayUrl(item));
       if (!url) return;
-      window.open(url, '_blank', 'noopener');
+      const downloadUrl = buildAppUrl(`/api/generation-history/download-image?url=${encodeURIComponent(url)}`);
+      try {
+        const response = await fetch(downloadUrl, {
+          method: 'GET',
+          credentials: 'same-origin',
+          cache: 'no-store',
+        });
+        if (!response.ok) {
+          const contentType = response.headers.get('content-type') || '';
+          if (contentType.includes('application/json')) {
+            const payload = await response.json().catch(() => ({}));
+            throw new Error(payload.error || '下载图片失败');
+          }
+          throw new Error(`下载失败：${response.status} ${response.statusText}`);
+        }
+        const blob = await response.blob();
+        if (!blob.size) {
+          throw new Error('图片文件为空');
+        }
+        const blobUrl = URL.createObjectURL(blob);
+        downloadBlobUrl(blobUrl, buildDownloadFilename(item));
+        setTimeout(() => URL.revokeObjectURL(blobUrl), 1000);
+      } catch (error) {
+        alert(error.message || '下载图片失败');
+      }
     }
 
     function removeBrokenImageCard(card) {
@@ -1040,14 +1192,14 @@
     function renderPreview() {
       const item = state.previewId ? getItemById(state.previewId) : null;
       if (!item) return;
-      if (item.imageUrl) {
-        previewFrame.style.background = `url('${item.imageUrl.replace(/'/g, '%27')}') center / contain no-repeat, #fff`;
+      const displayUrl = getPreviewDisplayUrl(item);
+      if (displayUrl) {
+        previewFrame.classList.remove('empty');
+        previewFrame.innerHTML = `<img src="${escapeHtml(displayUrl)}" alt="${escapeHtml(item.title || '图片预览')}" decoding="async">`;
         return;
       }
-      previewFrame.style.background = `
-        linear-gradient(160deg, rgba(126,224,195,0.22), rgba(125,164,255,0.22)),
-        radial-gradient(circle at top, rgba(255,255,255,0.28), transparent 30%)
-      `;
+      previewFrame.classList.add('empty');
+      previewFrame.innerHTML = '';
     }
 
     loadMoreBtn.addEventListener('click', () => {

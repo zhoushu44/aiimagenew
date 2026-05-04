@@ -1109,7 +1109,7 @@
             if (task.status === 'failed') {
               throw new Error(task.error || '基准模特生成失败，请稍后重试');
             }
-            await new Promise((resolve) => window.setTimeout(resolve, 3000));
+            await new Promise((resolve) => window.setTimeout(resolve, 5000));
           }
           throw new Error('基准模特生成等待超时，请稍后重试');
         };

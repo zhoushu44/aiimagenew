@@ -1,5 +1,29 @@
 # 版本说明 (Changelog)
 
+## v10.6 (2026-05-04)
+
+### IO 与性能优化（Critical）
+
+- **前端轮询频率优化**：通用任务轮询从 1 秒改为 3 秒，fashion 页面轮询从 3 秒改为 5 秒，减少 60-80% 的状态查询请求
+- **状态查询接口改为只读**：移除 `GET /api/generation-tasks/<id>` 中的 `task_polled` 写入和 trace summary 日志，消除轮询引发的额外写入压力
+- **大模型响应日志压缩**：Chat completion 响应日志从打印完整 body 改为结构化摘要（model、choices、finish_reason、content_len、reasoning_len、token usage），单次日志体积减少 95% 以上
+- **综合效果**：磁盘 IO 预计降低 70-90%，解决容器日志文件快速膨胀导致的磁盘打满问题
+
+### 生成记录下载修复
+
+- 修复批量下载按钮点击后显示 404 Not Found 的问题，改用 fetch API 获取文件后创建 blob URL 下载
+- 修复异步 ZIP 打包轮询读取错误响应字段导致一直停留在"打包中..."的问题，正确读取 `payload.task.status` 和 `payload.task.download_url`
+- 批量下载优先走同步打包，异步任务仅在同步失败时作为兜底方案
+
+### Docker
+
+- 镜像标签 10.5 → 10.6
+- GitHub Action 自动打 `10.6` + `latest` 双标签
+- 推送仍由 GitHub Action 自动完成，本地不执行 Docker 推送操作
+- `.dockerignore` 继续排除 `.env` 和 `.env.*`
+
+***
+
 ## v10.5 (2026-05-04)
 
 ### 关键修复
@@ -352,6 +376,7 @@
 
 | 版本    | 标签               | 日期         |
 | ----- | ---------------- | ---------- |
+| v10.6 | `10.6`, `latest` | 2026-05-04 |
 | v10.5 | `10.5`, `latest` | 2026-05-04 |
 | v10.4 | `10.4`, `latest` | 2026-05-03 |
 | v10.3 | `10.3`, `latest` | 2026-05-03 |

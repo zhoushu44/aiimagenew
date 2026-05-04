@@ -191,28 +191,55 @@ def call_chat_completion(system_prompt: str, user_content, temperature: float = 
             raise RuntimeError(f'主AI接口失败且备用AI接口也失败。主接口错误：{error_text}；备用接口错误：{fallback_exc}') from fallback_exc
         model = fallback_model
 
-    try:
-        raw_response_text = json.dumps(response, ensure_ascii=False, indent=2) if isinstance(response, dict) else response.model_dump_json(indent=2)
-    except Exception:
-        raw_response_text = str(response)
-    logger.warning(
-        'Chat completion response: model=%s body=%s',
-        model,
-        raw_response_text,
-    )
-
     if isinstance(response, dict):
         choice = ((response.get('choices') or [None])[0] or {})
         message = choice.get('message') or {}
         text = message.get('content') or ''
+        usage = response.get('usage') or {}
+        finish_reason = choice.get('finish_reason') or ''
+        choice_count = len(response.get('choices') or [])
     else:
-        message = ((getattr(response, 'choices', None) or [None])[0] or {}).message
+        choices = getattr(response, 'choices', None) or [None]
+        choice = choices[0] or {}
+        message = choice.message if hasattr(choice, 'message') else {}
         text = getattr(message, 'content', '') if message else ''
+        usage = getattr(response, 'usage', None) or {}
+        finish_reason = getattr(choice, 'finish_reason', '') if choice else ''
+        choice_count = len(choices)
     if isinstance(text, list):
         text = ''.join(part.text for part in text if getattr(part, 'text', None))
     elif text is None:
         text = ''
     text = str(text).strip() if text else ''
+    reasoning_text = message.get('reasoning_content', '') if isinstance(message, dict) else (getattr(message, 'reasoning_content', '') if message else '')
+    if isinstance(reasoning_text, list):
+        reasoning_text = ''.join(part.text for part in reasoning_text if getattr(part, 'text', None))
+    elif reasoning_text is None:
+        reasoning_text = ''
+    reasoning_text = str(reasoning_text).strip() if reasoning_text else ''
+    if isinstance(usage, dict):
+        prompt_tokens = usage.get('prompt_tokens')
+        completion_tokens = usage.get('completion_tokens')
+        total_tokens = usage.get('total_tokens')
+        reasoning_tokens = (usage.get('completion_tokens_details') or {}).get('reasoning_tokens') if isinstance(usage.get('completion_tokens_details'), dict) else None
+    else:
+        prompt_tokens = getattr(usage, 'prompt_tokens', None)
+        completion_tokens = getattr(usage, 'completion_tokens', None)
+        total_tokens = getattr(usage, 'total_tokens', None)
+        completion_details = getattr(usage, 'completion_tokens_details', None)
+        reasoning_tokens = getattr(completion_details, 'reasoning_tokens', None) if completion_details else None
+    logger.warning(
+        'Chat completion response summary: model=%s choices=%s finish_reason=%s content_len=%s reasoning_len=%s prompt_tokens=%s completion_tokens=%s total_tokens=%s reasoning_tokens=%s',
+        model,
+        choice_count,
+        finish_reason,
+        len(text),
+        len(reasoning_text),
+        prompt_tokens,
+        completion_tokens,
+        total_tokens,
+        reasoning_tokens,
+    )
 
     if not text:
         fallback_fields = ['reasoning_content']
