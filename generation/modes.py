@@ -430,6 +430,21 @@ def get_mode3_image_edit_size(image_size_ratio: str = '') -> str:
     return '2048x2048'
 
 
+def get_mode3_image_generation_size(image_size_ratio: str = '') -> str:
+    configured_size = get_supabase_setting('MODE3_IMAGE_GENERATION_SIZE', get_optional_env('MODE3_IMAGE_GENERATION_SIZE', '')).strip()
+    if configured_size:
+        return configured_size
+    ratio = (image_size_ratio or '').strip()
+    generation_size_map = {
+        '1:1': '1024x1024',
+        '3:4': '1024x1536',
+        '4:3': '1536x1024',
+        '9:16': '1024x1792',
+        '16:9': '1792x1024',
+    }
+    return generation_size_map.get(ratio, '1024x1024')
+
+
 _BLANK_CANVAS_DIR = Path(__file__).resolve().parent.parent / 'static' / 'blank'
 _BLANK_CANVAS_CACHE: dict[str, 'LazyImagePayload'] = {}
 _BLANK_CANVAS_CACHE_LOCK = threading.Lock()
@@ -588,6 +603,56 @@ def call_mode2_text2image(client: OpenAI, prompt: str, ratio: str, resolution: s
     return generated_item, model
 
 
+def call_mode3_image_generation(client: OpenAI, prompt: str, image_size_ratio: str = '', _logger: logging.Logger | None = None):
+    log = _logger or logger
+    model = get_supabase_setting('MODE3_IMAGE_MODEL', get_optional_env('MODE3_IMAGE_MODEL', 'gpt-image-2'))
+    size = get_mode3_image_generation_size(image_size_ratio)
+    watermark = get_supabase_setting_bool('MODE3_IMAGE_WATERMARK', get_optional_bool_env('MODE3_IMAGE_WATERMARK', False))
+    base_url = get_mode3_base_url()
+    api_key = get_mode3_api_key()
+    if not api_key:
+        raise ValueError('mode3 文生图缺少 MODE3_OPENAI_API_KEY')
+    request_url = f'{base_url}/images/generations'
+    data = {
+        'model': model,
+        'prompt': prompt,
+        'size': size,
+        'response_format': 'url',
+    }
+    quality = get_supabase_setting('MODE3_IMAGE_QUALITY', get_optional_env('MODE3_IMAGE_QUALITY', '')).strip()
+    if quality:
+        data['quality'] = quality
+    if watermark:
+        data['watermark'] = 'true'
+    log.warning('Mode3 image generation request model=%s size=%s base_url=%s', model, size, base_url)
+    try:
+        response = requests.post(
+            request_url,
+            headers={'Authorization': f'Bearer {api_key}'},
+            json=data,
+            timeout=get_mode3_timeout_seconds(),
+        )
+    except Exception as exc:
+        log.exception('Mode3 image generation request failed before response: model=%s size=%s base_url=%s error=%s', model, size, base_url, exc)
+        raise
+    if response.status_code >= 400:
+        log.warning(
+            'Mode3 image generation response error: model=%s size=%s base_url=%s status=%s body=%s',
+            model,
+            size,
+            base_url,
+            response.status_code,
+            response.text[:500],
+        )
+        raise ValueError(f'mode3 文生图接口错误 {response.status_code}：{response.text[:500]}')
+    try:
+        payload = response.json()
+    except ValueError as exc:
+        log.warning('Mode3 image generation response json parse failed: model=%s size=%s base_url=%s body=%s', model, size, base_url, response.text[:500])
+        raise ValueError('mode3 文生图接口返回了无效 JSON') from exc
+    return pick_generated_image_item(payload), model
+
+
 def call_mode3_image_edit(client: OpenAI, prompt: str, image_payloads, image_size_ratio: str = '', _logger: logging.Logger | None = None):
     log = _logger or logger
     model = get_supabase_setting('MODE3_IMAGE_MODEL', get_optional_env('MODE3_IMAGE_MODEL', 'gpt-image-2'))
@@ -656,9 +721,7 @@ def call_mode3_image_edit(client: OpenAI, prompt: str, image_payloads, image_siz
 
 
 def call_mode3_text2image(client: OpenAI, prompt: str):
-    model = get_supabase_setting('MODE3_IMAGE_MODEL', get_optional_env('MODE3_IMAGE_MODEL', 'gpt-image-2'))
-    blank_payload = create_mode3_blank_canvas_payload()
-    generated_item, _model = call_mode3_image_edit(client, prompt, [blank_payload], get_mode3_image_edit_size())
+    generated_item, model = call_mode3_image_generation(client, prompt, '')
     return generated_item, model
 
 
@@ -861,7 +924,10 @@ def call_mode2_images_parallel_with_partial_retry(prompt: str, image_payloads, m
 
 
 def call_mode3_single_image(prompt: str, image_payloads, image_size_ratio: str = '', text_type: str = '', country: str = '', product_json=None, image_type: str = '', plan_item=None, all_plan_types=None):
-    generated_item, _model = call_mode3_image_edit(get_mode3_client(), prompt, image_payloads or [create_mode3_blank_canvas_payload(image_size_ratio)], image_size_ratio)
+    if image_payloads:
+        generated_item, _model = call_mode3_image_edit(get_mode3_client(), prompt, image_payloads, image_size_ratio)
+    else:
+        generated_item, _model = call_mode3_image_generation(get_mode3_client(), prompt, image_size_ratio)
     return generated_item
 
 

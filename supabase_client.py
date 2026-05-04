@@ -423,6 +423,9 @@ def grant_payment_points_once(order_row: dict, _logger: logging.Logger | None = 
     )
 
 
+GENERATION_HISTORY_IMAGES_TABLE = 'generation_history_images'
+
+
 def is_generation_task_persistence_enabled() -> bool:
     return bool(SUPABASE_URL and SUPABASE_SERVICE_ROLE_KEY)
 
@@ -521,6 +524,93 @@ def fetch_generation_task_row(task_id: str, _logger: logging.Logger | None = Non
     except Exception as exc:
         log.warning('Failed to fetch generation task %s: %s', normalized_task_id, exc)
         return None
+
+
+def upsert_generation_history_images(items: list[dict], _logger: logging.Logger | None = None) -> bool:
+    log = _logger or logger
+    if not is_generation_task_persistence_enabled() or not items:
+        return False
+    rows = []
+    now_iso = datetime.now(timezone.utc).isoformat()
+    for item in items:
+        payload = item if isinstance(item, dict) else {}
+        item_id = str(payload.get('id') or '').strip()
+        user_id = str(payload.get('user_id') or '').strip()
+        task_id = str(payload.get('task_id') or '').strip()
+        original_url = str(payload.get('original_url') or '').strip()
+        if not item_id or not user_id or not task_id or not original_url:
+            continue
+        rows.append({
+            'id': item_id,
+            'user_id': user_id,
+            'task_id': task_id,
+            'mode': payload.get('mode') or '',
+            'status': payload.get('status') or 'succeeded',
+            'title': payload.get('title') or '历史图片',
+            'tags': _safe_json_payload(payload.get('tags')),
+            'original_url': original_url,
+            'image_url': payload.get('image_url') or original_url,
+            'thumb_url': payload.get('thumb_url') or payload.get('image_url') or original_url,
+            'source': payload.get('source') or 'COS',
+            'created_at': payload.get('created_at') or now_iso,
+            'created_at_ts': payload.get('created_at_ts'),
+            'completed_at': payload.get('completed_at'),
+            'completed_at_ts': payload.get('completed_at_ts'),
+            'updated_at': now_iso,
+        })
+    if not rows:
+        return False
+    try:
+        response = requests.post(
+            build_supabase_request_url(f'/rest/v1/{GENERATION_HISTORY_IMAGES_TABLE}'),
+            headers={
+                **_build_supabase_service_headers(),
+                'Prefer': 'resolution=merge-duplicates,return=minimal',
+            },
+            params={'on_conflict': 'id'},
+            json=rows,
+            timeout=20,
+        )
+        if response.status_code >= 400:
+            log.warning('Failed to upsert generation history images: status=%s body=%s', response.status_code, response.text)
+            return False
+        return True
+    except Exception as exc:
+        log.warning('Failed to upsert generation history images: %s', exc)
+        return False
+
+
+def fetch_user_generation_history_images(user_id: str, limit: int = 50, offset: int = 0, mode: str | None = None, _logger: logging.Logger | None = None) -> list[dict]:
+    log = _logger or logger
+    if not is_generation_task_persistence_enabled():
+        return []
+    normalized_user_id = str(user_id or '').strip()
+    if not normalized_user_id:
+        return []
+    query_params = {
+        'select': '*',
+        'user_id': f'eq.{normalized_user_id}',
+        'order': 'created_at.desc',
+        'limit': str(max(1, min(int(limit or 50), 51))),
+        'offset': str(max(0, int(offset or 0))),
+    }
+    if mode:
+        query_params['mode'] = f'eq.{str(mode).strip()}'
+    try:
+        response = requests.get(
+            build_supabase_request_url(f'/rest/v1/{GENERATION_HISTORY_IMAGES_TABLE}'),
+            headers=_build_supabase_service_headers(),
+            params=query_params,
+            timeout=20,
+        )
+        if response.status_code >= 400:
+            log.warning('Failed to fetch generation history images for %s: status=%s body=%s', normalized_user_id, response.status_code, response.text)
+            return []
+        payload = response.json()
+        return [row for row in (payload if isinstance(payload, list) else []) if isinstance(row, dict)]
+    except Exception as exc:
+        log.warning('Failed to fetch generation history images for %s: %s', normalized_user_id, exc)
+        return []
 
 
 def fetch_user_generation_tasks(user_id: str, limit: int = 20, offset: int = 0, mode: str | None = None, status: str | None = None, _logger: logging.Logger | None = None) -> list[dict]:

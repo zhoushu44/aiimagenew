@@ -1,5 +1,51 @@
 # 版本说明 (Changelog)
 
+## v10.5 (2026-05-04)
+
+### 关键修复
+
+- 修复 mode3 生成模特无参考图时错误补空白画布走 `/images/edits` 的问题
+- 生成模特无参考图场景改走 `/images/generations` 文生图接口，使用 JSON body 请求
+- 新增 mode3 文生图独立尺寸映射，`3:4` 默认使用已验证可用的 `1024x1536`，避免继续复用 `2048x2048` 导致上游断开或 `bad_response_status_code`
+- 修复 mode3 文生图 form-data 请求导致官方接口返回 `openai_error / bad_response_status_code` 的问题
+
+### 生成记录中心
+
+- 新增独立 `generation_history_images` 生成记录图片读模型，历史页优先读取该表
+- 历史页按 50 张分页加载，支持“加载更多”
+- 列表图使用 COS WebP 缩略图，预览使用 WebP，原图保留下载
+- 失败任务、无图任务、破图卡片不再显示
+- 精简生成记录中心按钮，仅保留顶部下载；鼠标拖拽选中和反选能力保留
+
+### 下载与服务器压力优化
+
+- 生成记录选中原图打包下载改为异步 ZIP 任务
+- 单次 ZIP 打包上限 50 张
+- ZIP 下载图片域名白名单限制为 `aiimg.86969678.xyz`
+- 前端下载按钮显示选中数量，未选中时禁用或提示
+
+### 共享顶部通栏
+
+- `/suite`、`/aplus`、`/fashion`、`/generation-record` 共用 `shared-topbar.js`
+- 顶部通栏中 `Workspace` 调整为“生成记录”按钮，并跳转 `/generation-record`
+- “生成记录”和“账号面板”按钮统一为同一按钮样式
+- 修复 `/generation-record` 页面顶部通栏按钮文字颜色与其他页面不一致的问题
+
+### 验证
+
+- `python -m py_compile generation/modes.py app.py` 通过
+- 真实调用 mode3 `/images/generations` 成功返回图片 URL
+- 生成模特核心链路验证成功，返回 `image/png` 图片内容
+
+### Docker
+
+- 镜像标签 10.4 → 10.5
+- GitHub Action 自动打 `10.5` + `latest` 双标签
+- 推送仍由 GitHub Action 自动完成，本地不执行 Docker 推送操作
+- `.dockerignore` 继续排除 `.env` 和 `.env.*`
+
+***
+
 ## v10.4 (2026-05-03)
 
 ### 关键修复
@@ -306,6 +352,10 @@
 
 | 版本    | 标签               | 日期         |
 | ----- | ---------------- | ---------- |
+| v10.5 | `10.5`, `latest` | 2026-05-04 |
+| v10.4 | `10.4`, `latest` | 2026-05-03 |
+| v10.3 | `10.3`, `latest` | 2026-05-03 |
+| v10.2 | `10.2`, `latest` | 2026-05-03 |
 | v10.1 | `10.1`, `latest` | 2026-05-02 |
 | v10.0 | `10.0`, `latest` | 2026-05-02 |
 | v9.9  | `9.9`, `latest`  | 2026-05-02 |

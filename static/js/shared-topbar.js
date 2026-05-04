@@ -5,7 +5,7 @@
     kicker: 'Shared Workspace / Minimal Tech Control',
     title: 'AI 电商视觉控制台',
     actions: [
-      { kind: 'pill', text: 'Workspace' },
+      { kind: 'link', text: '生成记录', href: '/generation-record' },
       { kind: 'account', text: '账号面板' },
     ],
   };
@@ -17,7 +17,17 @@
     fashion: SHARED_TOPBAR_CONFIG,
     auth: SHARED_TOPBAR_CONFIG,
     settings: SHARED_TOPBAR_CONFIG,
-    'generation-record': SHARED_TOPBAR_CONFIG,
+    'generation-record': {
+      ...SHARED_TOPBAR_CONFIG,
+      homeLabel: '生成记录',
+      homeHref: '/generation-record',
+      kicker: 'Generation Record / History Workspace',
+      title: '生成记录中心',
+      actions: [
+        { kind: 'link', text: '生成记录', href: '/generation-record' },
+        { kind: 'account', text: '账号面板' },
+      ],
+    },
   };
 
   const PATH_TO_MODE = {
@@ -3775,13 +3785,25 @@
 
     for (const action of config.actions) {
       if (action.kind === 'pill') {
-        const pill = document.createElement('span');
+        const pill = document.createElement(action.href ? 'a' : 'span');
         pill.className = 'console-pill';
         pill.textContent = action.text;
+        if (action.href) pill.href = action.href;
+        if (action.target) pill.target = action.target;
+        if (action.rel) pill.rel = action.rel;
         meta.appendChild(pill);
         continue;
       }
-
+      if (action.kind === 'link') {
+        const link = document.createElement('a');
+        link.className = 'btn ghost';
+        link.href = action.href || '#';
+        link.textContent = action.text;
+        if (action.target) link.target = action.target;
+        if (action.rel) link.rel = action.rel;
+        meta.appendChild(link);
+        continue;
+      }
       if (action.kind === 'account') {
         const button = document.createElement('button');
         button.className = action.className || 'btn ghost';

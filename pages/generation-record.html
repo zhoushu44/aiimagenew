@@ -4,7 +4,7 @@
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
   <title>生成记录中心</title>
-  <script src="/static/js/shared-topbar.js" defer></script>
+  <link rel="stylesheet" href="/static/css/workspace.css?v=topbar-record-20260504">
   <style>
     :root {
       --bg: #0b0f14;
@@ -76,11 +76,10 @@
 
     .topbar {
       position: sticky;
-      top: 12px;
+      top: 98px;
       z-index: 20;
-      display: grid;
-      grid-template-columns: 1.2fr 1fr 1.25fr;
-      gap: 14px;
+      display: flex;
+      justify-content: flex-end;
       align-items: center;
       padding: 16px 18px;
       margin-bottom: 18px;
@@ -93,8 +92,43 @@
 
     .topbar-section { min-width: 0; }
 
-    .menu-links,
-    .filter-tags,
+    .console-topbar {
+      position: sticky;
+      top: 12px;
+      z-index: 30;
+      margin-bottom: 12px;
+      background: rgba(255, 255, 255, 0.88);
+      border-color: rgba(15, 23, 42, 0.08);
+      box-shadow: 0 18px 48px rgba(15, 23, 42, 0.08);
+    }
+
+    .console-topbar .btn {
+      color: #111827;
+    }
+
+    .console-topbar .console-home {
+      background: #111827;
+      border-color: rgba(15, 23, 42, 0.14);
+      color: #ffffff;
+      text-decoration: none;
+    }
+
+    .console-topbar .console-title {
+      color: #111827;
+      font-family: "Segoe UI Variable Display", "PingFang SC", "Microsoft YaHei UI", sans-serif;
+    }
+
+    .console-topbar .console-pill {
+      text-decoration: none;
+      cursor: pointer;
+    }
+
+    .console-topbar .console-pill:hover {
+      border-color: rgba(17, 24, 39, 0.28);
+      color: #111827;
+      transform: translateY(-1px);
+    }
+
     .toolbar-actions {
       display: flex;
       flex-wrap: wrap;
@@ -102,8 +136,6 @@
       align-items: center;
     }
 
-    .menu-link,
-    .filter-tag,
     .tool-btn {
       border: 1px solid rgba(255,255,255,0.1);
       background: rgba(255,255,255,0.04);
@@ -119,23 +151,18 @@
       user-select: none;
     }
 
-    .menu-link:hover,
-    .filter-tag:hover,
     .tool-btn:hover {
       transform: translateY(-1px);
       border-color: rgba(17,24,39,0.18);
       box-shadow: 0 8px 18px rgba(17,24,39,0.06);
     }
 
-    .menu-link.active,
-    .filter-tag.active {
-      background: rgba(126,224,195,0.16);
-      border-color: rgba(126,224,195,0.4);
-      color: #eafff7;
-    }
-
     .toolbar-actions {
       justify-content: flex-end;
+    }
+
+    #downloadBtn {
+      color: #ffffff;
     }
 
     .tool-btn.primary {
@@ -143,12 +170,6 @@
       color: #071017;
       border-color: transparent;
       font-weight: 700;
-    }
-
-    .tool-btn.danger.active {
-      background: #ffffff;
-      border-color: rgba(220,38,38,0.28);
-      color: #000000;
     }
 
     .tool-btn.disabled,
@@ -321,13 +342,14 @@
       box-shadow: 0 10px 22px rgba(17,24,39,0.08);
     }
 
-    .thumb,
-    .select-box {
-      pointer-events: none;
+    .image-card.selected {
+      border-color: rgba(126,224,195,0.95);
+      box-shadow: 0 0 0 2px rgba(126,224,195,0.28), 0 10px 22px rgba(17,24,39,0.08);
     }
 
-    .thumb::after {
-      content: none;
+    .image-card.drag-over {
+      border-color: rgba(125,164,255,0.9);
+      box-shadow: 0 0 0 1px rgba(125,164,255,0.3), 0 10px 22px rgba(17,24,39,0.08);
     }
 
     .select-box {
@@ -345,6 +367,7 @@
       font-size: 10px;
       z-index: 2;
       backdrop-filter: blur(4px);
+      pointer-events: none;
     }
 
     .image-card.selected .select-box {
@@ -353,110 +376,32 @@
       color: #081019;
     }
 
-    .image-card.drag-over {
-      border-color: rgba(125,164,255,0.9);
-      box-shadow: 0 0 0 1px rgba(125,164,255,0.3), 0 18px 34px rgba(0,0,0,0.25);
+    .thumb {
+      display: block;
+      width: 100%;
+      height: 100%;
+      min-height: 108px;
+      border-radius: inherit;
+      background-repeat: no-repeat;
+      background-size: cover;
+      background-position: center;
+    }
+
+    .thumb img {
+      display: block;
+      width: 100%;
+      height: 100%;
+      border-radius: inherit;
+      object-fit: cover;
+    }
+
+    .thumb::after {
+      content: none;
     }
 
     .image-card.previewing .thumb {
       outline: 2px solid rgba(125,164,255,0.55);
       outline-offset: -2px;
-    }
-
-    .card-meta {
-      padding: 12px 12px 14px;
-      display: grid;
-      gap: 8px;
-    }
-
-    .card-labels {
-      display: flex;
-      flex-wrap: wrap;
-      gap: 6px;
-    }
-
-    .tag {
-      display: inline-flex;
-      align-items: center;
-      gap: 6px;
-      max-width: 100%;
-      padding: 7px 9px;
-      border-radius: 999px;
-      font-size: 11px;
-      color: #000000;
-      background: #ffffff;
-      border: 1px solid rgba(17,24,39,0.08);
-      white-space: nowrap;
-      overflow: hidden;
-      text-overflow: ellipsis;
-    }
-
-    .tag.primary {
-      background: rgba(126,224,195,0.12);
-      border-color: rgba(126,224,195,0.22);
-    }
-
-    .tag.subtle {
-      color: var(--muted);
-    }
-
-    .card-caption {
-      color: var(--text);
-      font-size: 12px;
-      line-height: 1.6;
-    }
-
-    .card-meta {
-      padding: 12px 12px 14px;
-      display: grid;
-      gap: 8px;
-    }
-
-    .card-labels {
-      display: flex;
-      flex-wrap: wrap;
-      gap: 6px;
-    }
-
-    .tag {
-      display: inline-flex;
-      align-items: center;
-      gap: 6px;
-      max-width: 100%;
-      padding: 7px 9px;
-      border-radius: 999px;
-      font-size: 11px;
-      color: var(--text);
-      background: rgba(255,255,255,0.04);
-      border: 1px solid rgba(255,255,255,0.08);
-      white-space: nowrap;
-      overflow: hidden;
-      text-overflow: ellipsis;
-    }
-
-    .tag.primary {
-      background: rgba(126,224,195,0.12);
-      border-color: rgba(126,224,195,0.3);
-      color: #defbf2;
-    }
-
-    .tag.subtle {
-      color: var(--muted);
-    }
-
-    .card-caption {
-      color: var(--muted);
-      font-size: 12px;
-      line-height: 1.6;
-    }
-
-    .selection-status {
-      color: var(--muted);
-      font-size: 12px;
-    }
-
-    .selection-status strong {
-      color: var(--text);
     }
 
     .range-overlay {
@@ -549,6 +494,10 @@
       min-width: 168px;
     }
 
+    #loadMoreBtn {
+      color: #000000;
+    }
+
     .preview-side {
       padding: 18px;
       border-left: 1px solid rgba(255,255,255,0.08);
@@ -596,7 +545,6 @@
     }
 
     @media (max-width: 1320px) {
-      .topbar,
       .hero-inner,
       .preview-body {
         grid-template-columns: 1fr;
@@ -624,49 +572,50 @@
     @media (max-width: 860px) {
       .page { width: min(100vw - 16px, 1560px); }
       .waterfall-grid { grid-template-columns: repeat(2, minmax(0, 1fr)); }
-      .topbar { padding: 14px; }
+      .console-topbar {
+        position: relative;
+        top: auto;
+        align-items: flex-start;
+        flex-direction: column;
+      }
+      .topbar {
+        top: 12px;
+        padding: 14px;
+      }
     }
 
     @media (max-width: 640px) {
       .waterfall-grid { grid-template-columns: 1fr; }
       .hero h1 { max-width: none; }
-      .menu-links, .filter-tags, .toolbar-actions { gap: 8px; }
-      .menu-link, .filter-tag, .tool-btn { padding: 9px 11px; }
+      .toolbar-actions { gap: 8px; }
+      .tool-btn { padding: 9px 11px; }
       .preview-stage { min-height: 420px; }
     }
   </style>
+  <script src="/static/js/shared-topbar.js?v=topbar-record-20260504" defer></script>
 </head>
 <body data-page-mode="generation-record">
   <div class="page">
+    <header class="console-topbar" data-shared-topbar>
+      <div class="console-brand">
+        <a class="console-home" href="/generation-record" data-topbar-home>生成记录</a>
+        <div>
+          <div class="console-kicker" data-topbar-kicker>Generation Record / History Workspace</div>
+          <div class="console-title" data-topbar-title>生成记录中心</div>
+        </div>
+      </div>
+      <div class="console-topbar-meta" data-topbar-meta></div>
+    </header>
+
     <header class="topbar">
         <div class="topbar-section">
-          <div class="menu-links" id="menuLinks">
-            <button class="menu-link active" data-mode="aplus">A+详情页生成</button>
-            <button class="menu-link" data-mode="fashion">服饰穿戴图生成</button>
-            <button class="menu-link" data-mode="suite">商品套图生成</button>
-          </div>
-        </div>
-
-        <div class="topbar-section">
-          <div class="filter-tags" id="filterTags">
-            <button class="filter-tag active" data-filter="all">所有图片</button>
-            <button class="filter-tag" data-filter="favorite">我的收藏</button>
-          </div>
-        </div>
-
-        <div class="topbar-section">
           <div class="toolbar-actions">
-            <span class="selection-status" id="selectionStatus">已选择 <strong>0</strong> 项内容</span>
-            <button class="tool-btn danger disabled" id="deleteBtn" disabled>删除</button>
-            <button class="tool-btn disabled" id="downloadBtn" disabled>下载</button>
-            <button class="tool-btn disabled" id="publishBtn" disabled>发布</button>
-            <button class="tool-btn disabled" id="favoriteBtn" disabled>收藏</button>
-            <button class="tool-btn disabled" id="clearBtn" disabled>取消选择</button>
+            <button class="tool-btn" id="downloadBtn">下载</button>
           </div>
         </div>
       </header>
 
-    <main class="timeline-block" id="timelineBlock"></main>
+    <main class="timeline-block" id="timelineBlock"><div style="color:#000;padding:40px 0;">正在读取历史生成记录...</div></main>
   </div>
 
   <div class="range-overlay" id="rangeOverlay">
@@ -701,7 +650,6 @@
           </div>
           <div class="preview-actions">
             <button class="preview-btn primary" id="previewDownloadBtn">下载当前图片</button>
-            <button class="preview-btn ghost" id="previewSelectBtn">选择 / 取消选择</button>
           </div>
         </aside>
       </div>
@@ -710,27 +658,20 @@
 
   <script>
     const state = {
-      mode: 'aplus',
-      filter: 'all',
-      selected: new Set(),
-      previewId: null,
       sourceReady: false,
       loadingMore: false,
       offset: 0,
       limit: 50,
       hasMore: false,
-      visibleDays: 5,
+      selected: new Set(),
+      previewId: null,
+      visibleDays: Number.POSITIVE_INFINITY,
       dayStep: 5,
       totalDays: 0,
     };
 
     const timelineBlock = document.getElementById('timelineBlock');
-    const selectionStatus = document.getElementById('selectionStatus');
-    const deleteBtn = document.getElementById('deleteBtn');
     const downloadBtn = document.getElementById('downloadBtn');
-    const publishBtn = document.getElementById('publishBtn');
-    const favoriteBtn = document.getElementById('favoriteBtn');
-    const clearBtn = document.getElementById('clearBtn');
     const previewModal = document.getElementById('previewModal');
     const previewTitle = document.getElementById('previewTitle');
     const previewSubTitle = document.getElementById('previewSubTitle');
@@ -745,6 +686,16 @@
     loadMoreBar.innerHTML = '<button class="tool-btn" id="loadMoreBtn">加载更多</button>';
     timelineBlock.parentNode.appendChild(loadMoreBar);
     const loadMoreBtn = loadMoreBar.querySelector('#loadMoreBtn');
+
+    function escapeHtml(value) {
+      return String(value ?? '').replace(/[&<>'"]/g, (char) => ({
+        '&': '&amp;',
+        '<': '&lt;',
+        '>': '&gt;',
+        "'": '&#39;',
+        '"': '&quot;',
+      }[char]));
+    }
 
     function getTaskImages(task) {
       const result = task?.result || {};
@@ -766,42 +717,69 @@
       return images;
     }
 
-    function toGalleryGroups(tasks) {
-      const sortedTasks = [...tasks].sort((a, b) => new Date(b.created_at || 0) - new Date(a.created_at || 0));
+    function toGalleryGroups(items) {
+      const sortedItems = [...items].sort((a, b) => new Date(b.created_at || 0) - new Date(a.created_at || 0));
       const bucket = new Map();
-      sortedTasks.forEach((task) => {
-        const createdAt = task.created_at ? new Date(task.created_at) : null;
+      sortedItems.forEach((item) => {
+        const createdAt = item.created_at ? new Date(item.created_at) : null;
         const dateKey = createdAt && !Number.isNaN(createdAt.getTime()) ? createdAt.toISOString().slice(0, 10) : 'unknown';
         const label = dateKey === 'unknown' ? '未知日期' : `${createdAt.getMonth() + 1}月${createdAt.getDate()}日`;
         if (!bucket.has(dateKey)) {
           bucket.set(dateKey, { date: dateKey, label, items: [] });
         }
-        const taskImages = getTaskImages(task);
-        const imageItems = taskImages.length ? taskImages : [{ id: `${task.task_id}-task`, url: '', title: task.details || task.mode || '历史记录', tags: [] }];
-        imageItems.forEach((image, index) => {
-          bucket.get(dateKey).items.push({
-            id: `${task.task_id}-${index}`,
-            title: image.title || task.details || task.mode || '历史记录',
-            tags: [...(image.tags || []), task.mode || 'history', task.status || 'pending'],
-            source: image.url ? 'COS' : '任务记录',
-            kind: task.status === 'succeeded' ? 'generated' : 'reference',
-            favorite: false,
-            imageUrl: image.url,
-            task,
-          });
+        const imageUrl = String(item.image_url || item.url || '').trim();
+        if (!imageUrl) return;
+        bucket.get(dateKey).items.push({
+          id: item.id || `${item.task_id || 'task'}-${bucket.get(dateKey).items.length}`,
+          title: item.title || item.mode || '历史记录',
+          tags: Array.isArray(item.tags) ? item.tags : [],
+          source: item.source || 'COS',
+          kind: 'generated',
+          favorite: false,
+          imageUrl,
+          originalUrl: item.original_url || imageUrl,
+          thumbUrl: item.thumb_url || imageUrl,
+          task: item,
         });
       });
-      return [...bucket.values()].sort((a, b) => b.date.localeCompare(a.date));
+      return [...bucket.values()].filter((group) => group.items.length).sort((a, b) => b.date.localeCompare(a.date));
     }
 
     let galleryData = [];
 
-    async function ensureServerSession() {
-      if (!window.__sharedTopbarSyncServerSession) return;
-      try {
-        await window.__sharedTopbarSyncServerSession();
-      } catch (error) {
+    async function waitForSharedTopbarSync(timeout = 5000) {
+      const startedAt = Date.now();
+      while (!window.__sharedTopbarSyncServerSession && Date.now() - startedAt < timeout) {
+        await new Promise((resolve) => setTimeout(resolve, 50));
       }
+      return window.__sharedTopbarSyncServerSession || null;
+    }
+
+    async function getExistingServerSession() {
+      try {
+        const response = await fetch('/api/auth/session', {
+          method: 'POST',
+          headers: { Accept: 'application/json' },
+          credentials: 'same-origin',
+          cache: 'no-store',
+        });
+        const payload = await response.json().catch(() => ({}));
+        return payload?.session || null;
+      } catch (error) {
+        return null;
+      }
+    }
+
+    async function ensureServerSession() {
+      const syncServerSession = await waitForSharedTopbarSync();
+      if (syncServerSession) {
+        try {
+          const syncedSession = await syncServerSession();
+          if (syncedSession) return syncedSession;
+        } catch (error) {
+        }
+      }
+      return getExistingServerSession();
     }
 
     async function loadHistoryData(reset = false) {
@@ -811,18 +789,27 @@
       if (reset) {
         state.offset = 0;
         state.hasMore = false;
-        state.visibleDays = 5;
+        state.visibleDays = Number.POSITIVE_INFINITY;
         galleryData = [];
       }
-      await ensureServerSession();
-      const response = await fetch(`/api/generation-tasks?limit=${state.limit}&offset=${state.offset}`, { credentials: 'same-origin' });
+      const serverSession = await ensureServerSession();
+      const currentUser = serverSession?.user || null;
+      const currentUserLabel = currentUser?.phone || currentUser?.email || currentUser?.id || '未知账号';
+      if (!serverSession) {
+        state.loadingMore = false;
+        state.sourceReady = true;
+        updateLoadMoreState();
+        timelineBlock.innerHTML = '<div style="color:#000;padding:40px 0;">请先点击右上角账号面板登录，登录后这里会显示当前账号的生成记录。</div>';
+        return;
+      }
+      const response = await fetch(`/api/generation-history?limit=${state.limit}&offset=${state.offset}`, { credentials: 'same-origin', cache: 'no-store' });
       const payload = await response.json();
       if (!response.ok || !payload.success) {
         state.loadingMore = false;
         updateLoadMoreState();
         throw new Error(payload.error || '读取历史生成数据失败');
       }
-      const nextGroups = toGalleryGroups(payload.tasks || []);
+      const nextGroups = toGalleryGroups(payload.items || []);
       const merged = new Map();
       [...galleryData, ...nextGroups].forEach((group) => {
         if (!merged.has(group.date)) {
@@ -837,20 +824,25 @@
       });
       galleryData = [...merged.values()].sort((a, b) => b.date.localeCompare(a.date));
       state.totalDays = galleryData.length;
-      state.offset += payload.tasks ? payload.tasks.length : 0;
-      state.hasMore = (payload.tasks || []).length === state.limit || state.visibleDays < state.totalDays;
+      state.offset = Number(payload.next_offset || state.offset + (payload.items || []).length);
+      state.hasMore = Boolean(payload.has_more);
       state.sourceReady = true;
       state.loadingMore = false;
-      renderTimeline();
-      renderTopbarState();
+      renderTimeline(currentUserLabel);
       updateLoadMoreState();
+    }
+
+    function updateDownloadButtonState() {
+      const count = state.selected.size;
+      downloadBtn.disabled = count <= 0;
+      downloadBtn.classList.toggle('disabled', count <= 0);
+      downloadBtn.textContent = count > 0 ? `下载已选 ${count} 张` : '下载';
     }
 
     function updateLoadMoreState() {
       if (!loadMoreBtn) return;
-      const canRevealMoreDays = state.visibleDays < state.totalDays;
-      loadMoreBtn.disabled = state.loadingMore || (!state.hasMore && !canRevealMoreDays);
-      loadMoreBtn.textContent = state.loadingMore ? '加载中...' : ((state.hasMore || canRevealMoreDays) ? '加载更多' : '没有更多了');
+      loadMoreBtn.disabled = state.loadingMore || !state.hasMore;
+      loadMoreBtn.textContent = state.loadingMore ? '加载中...' : (state.hasMore ? '加载更多' : '没有更多了');
       loadMoreBar.style.display = state.sourceReady ? 'flex' : 'none';
     }
 
@@ -859,45 +851,105 @@
     }
 
     function getVisibleItems() {
-      const items = getAllItems();
-      if (state.filter === 'favorite') return items.filter((item) => item.favorite);
-      return items;
+      return getAllItems();
     }
 
     function getItemById(id) {
       return getAllItems().find((item) => item.id === id);
     }
 
-    function randomHeight(id) {
-      const seed = id.split('').reduce((acc, ch) => acc + ch.charCodeAt(0), 0);
-      return 220 + (seed % 110);
+    function getSelectedItems() {
+      return [...state.selected].map((id) => getItemById(id)).filter(Boolean);
     }
 
-    function buildThumbStyle(item) {
-      if (item.imageUrl) {
-        return `background-image:url('${item.imageUrl.replace(/'/g, '%27')}'); background-size:cover; background-position:center;`;
+    function getOriginalUrl(item) {
+      return item?.originalUrl || item?.original_url || item?.imageUrl || '';
+    }
+
+    async function waitForZipTask(taskId) {
+      for (let index = 0; index < 120; index += 1) {
+        const response = await fetch(`/api/generation-history/zip-tasks/${encodeURIComponent(taskId)}`, {
+          credentials: 'same-origin',
+          cache: 'no-store',
+        });
+        const payload = await response.json().catch(() => ({}));
+        if (!response.ok || !payload.success) {
+          throw new Error(payload.error || '查询打包任务失败');
+        }
+        if (payload.status === 'succeeded' && payload.download_url) {
+          return payload.download_url;
+        }
+        if (payload.status === 'failed') {
+          throw new Error(payload.error || '打包下载失败');
+        }
+        await new Promise((resolve) => setTimeout(resolve, 1000));
       }
-      const hue = (item.id.split('').reduce((acc, ch) => acc + ch.charCodeAt(0), 0) * 17) % 360;
-      const angle = (item.id.charCodeAt(0) % 2 === 0 ? 145 : 160);
-      return `background: linear-gradient(${angle}deg, hsla(${hue}, 70%, 78%, 0.9), hsla(${(hue + 32) % 360}, 78%, 92%, 0.9));`;
+      throw new Error('打包任务等待超时，请稍后重试');
     }
 
-    function renderTopbarState() {
-      const count = state.selected.size;
-      selectionStatus.innerHTML = `已选择 <strong>${count}</strong> 项内容`;
-      const hasSelection = count > 0;
-      [deleteBtn, downloadBtn, publishBtn, favoriteBtn, clearBtn].forEach((btn) => {
-        btn.disabled = !hasSelection;
-        btn.classList.toggle('disabled', !hasSelection);
+    async function downloadSelectedOriginals() {
+      const selectedItems = getSelectedItems();
+      if (!selectedItems.length) {
+        alert('请先选择要打包下载的图片');
+        return;
+      }
+      const urls = selectedItems.map((item) => getOriginalUrl(item)).filter(Boolean);
+      if (!urls.length) {
+        alert('选中的图片没有可下载的原图地址');
+        return;
+      }
+      downloadBtn.disabled = true;
+      downloadBtn.classList.add('disabled');
+      downloadBtn.textContent = '打包中...';
+      try {
+        const response = await fetch('/api/generation-history/zip-tasks', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json', Accept: 'application/json' },
+          credentials: 'same-origin',
+          body: JSON.stringify({ urls }),
+        });
+        const payload = await response.json().catch(() => ({}));
+        if (!response.ok || !payload.success) {
+          throw new Error(payload.error || '创建打包任务失败');
+        }
+        downloadBtn.textContent = '打包中...';
+        const downloadUrl = await waitForZipTask(payload.task_id);
+        window.location.href = downloadUrl;
+      } catch (error) {
+        alert(error.message || '打包下载失败');
+      } finally {
+        updateDownloadButtonState();
+      }
+    }
+
+    function getDisplayUrl(item) {
+      return item?.imageUrl || item?.thumbUrl || getOriginalUrl(item);
+    }
+
+    function downloadSingleDisplayImage(item) {
+      const url = getDisplayUrl(item);
+      if (!url) return;
+      window.open(url, '_blank', 'noopener');
+    }
+
+    function removeBrokenImageCard(card) {
+      if (!card) return;
+      const id = card.dataset.id;
+      if (id) {
+        state.selected.delete(id);
+        if (state.previewId === id) {
+          closePreview();
+        }
+      }
+      card.remove();
+      document.querySelectorAll('.timeline-group').forEach((group) => {
+        if (!group.querySelector('.image-card')) group.remove();
       });
-      deleteBtn.classList.toggle('active', hasSelection);
-      downloadBtn.classList.toggle('active', hasSelection);
-      publishBtn.classList.toggle('active', hasSelection);
-      favoriteBtn.classList.toggle('active', hasSelection);
-      clearBtn.classList.toggle('active', hasSelection);
+      updateLoadMoreState();
+      updateDownloadButtonState();
     }
 
-    function renderTimeline() {
+    function renderTimeline(currentUserLabel = '') {
       const visibleItems = getVisibleItems();
       const visibleDates = new Set(galleryData.slice(0, state.visibleDays).map((group) => group.date));
       const groupedVisible = galleryData
@@ -909,7 +961,8 @@
         .filter((group) => group.items.length > 0);
 
       if (!groupedVisible.length) {
-        timelineBlock.innerHTML = '<div style="color:#000;padding:40px 0;">暂无历史生成记录。请先在生成页发起一次真实生成，或确认当前登录账号是否一致。</div>';
+        const accountText = currentUserLabel ? `当前账号：${escapeHtml(currentUserLabel)}。` : '';
+        timelineBlock.innerHTML = `<div style="color:#000;padding:40px 0;">暂无历史生成记录。${accountText}请确认当前登录账号是否是刚才生成图片的账号。</div>`;
         return;
       }
 
@@ -925,8 +978,6 @@
           </div>
         </section>
       `).join('');
-
-      bindCardEvents();
       syncSelectionUI();
     }
 
@@ -934,37 +985,35 @@
       const selected = state.selected.has(item.id) ? 'selected' : '';
       const previewing = state.previewId === item.id ? 'previewing' : '';
       const delay = itemIndex * 35;
+      const thumbUrl = item.thumbUrl || item.imageUrl;
       return `
-        <article class="image-card ${selected} ${previewing}" data-id="${item.id}" data-date="${item.date}" data-favorite="${item.favorite ? '1' : '0'}" style="animation-delay:${delay}ms;">
+        <article class="image-card ${selected} ${previewing}" data-id="${escapeHtml(item.id)}" data-date="${escapeHtml(item.date || '')}" style="animation-delay:${delay}ms;">
           <span class="select-box">✓</span>
-          <div class="thumb" style="${buildThumbStyle(item)}"></div>
+          <div class="thumb"><img src="${escapeHtml(thumbUrl)}" data-original="${escapeHtml(item.imageUrl)}" loading="lazy" decoding="async" alt="${escapeHtml(item.title || '历史图片')}"></div>
         </article>
       `;
     }
 
-    function bindCardEvents() {
-      document.querySelectorAll('.image-card').forEach((card) => {
-        const id = card.dataset.id;
-        card.addEventListener('click', (event) => {
-          event.preventDefault();
-          event.stopPropagation();
-        });
-      });
-    }
+    timelineBlock.addEventListener('error', (event) => {
+      const target = event.target;
+      if (!target || target.tagName !== 'IMG') return;
+      removeBrokenImageCard(target.closest('.image-card'));
+    }, true);
 
     function syncSelectionUI() {
       document.querySelectorAll('.image-card').forEach((card) => {
         card.classList.toggle('selected', state.selected.has(card.dataset.id));
       });
+      updateDownloadButtonState();
     }
 
     function toggleSelect(id) {
+      if (!id) return;
       if (state.selected.has(id)) {
         state.selected.delete(id);
       } else {
         state.selected.add(id);
       }
-      renderTopbarState();
       syncSelectionUI();
     }
 
@@ -1001,94 +1050,8 @@
       `;
     }
 
-    function setMode(mode) {
-      state.mode = mode;
-      document.querySelectorAll('[data-mode]').forEach((btn) => btn.classList.toggle('active', btn.dataset.mode === mode));
-      const labels = {
-        aplus: 'A+详情页生成',
-        fashion: '服饰穿戴图生成',
-        suite: '商品套图生成',
-      };
-      document.querySelector('.hero h1').textContent = `${labels[mode]} 的图片时间线。`;
-    }
-
-    function setFilter(filter) {
-      state.filter = filter;
-      document.querySelectorAll('[data-filter]').forEach((btn) => btn.classList.toggle('active', btn.dataset.filter === filter));
-      renderTimeline();
-    }
-
-    document.querySelectorAll('[data-filter]').forEach((btn) => {
-      btn.classList.toggle('active', btn.dataset.filter === 'all');
-    });
-
-    function getSelectedIds() {
-      return [...state.selected];
-    }
-
-    function clearSelection() {
-      state.selected.clear();
-      renderTopbarState();
-      syncSelectionUI();
-    }
-
-    function selectInRange(startId, endId) {
-      const visibleIds = getVisibleItems().map((item) => item.id);
-      const startIndex = visibleIds.indexOf(startId);
-      const endIndex = visibleIds.indexOf(endId);
-      if (startIndex < 0 || endIndex < 0) return;
-      const [from, to] = startIndex < endIndex ? [startIndex, endIndex] : [endIndex, startIndex];
-      visibleIds.slice(from, to + 1).forEach((id) => state.selected.add(id));
-      renderTopbarState();
-      syncSelectionUI();
-    }
-
-    document.getElementById('menuLinks').addEventListener('click', (event) => {
-      const btn = event.target.closest('[data-mode]');
-      if (!btn) return;
-      setMode(btn.dataset.mode);
-    });
-
-    document.getElementById('filterTags').addEventListener('click', (event) => {
-      const btn = event.target.closest('[data-filter]');
-      if (!btn) return;
-      setFilter(btn.dataset.filter);
-    });
-
-    deleteBtn.addEventListener('click', () => {
-      if (!state.selected.size) return;
-      const selected = getSelectedIds();
-      selected.forEach((id) => state.selected.delete(id));
-      renderTopbarState();
-      syncSelectionUI();
-      alert(`已删除 ${selected.length} 项（占位逻辑）`);
-    });
-
-    downloadBtn.addEventListener('click', () => {
-      if (!state.selected.size) return;
-      alert(`已触发 ${state.selected.size} 项下载（占位逻辑）`);
-    });
-
-    publishBtn.addEventListener('click', () => {
-      if (!state.selected.size) return;
-      alert(`已触发 ${state.selected.size} 项发布（占位逻辑）`);
-    });
-
-    favoriteBtn.addEventListener('click', () => {
-      if (!state.selected.size) return;
-      alert(`已触发 ${state.selected.size} 项收藏（占位逻辑）`);
-    });
-
-    clearBtn.addEventListener('click', clearSelection);
     loadMoreBtn.addEventListener('click', () => {
-      if (state.loadingMore) return;
-      if (state.visibleDays < state.totalDays) {
-        state.visibleDays += state.dayStep;
-        renderTimeline();
-        updateLoadMoreState();
-        return;
-      }
-      if (!state.hasMore) return;
+      if (state.loadingMore || !state.hasMore) return;
       loadHistoryData(false).catch((error) => {
         console.error(error);
         alert('加载更多失败');
@@ -1096,17 +1059,6 @@
     });
 
     document.getElementById('closePreviewBtn').addEventListener('click', closePreview);
-    document.getElementById('previewDownloadBtn').addEventListener('click', () => {
-      if (!state.previewId) return;
-      alert('当前图片下载（占位逻辑）');
-    });
-    document.getElementById('previewSelectBtn').addEventListener('click', () => {
-      if (!state.previewId) return;
-      toggleSelect(state.previewId);
-    });
-    previewModal.addEventListener('click', (event) => {
-      if (event.target === previewModal) closePreview();
-    });
 
     let dragState = null;
     let dragTargetId = null;
@@ -1117,24 +1069,13 @@
     document.addEventListener('mousedown', (event) => {
       const card = event.target.closest('.image-card');
       const isLeftButton = event.button === 0;
-      if (!isLeftButton) return;
-      if (!card) {
-        dragState = {
-          x: event.clientX,
-          y: event.clientY,
-        };
-        dragTargetId = null;
-        dragCandidateIds = [];
-        dragActivated = false;
-        event.preventDefault();
-        return;
-      }
+      if (!isLeftButton || event.target.closest('button, a, input, textarea, select')) return;
       dragState = {
         x: event.clientX,
         y: event.clientY,
       };
-      dragTargetId = card.dataset.id;
-      dragCandidateIds = [dragTargetId];
+      dragTargetId = card ? card.dataset.id : null;
+      dragCandidateIds = dragTargetId ? [dragTargetId] : [];
       dragActivated = false;
       event.preventDefault();
     });
@@ -1157,7 +1098,6 @@
       rangeBox.style.top = `${top}px`;
       rangeBox.style.width = `${width}px`;
       rangeBox.style.height = `${height}px`;
-
       const rect = { left, top, right: left + width, bottom: top + height };
       dragCandidateIds = [];
       document.querySelectorAll('.image-card').forEach((card) => {
@@ -1171,9 +1111,7 @@
     document.addEventListener('mouseup', () => {
       if (!dragState) return;
       if (!dragActivated) {
-        if (dragTargetId) {
-          toggleSelect(dragTargetId);
-        }
+        if (dragTargetId) toggleSelect(dragTargetId);
         dragState = null;
         dragTargetId = null;
         dragCandidateIds = [];
@@ -1183,7 +1121,6 @@
       dragActivated = false;
       rangeOverlay.classList.remove('active');
       document.querySelectorAll('.image-card').forEach((card) => card.classList.remove('drag-over'));
-      const selectedIds = new Set(dragCandidateIds);
       const onlySelected = dragCandidateIds.length > 0 && dragCandidateIds.every((id) => state.selected.has(id));
       if (onlySelected) {
         dragCandidateIds.forEach((id) => state.selected.delete(id));
@@ -1191,13 +1128,28 @@
         dragCandidateIds.forEach((id) => state.selected.add(id));
       }
       dragCandidateIds = [];
-      renderTopbarState();
       syncSelectionUI();
     });
 
-    setMode('aplus');
-    state.filter = 'all';
-    document.querySelectorAll('[data-filter]').forEach((btn) => btn.classList.toggle('active', btn.dataset.filter === 'all'));
+    downloadBtn.addEventListener('click', downloadSelectedOriginals);
+
+    document.getElementById('previewDownloadBtn').addEventListener('click', () => {
+      const item = state.previewId ? getItemById(state.previewId) : null;
+      if (!item) return;
+      downloadSingleDisplayImage(item);
+    });
+    previewModal.addEventListener('click', (event) => {
+      if (event.target === previewModal) closePreview();
+    });
+
+    timelineBlock.addEventListener('click', (event) => {
+      const card = event.target.closest('.image-card');
+      if (!card) return;
+      openPreview(card.dataset.id);
+    });
+
+    updateDownloadButtonState();
+
     loadHistoryData(true).catch((error) => {
       console.error(error);
       timelineBlock.innerHTML = '<div style="color:#000">读取历史生成数据失败</div>';

@@ -37,7 +37,7 @@ from supabase_client import (
     get_user_points_balance, fetch_vip_plan_config, grant_payment_points_once,
     is_generation_task_persistence_enabled, build_generation_task_db_payload,
     persist_generation_task, fetch_generation_task_row, normalize_generation_task_row,
-    fetch_user_generation_tasks,
+    fetch_user_generation_tasks, fetch_user_generation_history_images, upsert_generation_history_images,
     fetch_latest_active_subscription, create_payment_order_record,
     fetch_payment_order_by_out_trade_no, update_payment_order,
     fetch_user_profile_by_user_id, upsert_user_subscription_profile,
@@ -783,6 +783,126 @@ def serialize_generation_task(task: dict | None) -> dict:
     }
 
 
+def _extract_history_image_url(image: dict) -> str:
+    if not isinstance(image, dict):
+        return ''
+    for key in ('thumb_url', 'thumbnail_url', 'image_url', 'url', 'cos_url', 'src', 'href', 'download_url'):
+        value = str(image.get(key) or '').strip()
+        if value:
+            return value
+    return ''
+
+
+def _is_displayable_history_image_url(image_url: str) -> bool:
+    normalized_url = str(image_url or '').strip()
+    if not normalized_url:
+        return False
+    return normalized_url.startswith(('http://', 'https://'))
+
+
+def _build_history_webp_url(image_url: str) -> str:
+    normalized_url = str(image_url or '').strip()
+    if not normalized_url:
+        return ''
+    if 'aiimg.86969678.xyz' in normalized_url and 'imageMogr2/' not in normalized_url:
+        separator = '&' if '?' in normalized_url else '?'
+        return f'{normalized_url}{separator}imageMogr2/format/webp'
+    return normalized_url
+
+
+def _build_history_thumb_url(image_url: str) -> str:
+    normalized_url = str(image_url or '').strip()
+    if not normalized_url:
+        return ''
+    if 'aiimg.86969678.xyz' in normalized_url and 'imageMogr2/' not in normalized_url:
+        separator = '&' if '?' in normalized_url else '?'
+        return f'{normalized_url}{separator}imageMogr2/thumbnail/360x360/format/webp'
+    return normalized_url
+
+
+def _strip_history_image_process_query(image_url: str) -> str:
+    normalized_url = str(image_url or '').strip()
+    if not normalized_url:
+        return ''
+    marker = '?imageMogr2/'
+    marker_index = normalized_url.find(marker)
+    if marker_index >= 0:
+        return normalized_url[:marker_index]
+    marker = '&imageMogr2/'
+    marker_index = normalized_url.find(marker)
+    if marker_index >= 0:
+        return normalized_url[:marker_index]
+    return normalized_url
+
+
+def _build_history_download_filename(url: str, index: int) -> str:
+    parsed = urlparse(str(url or ''))
+    basename = os.path.basename(parsed.path or '')
+    name = sanitize_filename_part(os.path.splitext(basename)[0] or f'image-{index + 1}')
+    ext = os.path.splitext(basename)[1].lower()
+    if not ext or len(ext) > 8:
+        ext = '.jpg'
+    return f'{index + 1:03d}-{name}{ext}'
+
+
+def _download_history_image(url: str) -> tuple[bytes, str]:
+    normalized_url = _strip_history_image_process_query(url)
+    response = requests.get(normalized_url, timeout=20)
+    response.raise_for_status()
+    content_type = str(response.headers.get('content-type') or '').lower()
+    if content_type and not content_type.startswith('image/'):
+        raise ValueError('下载地址不是图片')
+    content = response.content or b''
+    if not content:
+        raise ValueError('图片内容为空')
+    return content, normalized_url
+
+
+def serialize_generation_history_item(task: dict | None, image: dict | None, index: int) -> dict | None:
+    payload = task if isinstance(task, dict) else {}
+    image_payload = image if isinstance(image, dict) else {}
+    image_url = _extract_history_image_url(image_payload)
+    if not _is_displayable_history_image_url(image_url):
+        return None
+    task_id = str(payload.get('task_id') or payload.get('id') or '').strip()
+    title = str(image_payload.get('title') or image_payload.get('label') or payload.get('details') or payload.get('mode') or '历史图片').strip()
+    tags = image_payload.get('tags') if isinstance(image_payload.get('tags'), list) else []
+    return {
+        'id': str(image_payload.get('id') or image_payload.get('key') or f'{task_id}-{index}'),
+        'user_id': str(payload.get('user_id') or '').strip(),
+        'task_id': task_id,
+        'mode': payload.get('mode') or '',
+        'status': payload.get('status') or '',
+        'title': title,
+        'tags': [str(tag) for tag in tags if str(tag or '').strip()],
+        'original_url': image_url,
+        'image_url': _build_history_webp_url(image_url),
+        'thumb_url': _build_history_thumb_url(image_url),
+        'source': 'COS' if image_url.startswith(('http://', 'https://')) else 'generated',
+        'created_at': payload.get('created_at'),
+        'created_at_ts': payload.get('created_at_ts'),
+        'completed_at': payload.get('completed_at'),
+        'completed_at_ts': payload.get('completed_at_ts'),
+    }
+
+
+def serialize_generation_history_items(task: dict | None) -> list[dict]:
+    payload = task if isinstance(task, dict) else {}
+    if payload.get('status') != 'succeeded':
+        return []
+    result = payload.get('result') if isinstance(payload.get('result'), dict) else {}
+    items = []
+    for key in ('images', 'items', 'outputs'):
+        pool = result.get(key)
+        if not isinstance(pool, list):
+            continue
+        for image in pool:
+            item = serialize_generation_history_item(payload, image, len(items))
+            if item:
+                items.append(item)
+    return items
+
+
 def fail_generation_task_with_refund(task_id: str, error: str, details: str = ''):
     failed_at = time.time()
     task = update_generation_task(
@@ -914,6 +1034,9 @@ def run_background_generation_task(task_id: str, builder, timeout: int = 600, ti
             completed_at_ts=finished_at,
         )
         task = update_generation_task(task_id, **_build_task_trace_patch(task, 'task_succeeded', now_ts=finished_at, extra={'elapsed_ms': int(max((finished_at - started_at) * 1000, 0))}))
+        history_items = serialize_generation_history_items(task)
+        if history_items:
+            upsert_generation_history_images(history_items, logger)
         log_generation_task_trace_summary(task, 'succeeded')
         logger.info('Generation task %s succeeded: mode=%s elapsed=%sms', task_id, (task or {}).get('mode') or '', int(max((finished_at - started_at) * 1000, 0)))
     except TimeoutError:
@@ -3459,6 +3582,240 @@ def generation_tasks_list():
         return jsonify({'success': True, 'tasks': [serialize_generation_task(task) for task in tasks]})
     except ValueError:
         return jsonify({'success': False, 'error': '分页参数无效'}), 400
+
+
+HISTORY_IMAGE_ALLOWED_HOST = 'aiimg.86969678.xyz'
+ZIP_DOWNLOAD_MAX_ITEMS = 50
+ZIP_TASK_TTL_SECONDS = 1800
+ZIP_TASKS = {}
+ZIP_TASKS_LOCK = threading.RLock()
+ZIP_TASK_EXECUTOR = concurrent.futures.ThreadPoolExecutor(max_workers=2, thread_name_prefix='history_zip')
+
+
+def _is_allowed_history_download_url(image_url: str) -> bool:
+    normalized_url = str(image_url or '').strip()
+    if not normalized_url:
+        return False
+    parsed = urlparse(_strip_history_image_process_query(normalized_url))
+    return parsed.scheme in {'http', 'https'} and parsed.netloc.lower() == HISTORY_IMAGE_ALLOWED_HOST
+
+
+def _build_history_zip_buffer(urls: list[str]) -> tuple[io.BytesIO, int]:
+    buffer = io.BytesIO()
+    success_count = 0
+    with zipfile.ZipFile(buffer, 'w', compression=zipfile.ZIP_DEFLATED) as archive:
+        for url in urls:
+            try:
+                content, normalized_url = _download_history_image(url)
+            except Exception as exc:
+                logger.warning('Failed to download history image for zip: %s %s', url, exc)
+                continue
+            archive.writestr(_build_history_download_filename(normalized_url, success_count), content)
+            success_count += 1
+    buffer.seek(0)
+    return buffer, success_count
+
+
+def _cleanup_zip_tasks() -> None:
+    now = time.time()
+    with ZIP_TASKS_LOCK:
+        expired_ids = [task_id for task_id, task in ZIP_TASKS.items() if now - float(task.get('created_at') or now) > ZIP_TASK_TTL_SECONDS]
+        for task_id in expired_ids:
+            ZIP_TASKS.pop(task_id, None)
+
+
+def _run_zip_task(task_id: str, urls: list[str]) -> None:
+    try:
+        buffer, success_count = _build_history_zip_buffer(urls)
+        if success_count <= 0:
+            with ZIP_TASKS_LOCK:
+                task = ZIP_TASKS.get(task_id)
+                if task:
+                    task.update({'status': 'failed', 'error': '选中的图片下载失败，请稍后重试', 'updated_at': time.time()})
+            return
+        with ZIP_TASKS_LOCK:
+            task = ZIP_TASKS.get(task_id)
+            if task:
+                task.update({
+                    'status': 'succeeded',
+                    'buffer': buffer,
+                    'filename': f'generation-history-originals-{int(time.time())}.zip',
+                    'success_count': success_count,
+                    'updated_at': time.time(),
+                })
+    except Exception as exc:
+        logger.warning('Failed to build async history zip: %s', exc)
+        with ZIP_TASKS_LOCK:
+            task = ZIP_TASKS.get(task_id)
+            if task:
+                task.update({'status': 'failed', 'error': '打包下载失败，请稍后重试', 'updated_at': time.time()})
+
+
+def _extract_clean_history_download_urls(payload: dict | None) -> tuple[list[str], str | None]:
+    urls = payload.get('urls') if isinstance(payload, dict) else []
+    if not isinstance(urls, list):
+        return [], '下载参数无效'
+    clean_urls = []
+    for url in urls:
+        clean_url = str(url or '').strip()
+        if _is_allowed_history_download_url(clean_url) and clean_url not in clean_urls:
+            clean_urls.append(clean_url)
+    if not clean_urls:
+        return [], '请先选择可下载的本站图片'
+    if len(clean_urls) > ZIP_DOWNLOAD_MAX_ITEMS:
+        return [], f'单次最多打包下载 {ZIP_DOWNLOAD_MAX_ITEMS} 张图片'
+    return clean_urls, None
+
+
+@app.post('/api/generation-history/download-zip')
+def generation_history_download_zip():
+    session_data = g.get('supabase_session') or get_supabase_session()
+    user_id = _get_supabase_user_id(session_data)
+    if not user_id:
+        return jsonify({'success': False, 'error': '请先登录'}), 401
+    clean_urls, error = _extract_clean_history_download_urls(request.get_json(silent=True) if request.is_json else {})
+    if error:
+        return jsonify({'success': False, 'error': error}), 400
+    buffer, success_count = _build_history_zip_buffer(clean_urls)
+    if success_count <= 0:
+        return jsonify({'success': False, 'error': '选中的图片下载失败，请稍后重试'}), 502
+    response = send_file(
+        buffer,
+        mimetype='application/zip',
+        as_attachment=True,
+        download_name=f'generation-history-originals-{int(time.time())}.zip',
+    )
+    response.headers['Cache-Control'] = 'no-store'
+    return response
+
+
+@app.post('/api/generation-history/zip-tasks')
+def create_generation_history_zip_task():
+    session_data = g.get('supabase_session') or get_supabase_session()
+    user_id = _get_supabase_user_id(session_data)
+    if not user_id:
+        return jsonify({'success': False, 'error': '请先登录'}), 401
+    _cleanup_zip_tasks()
+    clean_urls, error = _extract_clean_history_download_urls(request.get_json(silent=True) if request.is_json else {})
+    if error:
+        return jsonify({'success': False, 'error': error}), 400
+    task_id = uuid.uuid4().hex
+    with ZIP_TASKS_LOCK:
+        active_for_user = any(task.get('user_id') == user_id and task.get('status') in {'queued', 'running'} for task in ZIP_TASKS.values())
+        if active_for_user:
+            return jsonify({'success': False, 'error': '已有打包任务正在处理中，请稍后再试'}), 429
+        ZIP_TASKS[task_id] = {
+            'task_id': task_id,
+            'user_id': user_id,
+            'status': 'queued',
+            'total': len(clean_urls),
+            'created_at': time.time(),
+            'updated_at': time.time(),
+        }
+    def task_runner():
+        with ZIP_TASKS_LOCK:
+            task = ZIP_TASKS.get(task_id)
+            if task:
+                task.update({'status': 'running', 'updated_at': time.time()})
+        _run_zip_task(task_id, clean_urls)
+    ZIP_TASK_EXECUTOR.submit(task_runner)
+    return jsonify({'success': True, 'task_id': task_id, 'status': 'queued'})
+
+
+@app.get('/api/generation-history/zip-tasks/<task_id>')
+def get_generation_history_zip_task(task_id):
+    session_data = g.get('supabase_session') or get_supabase_session()
+    user_id = _get_supabase_user_id(session_data)
+    if not user_id:
+        return jsonify({'success': False, 'error': '请先登录'}), 401
+    _cleanup_zip_tasks()
+    with ZIP_TASKS_LOCK:
+        task = ZIP_TASKS.get(str(task_id or '').strip())
+        if not task or task.get('user_id') != user_id:
+            return jsonify({'success': False, 'error': '打包任务不存在或已过期'}), 404
+        status = task.get('status') or 'missing'
+        return jsonify({
+            'success': True,
+            'task_id': task.get('task_id'),
+            'status': status,
+            'total': task.get('total') or 0,
+            'success_count': task.get('success_count') or 0,
+            'error': task.get('error') or '',
+            'download_url': url_for('download_generation_history_zip_task', task_id=task.get('task_id')) if status == 'succeeded' else '',
+        })
+
+
+@app.get('/api/generation-history/zip-tasks/<task_id>/download')
+def download_generation_history_zip_task(task_id):
+    session_data = g.get('supabase_session') or get_supabase_session()
+    user_id = _get_supabase_user_id(session_data)
+    if not user_id:
+        return jsonify({'success': False, 'error': '请先登录'}), 401
+    with ZIP_TASKS_LOCK:
+        task = ZIP_TASKS.get(str(task_id or '').strip())
+        if not task or task.get('user_id') != user_id:
+            return jsonify({'success': False, 'error': '打包任务不存在或已过期'}), 404
+        if task.get('status') != 'succeeded' or not task.get('buffer'):
+            return jsonify({'success': False, 'error': '打包任务尚未完成'}), 409
+        buffer = task.get('buffer')
+        filename = task.get('filename') or f'generation-history-originals-{int(time.time())}.zip'
+        buffer.seek(0)
+    response = send_file(buffer, mimetype='application/zip', as_attachment=True, download_name=filename)
+    response.headers['Cache-Control'] = 'no-store'
+    return response
+
+
+@app.get('/api/generation-history')
+def generation_history_list():
+    session_data = g.get('supabase_session') or get_supabase_session()
+    user_id = _get_supabase_user_id(session_data)
+    if not user_id:
+        return jsonify({'success': False, 'error': '请先登录'}), 401
+    try:
+        limit = max(1, min(int(request.args.get('limit', 50)), 50))
+        offset = max(0, int(request.args.get('offset', 0)))
+    except ValueError:
+        return jsonify({'success': False, 'error': '分页参数无效'}), 400
+    mode = request.args.get('mode') or None
+    direct_items = fetch_user_generation_history_images(user_id, limit=limit + 1, offset=offset, mode=mode, _logger=logger)
+    if direct_items:
+        page_items = direct_items[:limit]
+        next_offset = offset + len(page_items)
+        return jsonify({
+            'success': True,
+            'items': page_items,
+            'limit': limit,
+            'offset': offset,
+            'next_offset': next_offset,
+            'has_more': len(direct_items) > limit,
+            'source': 'history_images',
+        })
+    target_count = offset + limit + 1
+    task_offset = 0
+    task_batch_size = 50
+    max_task_scan = 500
+    items = []
+    scanned = 0
+    while len(items) < target_count and scanned < max_task_scan:
+        tasks = fetch_user_generation_tasks(user_id, limit=task_batch_size, offset=task_offset, mode=mode, status='succeeded')
+        if not tasks:
+            break
+        for task in tasks:
+            items.extend(serialize_generation_history_items(task))
+        scanned += len(tasks)
+        task_offset += len(tasks)
+        if len(tasks) < task_batch_size:
+            break
+    page_items = items[offset:offset + limit]
+    next_offset = offset + len(page_items)
+    return jsonify({
+        'success': True,
+        'items': page_items,
+        'limit': limit,
+        'offset': offset,
+        'next_offset': next_offset,
+        'has_more': len(items) > next_offset,
+    })
 
 
 @app.get('/api/generation-tasks/<task_id>')
