@@ -1,0 +1,394 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>登录状态检查工具</title>
+    <style>
+        body {
+            font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
+            max-width: 800px;
+            margin: 50px auto;
+            padding: 20px;
+            background: #f5f5f5;
+        }
+        .card {
+            background: white;
+            border-radius: 8px;
+            padding: 24px;
+            box-shadow: 0 2px 8px rgba(0,0,0,0.1);
+            margin-bottom: 20px;
+        }
+        h1 {
+            color: #333;
+            margin-top: 0;
+        }
+        .status-item {
+            padding: 12px;
+            margin: 8px 0;
+            border-radius: 6px;
+            border: 1px solid #e0e0e0;
+        }
+        .status-success {
+            background: #e8f5e9;
+            border-color: #4caf50;
+            color: #2e7d32;
+        }
+        .status-error {
+            background: #ffebee;
+            border-color: #f44336;
+            color: #c62828;
+        }
+        .status-warning {
+            background: #fff3e0;
+            border-color: #ff9800;
+            color: #e65100;
+        }
+        .status-info {
+            background: #e3f2fd;
+            border-color: #2196f3;
+            color: #1565c0;
+        }
+        button {
+            background: #2196f3;
+            color: white;
+            border: none;
+            padding: 12px 24px;
+            border-radius: 6px;
+            cursor: pointer;
+            font-size: 14px;
+            margin: 8px 8px 8px 0;
+        }
+        button:hover {
+            background: #1976d2;
+        }
+        button:disabled {
+            background: #ccc;
+            cursor: not-allowed;
+        }
+        .json-display {
+            background: #f5f5f5;
+            padding: 12px;
+            border-radius: 4px;
+            font-family: monospace;
+            font-size: 12px;
+            overflow-x: auto;
+            white-space: pre-wrap;
+            word-wrap: break-word;
+        }
+        .section-title {
+            font-weight: 600;
+            color: #333;
+            margin: 16px 0 8px 0;
+        }
+        .help-text {
+            color: #666;
+            font-size: 13px;
+            line-height: 1.6;
+        }
+        .icon {
+            display: inline-block;
+            width: 20px;
+            text-align: center;
+            margin-right: 8px;
+        }
+    </style>
+</head>
+<body>
+    <div class="card">
+        <h1>🔍 登录状态检查工具</h1>
+        <p class="help-text">这个工具帮助你检查当前登录状态和批量任务功能是否正常工作。</p>
+        
+        <div class="section-title">第一步：检查登录状态</div>
+        <button onclick="checkLoginStatus()">检查登录状态</button>
+        <div id="loginStatus"></div>
+        
+        <div class="section-title">第二步：检查积分余额</div>
+        <button onclick="checkPointsBalance()">检查积分余额</button>
+        <div id="pointsStatus"></div>
+        
+        <div class="section-title">第三步：测试批量任务创建</div>
+        <button onclick="testBatchCreate()">测试批量任务创建</button>
+        <div id="batchStatus"></div>
+        
+        <div class="section-title">第四步：查看服务器日志</div>
+        <p class="help-text">请查看运行服务器的终端窗口，观察是否有以下日志输出：</p>
+        <ul class="help-text">
+            <li>✓ "创建批次记录成功: batch_id=..."</li>
+            <li>✓ "任务已加入队列: task_id=..."</li>
+            <li>✓ "任务处理线程已启动: task_id=..."</li>
+        </ul>
+    </div>
+    
+    <div class="card">
+        <h2>📊 诊断结果</h2>
+        <div id="diagnosisResult"></div>
+    </div>
+    
+    <div class="card">
+        <h2>💡 解决方案</h2>
+        <div id="solution"></div>
+    </div>
+
+    <script>
+        async function checkLoginStatus() {
+            const statusDiv = document.getElementById('loginStatus');
+            statusDiv.innerHTML = '<div class="status-item status-info"><span class="icon">⏳</span>正在检查...</div>';
+            
+            try {
+                const response = await fetch('/api/auth/session', { method: 'POST' });
+                const data = await response.json();
+                
+                if (data.authenticated && data.user) {
+                    statusDiv.innerHTML = `
+                        <div class="status-item status-success">
+                            <span class="icon">✅</span><strong>已登录</strong>
+                        </div>
+                        <div class="json-display">${JSON.stringify(data, null, 2)}</div>
+                    `;
+                } else {
+                    statusDiv.innerHTML = `
+                        <div class="status-item status-error">
+                            <span class="icon">❌</span><strong>未登录</strong>
+                        </div>
+                        <div class="json-display">${JSON.stringify(data, null, 2)}</div>
+                        <p class="help-text" style="margin-top: 12px;">
+                            请先访问 <a href="/auth" target="_blank">/auth</a> 页面进行登录
+                        </p>
+                    `;
+                }
+                
+                updateDiagnosis();
+            } catch (error) {
+                statusDiv.innerHTML = `
+                    <div class="status-item status-error">
+                        <span class="icon">❌</span>检查失败: ${error.message}
+                    </div>
+                `;
+            }
+        }
+        
+        async function checkPointsBalance() {
+            const statusDiv = document.getElementById('pointsStatus');
+            statusDiv.innerHTML = '<div class="status-item status-info"><span class="icon">⏳</span>正在检查...</div>';
+            
+            try {
+                const response = await fetch('/api/points/balance');
+                
+                if (response.status === 401) {
+                    statusDiv.innerHTML = `
+                        <div class="status-item status-error">
+                            <span class="icon">❌</span>未授权 - 需要登录
+                        </div>
+                    `;
+                } else if (response.ok) {
+                    const data = await response.json();
+                    statusDiv.innerHTML = `
+                        <div class="status-item status-success">
+                            <span class="icon">✅</span><strong>积分查询成功</strong>
+                        </div>
+                        <div class="json-display">${JSON.stringify(data, null, 2)}</div>
+                    `;
+                } else {
+                    statusDiv.innerHTML = `
+                        <div class="status-item status-error">
+                            <span class="icon">❌</span>查询失败 (状态码: ${response.status})
+                        </div>
+                    `;
+                }
+                
+                updateDiagnosis();
+            } catch (error) {
+                statusDiv.innerHTML = `
+                    <div class="status-item status-error">
+                        <span class="icon">❌</span>检查失败: ${error.message}
+                    </div>
+                `;
+            }
+        }
+        
+        async function testBatchCreate() {
+            const statusDiv = document.getElementById('batchStatus');
+            statusDiv.innerHTML = '<div class="status-item status-info"><span class="icon">⏳</span>正在测试...</div>';
+            
+            try {
+                const formData = new FormData();
+                formData.append('config', JSON.stringify({
+                    genType: "suite",
+                    platform: "亚马逊",
+                    country: "中国",
+                    textType: "中文",
+                    ratio: "1:1",
+                    sellingPoints: "测试产品",
+                    promptConfig: {
+                        mode: "auto",
+                        styleMode: "auto",
+                        sceneStyle: "modern",
+                        sceneTypes: ["hero"],
+                        sceneNotes: ""
+                    }
+                }));
+                formData.append('tasks', JSON.stringify([{taskId: 1, imageCount: 0}]));
+                
+                const response = await fetch('/api/batch/create', {
+                    method: 'POST',
+                    body: formData
+                });
+                
+                const data = await response.json();
+                
+                if (response.status === 401) {
+                    statusDiv.innerHTML = `
+                        <div class="status-item status-error">
+                            <span class="icon">❌</span>未授权 - 需要登录
+                        </div>
+                        <div class="json-display">${JSON.stringify(data, null, 2)}</div>
+                    `;
+                } else if (data.success) {
+                    statusDiv.innerHTML = `
+                        <div class="status-item status-success">
+                            <span class="icon">✅</span><strong>批量任务创建成功！</strong>
+                        </div>
+                        <div class="json-display">${JSON.stringify(data, null, 2)}</div>
+                        <p class="help-text" style="margin-top: 12px;">
+                            批次ID: ${data.data.batchId}<br>
+                            请查看服务器终端日志确认任务执行
+                        </p>
+                    `;
+                } else {
+                    statusDiv.innerHTML = `
+                        <div class="status-item status-error">
+                            <span class="icon">❌</span>创建失败
+                        </div>
+                        <div class="json-display">${JSON.stringify(data, null, 2)}</div>
+                    `;
+                }
+                
+                updateDiagnosis();
+            } catch (error) {
+                statusDiv.innerHTML = `
+                    <div class="status-item status-error">
+                        <span class="icon">❌</span>测试失败: ${error.message}
+                    </div>
+                `;
+            }
+        }
+        
+        function updateDiagnosis() {
+            const diagnosisDiv = document.getElementById('diagnosisResult');
+            const solutionDiv = document.getElementById('solution');
+            
+            const loginStatus = document.getElementById('loginStatus').innerHTML;
+            const pointsStatus = document.getElementById('pointsStatus').innerHTML;
+            const batchStatus = document.getElementById('batchStatus').innerHTML;
+            
+            const isLoggedIn = loginStatus.includes('已登录');
+            const hasPoints = pointsStatus.includes('积分查询成功');
+            const batchCreated = batchStatus.includes('批量任务创建成功');
+            
+            let diagnosis = '';
+            let solution = '';
+            
+            if (!isLoggedIn) {
+                diagnosis = `
+                    <div class="status-item status-error">
+                        <span class="icon">❌</span><strong>未登录</strong>
+                    </div>
+                    <p class="help-text">当前会话未通过身份验证，无法使用批量任务功能。</p>
+                `;
+                
+                solution = `
+                    <div class="status-item status-warning">
+                        <span class="icon">⚠️</span><strong>需要配置 Supabase 并登录</strong>
+                    </div>
+                    <ol class="help-text">
+                        <li>创建 <code>.env</code> 文件并配置 Supabase 连接信息</li>
+                        <li>配置以下环境变量：
+                            <ul>
+                                <li><code>SUPABASE_URL</code></li>
+                                <li><code>SUPABASE_ANON_KEY</code></li>
+                                <li><code>SUPABASE_SERVICE_ROLE_KEY</code></li>
+                            </ul>
+                        </li>
+                        <li>重启服务器</li>
+                        <li>访问 <a href="/auth" target="_blank">/auth</a> 页面注册/登录</li>
+                        <li>登录成功后重新测试</li>
+                    </ol>
+                `;
+            } else if (!hasPoints) {
+                diagnosis = `
+                    <div class="status-item status-warning">
+                        <span class="icon">⚠️</span><strong>已登录但积分查询失败</strong>
+                    </div>
+                    <p class="help-text">登录状态正常，但积分系统可能未正确配置。</p>
+                `;
+                
+                solution = `
+                    <div class="status-item status-info">
+                        <span class="icon">ℹ️</span><strong>检查积分配置</strong>
+                    </div>
+                    <ol class="help-text">
+                        <li>确认 Supabase 中已创建 <code>user_points_balances</code> 表</li>
+                        <li>检查用户是否有积分记录</li>
+                    </ol>
+                `;
+            } else if (!batchCreated) {
+                diagnosis = `
+                    <div class="status-item status-warning">
+                        <span class="icon">⚠️</span><strong>已登录但批量任务创建失败</strong>
+                    </div>
+                    <p class="help-text">登录状态正常，但批量任务功能可能未正确配置。</p>
+                `;
+                
+                solution = `
+                    <div class="status-item status-info">
+                        <span class="icon">ℹ️</span><strong>检查批量任务配置</strong>
+                    </div>
+                    <ol class="help-text">
+                        <li>确认 Supabase 中已创建批量任务相关表：
+                            <ul>
+                                <li><code>batch_tasks</code></li>
+                                <li><code>batch_task_items</code></li>
+                                <li><code>batch_task_images</code></li>
+                            </ul>
+                        </li>
+                        <li>执行 <code>database/batch_tables.sql</code> 创建表结构</li>
+                        <li>检查服务器日志中的错误信息</li>
+                    </ol>
+                `;
+            } else {
+                diagnosis = `
+                    <div class="status-item status-success">
+                        <span class="icon">✅</span><strong>一切正常！</strong>
+                    </div>
+                    <p class="help-text">
+                        ✓ 已登录<br>
+                        ✓ 积分系统正常<br>
+                        ✓ 批量任务创建成功<br>
+                        <br>
+                        请查看服务器终端日志确认任务正在执行。
+                    </p>
+                `;
+                
+                solution = `
+                    <div class="status-item status-success">
+                        <span class="icon">✅</span><strong>系统运行正常</strong>
+                    </div>
+                    <p class="help-text">
+                        批量任务功能已正确配置并正常工作。<br>
+                        你现在可以在 <a href="/batch" target="_blank">/batch</a> 页面使用批量任务功能了！
+                    </p>
+                `;
+            }
+            
+            diagnosisDiv.innerHTML = diagnosis;
+            solutionDiv.innerHTML = solution;
+        }
+        
+        // 页面加载时自动检查登录状态
+        window.addEventListener('load', () => {
+            checkLoginStatus();
+        });
+    </script>
+</body>
+</html>

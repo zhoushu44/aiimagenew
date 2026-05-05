@@ -97,8 +97,8 @@ gunicorn -w 4 -b 0.0.0.0:5078 --timeout 300 --access-logfile - app:app
 
 | 触发条件 | 标签 |
 |----------|------|
-| 推送到 `main` 分支 | `10.8` + `latest` |
-| GitHub Actions 手动触发 | `10.8` + `latest` |
+| 推送到 `main` 分支 | `10.9` + `latest` |
+| GitHub Actions 手动触发 | `10.9` + `latest` |
 
 - 构建平台：`linux/amd64` + `linux/arm64`
 - 镜像内使用 Gunicorn 运行 Flask 应用：`gunicorn -w 4 -b 0.0.0.0:5078 --timeout 300 --access-logfile - app:app`
@@ -336,7 +336,9 @@ Generation task trace summary polled_succeeded: {...}
   GET    /api/generation-tasks/<id>                  任务查询
   POST   /api/generation-tasks/<id>/cancel           任务取消
   POST   /api/batch/create                           创建批量任务
+  GET    /api/batch/list                              批次任务列表
   GET    /api/batch/<id>/progress                    批量任务进度
+  GET    /api/batch/<id>/download                    批次下载ZIP
   POST   /api/batch/<id>/cancel                      取消批量任务
   GET    /api/batch/queue/status                     队列状态
   POST   /api/pay/create                             创建支付
@@ -416,6 +418,17 @@ POST {MODE3_OPENAI_BASE_URL}/images/edits
 ---
 
 ## 近期更新
+
+### 2026-05-05 · v10.9
+
+- **批量任务下载功能**：新增 `GET /api/batch/<id>/download` 下载批次所有图片
+- **异步下载**：支持 `async_task=1` 参数，后台打包 ZIP 文件
+- **COS 支持**：自动从 COS 下载远程图片打包
+- **任务列表持久化**：新增 `GET /api/batch/list` 获取用户历史批次
+- **页面刷新保留**：刷新页面后任务列表自动从数据库加载
+- **隐藏机制**：点击清空按钮后，批次 ID 存入 localStorage，下次不再显示（数据库记录保留）
+- **代码清理**：删除 6 个测试文件和 4 个临时文件
+- **Docker 镜像 10.9 + latest**
 
 ### 2026-05-05 · v10.8
 

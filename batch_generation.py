@@ -112,19 +112,61 @@ def _generate_suite_images(
             log.warning("没有输入图片，使用模拟结果")
             return _generate_mock_suite_results(config, _logger=log)
         
-        output_count = 3
+        output_count = 6
         scene_types = prompt_config.get('sceneTypes', ['hero', 'usage', 'detail'])
-        if scene_types:
+        if prompt_config.get('outputCount'):
+            output_count = prompt_config.get('outputCount')
+        elif scene_types:
             output_count = len(scene_types)
         
         selected_style = None
-        if prompt_mode == 'auto':
+        
+        if prompt_mode == 'manual':
+            custom_prompt = prompt_config.get('customPrompt', '')
+            custom_style = prompt_config.get('customStyle', '')
+            
+            log.info(f"使用手动模式: custom_prompt={custom_prompt[:100]}..., custom_style={custom_style[:100]}...")
+            
+            if not custom_prompt:
+                log.warning("手动模式下没有提供自定义提示词，使用模拟结果")
+                return _generate_mock_suite_results(config, _logger=log)
+            
+            result_images = []
+            for i in range(output_count):
+                prompt = custom_prompt
+                if custom_style:
+                    prompt = f"{custom_prompt}, {custom_style}"
+                
+                result_images.append({
+                    'url': f'https://example.com/suite_manual_{i+1}_{int(time.time())}.jpg',
+                    'type': f'scene_{i+1}',
+                    'sceneType': f'自定义场景 {i+1}',
+                    'width': 1024,
+                    'height': 1024,
+                    'prompt': prompt,
+                    'downloadName': f'suite_manual_{i+1}.jpg',
+                    'imagePath': '',
+                })
+            
+            log.info(f"手动模式生成完成: {len(result_images)} 张图片")
+            return result_images
+        
+        elif prompt_mode == 'auto':
             scene_style = prompt_config.get('sceneStyle', 'modern')
-            selected_style = {
-                'id': scene_style,
-                'name': _get_style_name(scene_style),
-                'prompt': _get_style_description(scene_style),
-            }
+            custom_style = prompt_config.get('customStyle')
+            
+            if custom_style:
+                selected_style = {
+                    'id': 'custom',
+                    'name': '自定义风格',
+                    'prompt': custom_style,
+                }
+            else:
+                selected_style = {
+                    'id': scene_style,
+                    'name': _get_style_name(scene_style),
+                    'prompt': _get_style_description(scene_style),
+                }
         
         log.info(f"调用build_suite_plan: platform={platform}, output_count={output_count}")
         
@@ -214,13 +256,53 @@ def _generate_aplus_images(
         output_count = len(scene_types) if scene_types else 4
         
         selected_style = None
-        if prompt_mode == 'auto':
+        
+        if prompt_mode == 'manual':
+            custom_prompt = prompt_config.get('customPrompt', '')
+            custom_style = prompt_config.get('customStyle', '')
+            
+            log.info(f"使用手动模式: custom_prompt={custom_prompt[:100]}..., custom_style={custom_style[:100]}...")
+            
+            if not custom_prompt:
+                log.warning("手动模式下没有提供自定义提示词，使用模拟结果")
+                return _generate_mock_aplus_results(config, _logger=log)
+            
+            result_images = []
+            for i in range(output_count):
+                prompt = custom_prompt
+                if custom_style:
+                    prompt = f"{custom_prompt}, {custom_style}"
+                
+                result_images.append({
+                    'url': f'https://example.com/aplus_manual_{i+1}_{int(time.time())}.jpg',
+                    'type': f'module_{i+1}',
+                    'sceneType': f'自定义模块 {i+1}',
+                    'width': 1024,
+                    'height': 1024,
+                    'prompt': prompt,
+                    'downloadName': f'aplus_manual_{i+1}.jpg',
+                    'imagePath': '',
+                })
+            
+            log.info(f"手动模式生成完成: {len(result_images)} 张图片")
+            return result_images
+        
+        elif prompt_mode == 'auto':
             scene_style = prompt_config.get('sceneStyle', 'modern')
-            selected_style = {
-                'id': scene_style,
-                'name': _get_style_name(scene_style),
-                'prompt': _get_style_description(scene_style),
-            }
+            custom_style = prompt_config.get('customStyle')
+            
+            if custom_style:
+                selected_style = {
+                    'id': 'custom',
+                    'name': '自定义风格',
+                    'prompt': custom_style,
+                }
+            else:
+                selected_style = {
+                    'id': scene_style,
+                    'name': _get_style_name(scene_style),
+                    'prompt': _get_style_description(scene_style),
+                }
         
         log.info(f"调用build_aplus_plan: platform={platform}, output_count={output_count}")
         

@@ -2299,6 +2299,150 @@ def get_queue_status():
         return jsonify({'success': False, 'error': str(e)}), 500
 
 
+@app.get('/api/batch/list')
+def get_batch_list():
+    try:
+        session_data = g.get('supabase_session') or get_supabase_session()
+        user_id = _get_supabase_user_id(session_data)
+        if not user_id:
+            return jsonify({'success': False, 'error': '请先登录'}), 401
+
+        from batch_models import BATCH_TABLE, TASK_TABLE
+        
+        batch_response = requests.get(
+            build_supabase_request_url(f'/rest/v1/{BATCH_TABLE}'),
+            headers=_build_supabase_service_headers(),
+            params={
+                'user_id': f'eq.{user_id}',
+                'select': 'batch_id,status,total_tasks,completed_tasks,created_at,gen_type',
+                'order': 'created_at.desc',
+                'limit': '50'
+            },
+            timeout=20,
+        )
+        batches = batch_response.json()
+        
+        result = []
+        for batch in batches:
+            batch_id = batch.get('batch_id')
+            
+            tasks_response = requests.get(
+                build_supabase_request_url(f'/rest/v1/{TASK_TABLE}'),
+                headers=_build_supabase_service_headers(),
+                params={
+                    'batch_id': f'eq.{batch_id}',
+                    'select': 'task_id,task_index,status,progress,current_step,result_images',
+                    'order': 'task_index.asc'
+                },
+                timeout=20,
+            )
+            tasks = tasks_response.json()
+            
+            task_list = []
+            for task in tasks:
+                task_data = {
+                    'taskId': task.get('task_index'),
+                    'status': task.get('status'),
+                    'progress': task.get('progress', 0),
+                    'currentStep': task.get('current_step', ''),
+                    'resultImages': json.loads(task.get('result_images', '[]')) if task.get('result_images') else [],
+                }
+                task_list.append(task_data)
+            
+            result.append({
+                'batchId': batch_id,
+                'status': batch.get('status'),
+                'totalTasks': batch.get('total_tasks', 0),
+                'completedTasks': batch.get('completed_tasks', 0),
+                'createdAt': batch.get('created_at'),
+                'genType': batch.get('gen_type'),
+                'tasks': task_list
+            })
+        
+        return jsonify({'success': True, 'data': result})
+    
+    except Exception as e:
+        logger.error(f"获取批次列表失败: {e}", exc_info=True)
+        return jsonify({'success': False, 'error': str(e)}), 500
+
+
+@app.get('/api/batch/<batch_id>/download')
+def download_batch_zip(batch_id: str):
+    try:
+        session_data = g.get('supabase_session') or get_supabase_session()
+        user_id = _get_supabase_user_id(session_data)
+        if not user_id:
+            return jsonify({'success': False, 'error': '请先登录'}), 401
+
+        from batch_models import BATCH_TABLE, TASK_TABLE
+        
+        batch_response = requests.get(
+            build_supabase_request_url(f'/rest/v1/{BATCH_TABLE}'),
+            headers=_build_supabase_service_headers(),
+            params={'batch_id': f'eq.{batch_id}', 'user_id': f'eq.{user_id}', 'select': 'batch_id,status'},
+            timeout=20,
+        )
+        batch_data = batch_response.json()
+        if not batch_data:
+            return jsonify({'success': False, 'error': '批次不存在或无权限'}), 404
+
+        tasks_response = requests.get(
+            build_supabase_request_url(f'/rest/v1/{TASK_TABLE}'),
+            headers=_build_supabase_service_headers(),
+            params={'batch_id': f'eq.{batch_id}', 'select': 'result_images,status', 'status': 'eq.completed'},
+            timeout=20,
+        )
+        tasks = tasks_response.json()
+
+        image_urls = []
+        for task in tasks:
+            result_images_str = task.get('result_images')
+            if not result_images_str:
+                continue
+            try:
+                result_images = json.loads(result_images_str)
+                for img in result_images:
+                    img_url = img.get('url') or img.get('imagePath')
+                    if img_url:
+                        if img_url.startswith('/generated/'):
+                            img_url = img_url[len('/generated/'):]
+                        image_urls.append(img_url)
+            except (json.JSONDecodeError, TypeError):
+                continue
+
+        if not image_urls:
+            return jsonify({'success': False, 'error': '没有可下载的图片'}), 404
+
+        run_async = str(request.args.get('async_task', '') or '').strip().lower() in {'1', 'true', 'yes'}
+
+        if run_async:
+            task = create_generation_task(user_id, 'download-zip')
+            GENERATION_TASK_EXECUTOR.submit(
+                run_background_generation_task,
+                task['task_id'],
+                lambda: build_zip_archive_result(image_urls),
+                300,
+                '图片打包超时（5分钟），请稍后重试',
+            )
+            return jsonify({'success': True, 'async_task': True, 'task': task, 'task_id': task['task_id']}), 202
+
+        zip_result = build_zip_archive_result(image_urls)
+        zip_file_path = (GENERATED_SUITES_DIR / zip_result['download_path']).resolve()
+
+        return send_file(
+            zip_file_path,
+            mimetype='application/zip',
+            as_attachment=True,
+            download_name=f'batch_{batch_id}.zip'
+        )
+
+    except ValueError as exc:
+        return jsonify({'success': False, 'error': str(exc)}), 404
+    except Exception as exc:
+        logger.error(f'批量下载失败: {exc}')
+        return jsonify({'success': False, 'error': f'下载失败：{exc}'}), 500
+
+
 @app.get('/settings')
 def settings_page():
     return render_html_page('settings.html')

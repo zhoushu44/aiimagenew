@@ -170,6 +170,26 @@
       cursor: default;
     }
 
+    .batch-task-download {
+      padding: 4px 12px;
+      border-radius: 6px;
+      font-size: 12px;
+      font-weight: 500;
+      cursor: pointer;
+      transition: all 0.15s ease;
+      white-space: nowrap;
+      background: #3b82f6;
+      color: #ffffff;
+      border: 1px solid #3b82f6;
+      margin-left: 8px;
+    }
+
+    .batch-task-download:hover {
+      background: #2563eb;
+      border-color: #2563eb;
+      transform: translateY(-1px);
+    }
+
     .batch-task-progress {
       margin-top: 8px;
     }
@@ -530,31 +550,6 @@
               </div>
 
               <div id="autoStyleConfig" style="margin-top: 12px;">
-                <label class="field">
-                  <span class="field-label">选择风格</span>
-                  <select id="batchSceneStyle">
-                    <option value="modern" selected>现代简约</option>
-                    <option value="luxury">高端奢华</option>
-                    <option value="natural">自然清新</option>
-                    <option value="tech">科技感</option>
-                    <option value="vintage">复古经典</option>
-                    <option value="minimalist">极简主义</option>
-                    <option value="lifestyle">生活方式</option>
-                    <option value="business">商务专业</option>
-                    <option value="cozy">温馨家居</option>
-                    <option value="fashion">时尚潮流</option>
-                    <option value="artistic">艺术创意</option>
-                    <option value="pastoral">清新田园</option>
-                    <option value="industrial">工业风格</option>
-                    <option value="nordic">北欧风格</option>
-                    <option value="japanese">日式风格</option>
-                    <option value="chinese">中式古典</option>
-                    <option value="bohemian">波西米亚</option>
-                    <option value="romantic">浪漫唯美</option>
-                    <option value="youthful">青春活力</option>
-                    <option value="elegant">优雅精致</option>
-                  </select>
-                </label>
               </div>
 
               <div id="manualStyleConfig" hidden style="margin-top: 12px;">
@@ -565,6 +560,22 @@
               </div>
 
               <div id="autoPromptConfig" style="margin-top: 12px;">
+              </div>
+
+              <div class="field" id="batchOutputCountField" style="margin-top: 12px;">
+                <div style="display: flex; align-items: center; justify-content: space-between;">
+                  <span class="field-label">输出数量</span>
+                  <div class="more-actions" id="batchMoreActions">
+                    <button class="more-btn" id="batchMoreBtn" aria-label="更多操作，当前已选输出 6 张" aria-expanded="false" aria-haspopup="true">…(6张)</button>
+                    <div class="more-menu" id="batchMoreMenu" hidden>
+                      <button class="more-option is-selected" type="button" data-count="6"><span>6张</span><span class="more-option-check">✓</span></button>
+                      <button class="more-option" type="button" data-count="7"><span>7张</span><span class="more-option-check">✓</span></button>
+                      <button class="more-option" type="button" data-count="8"><span>8张</span><span class="more-option-check">✓</span></button>
+                      <button class="more-option" type="button" data-count="9"><span>9张</span><span class="more-option-check">✓</span></button>
+                      <button class="more-option" type="button" data-count="10"><span>10张</span><span class="more-option-check">✓</span></button>
+                    </div>
+                  </div>
+                </div>
               </div>
 
               <div id="sceneTypeConfig">
@@ -736,7 +747,7 @@
 
       const aiModelConfig = document.getElementById('aiModelConfig');
       const customModelConfig = document.getElementById('customModelConfig');
-      const modelTabs = document.querySelectorAll('.model-tabs .model-tab');
+      const modelTabs = document.querySelectorAll('.model-tabs .model-tab[data-model]');
 
       const autoPromptConfig = document.getElementById('autoPromptConfig');
       const manualPromptConfig = document.getElementById('manualPromptConfig');
@@ -748,9 +759,158 @@
       const manualStyleConfig = document.getElementById('manualStyleConfig');
       const styleModeTabs = document.querySelectorAll('[data-style-mode]');
 
+      const batchMoreActions = document.getElementById('batchMoreActions');
+      const batchMoreBtn = document.getElementById('batchMoreBtn');
+      const batchMoreMenu = document.getElementById('batchMoreMenu');
+      const batchMoreOptions = Array.from(document.querySelectorAll('#batchMoreMenu .more-option'));
+      const batchOutputCountField = document.getElementById('batchOutputCountField');
+
       let taskCounter = 0;
       const tasks = new Map();
       let pendingImages = []; // 临时存储预览图片，不关联任务
+      let selectedOutputCount = 6; // 默认输出6张
+      let taskBatchMap = new Map(); // taskId -> batchId 映射
+      let loadedBatchIds = new Set(); // 已加载的批次ID
+
+      const PENDING_DOWNLOAD_TIMEOUT = 5 * 60 * 1000;
+      const HIDDEN_BATCHES_KEY = 'batch_hidden_batches';
+
+      function getHiddenBatchIds() {
+        try {
+          const stored = localStorage.getItem(HIDDEN_BATCHES_KEY);
+          return stored ? JSON.parse(stored) : [];
+        } catch {
+          return [];
+        }
+      }
+
+      function saveHiddenBatchIds(ids) {
+        try {
+          localStorage.setItem(HIDDEN_BATCHES_KEY, JSON.stringify(ids));
+        } catch {
+          // ignore
+        }
+      }
+
+      function hideBatch(batchId) {
+        const hidden = getHiddenBatchIds();
+        if (!hidden.includes(batchId)) {
+          hidden.push(batchId);
+          saveHiddenBatchIds(hidden);
+        }
+      }
+
+      async function loadBatchList() {
+        try {
+          const response = await fetch('/api/batch/list');
+          const result = await response.json();
+          
+          if (!result.success) {
+            console.warn('加载批次列表失败:', result.error);
+            return;
+          }
+          
+          const hiddenBatchIds = getHiddenBatchIds();
+          const batches = result.data || [];
+          for (const batch of batches) {
+            const batchId = batch.batchId;
+            
+            // 跳过已隐藏的批次
+            if (hiddenBatchIds.includes(batchId)) {
+              continue;
+            }
+            
+            if (loadedBatchIds.has(batchId)) {
+              continue;
+            }
+            loadedBatchIds.add(batchId);
+            
+            for (const task of batch.tasks || []) {
+              const taskId = task.taskId;
+              const status = task.status;
+              
+              taskCounter = Math.max(taskCounter, taskId);
+              
+              tasks.set(taskId, {
+                id: taskId,
+                batchId: batchId,
+                status: status,
+                loaded: true
+              });
+              taskBatchMap.set(taskId, batchId);
+              
+              const item = createTaskListItem(taskId, 1, status, batchId);
+              batchTaskList.appendChild(item);
+              
+              if (status === 'pending' || status === 'processing') {
+                pollProgress(batchId, taskId);
+              }
+            }
+          }
+        } catch (error) {
+          console.error('加载批次列表失败:', error);
+        }
+      }
+
+      async function pollDownloadTaskResult(taskId, batchId) {
+        const normalizedTaskId = String(taskId || '').trim();
+        if (!normalizedTaskId) {
+          throw new Error('缺少任务编号，请稍后重试');
+        }
+        const startedAt = Date.now();
+        while (Date.now() - startedAt < PENDING_DOWNLOAD_TIMEOUT) {
+          try {
+            const response = await fetch(`/api/generation-tasks/${encodeURIComponent(normalizedTaskId)}`);
+            const result = await response.json();
+            if (!response.ok || !result?.success) {
+              throw new Error(result?.error || '任务状态查询失败');
+            }
+            const task = result.task || {};
+            if (task.status === 'succeeded' && task.result?.download_url) {
+              return task.result;
+            }
+            if (task.status === 'failed') {
+              throw new Error(task.error || task.result?.error || '打包任务失败');
+            }
+          } catch (err) {
+            if (err.message && !err.message.includes('查询失败')) {
+              throw err;
+            }
+          }
+          await new Promise(resolve => setTimeout(resolve, 2000));
+        }
+        throw new Error('打包任务等待超时，请稍后重试');
+      }
+
+      async function downloadBatchZip(batchId) {
+        if (!batchId) {
+          alert('批次ID无效');
+          return;
+        }
+        try {
+          const response = await fetch(`/api/batch/${batchId}/download?async_task=1`);
+          const result = await response.json();
+          
+          if (!response.ok || !result?.success) {
+            throw new Error(result?.error || '下载请求失败');
+          }
+          
+          if (result.async_task && result.task_id) {
+            const taskResult = await pollDownloadTaskResult(result.task_id, batchId);
+            if (taskResult?.download_url) {
+              const link = document.createElement('a');
+              link.href = taskResult.download_url;
+              link.download = taskResult.download_name || `batch_${batchId}.zip`;
+              document.body.appendChild(link);
+              link.click();
+              document.body.removeChild(link);
+            }
+          }
+        } catch (err) {
+          console.error('下载失败:', err);
+          alert('下载失败: ' + err.message);
+        }
+      }
 
       function toggleConfigByGenType(genType) {
         suiteAplusConfig.hidden = genType === 'fashion';
@@ -764,6 +924,11 @@
         // A+详情页时隐藏补充说明字段
         if (sceneNotesField) {
           sceneNotesField.hidden = genType === 'aplus';
+        }
+
+        // 只在商品套图时显示输出数量选择器
+        if (batchOutputCountField) {
+          batchOutputCountField.hidden = genType !== 'suite';
         }
       }
 
@@ -800,6 +965,44 @@
         });
       }
 
+      function closeBatchMoreMenu() {
+        if (batchMoreMenu && batchMoreBtn) {
+          batchMoreMenu.hidden = true;
+          batchMoreBtn.setAttribute('aria-expanded', 'false');
+        }
+      }
+
+      function openBatchMoreMenu() {
+        if (batchMoreMenu && batchMoreBtn) {
+          batchMoreMenu.hidden = false;
+          batchMoreBtn.setAttribute('aria-expanded', 'true');
+        }
+      }
+
+      function syncBatchMoreButtonLabel() {
+        if (!batchMoreBtn) {
+          return;
+        }
+        batchMoreBtn.textContent = `…(${selectedOutputCount}张)`;
+        batchMoreBtn.setAttribute('aria-label', `更多操作，当前已选输出 ${selectedOutputCount} 张`);
+      }
+
+      function setSelectedOutputCount(count) {
+        selectedOutputCount = count;
+        if (batchMoreOptions && batchMoreOptions.length > 0) {
+          batchMoreOptions.forEach((option) => {
+            option.classList.toggle('is-selected', Number(option.dataset.count) === count);
+          });
+        }
+        syncBatchMoreButtonLabel();
+      }
+
+      // 初始化显示状态
+      toggleConfigByGenType(batchGenType.value);
+
+      // 加载历史任务列表
+      loadBatchList();
+
       batchGenType.addEventListener('change', () => {
         toggleConfigByGenType(batchGenType.value);
       });
@@ -823,6 +1026,33 @@
           e.preventDefault();
           togglePromptMode(tab.dataset.promptMode);
         });
+      });
+
+      if (batchMoreBtn) {
+        batchMoreBtn.addEventListener('click', (event) => {
+          event.stopPropagation();
+          if (batchMoreMenu && batchMoreMenu.hidden) {
+            openBatchMoreMenu();
+            return;
+          }
+          closeBatchMoreMenu();
+        });
+      }
+
+      if (batchMoreOptions && batchMoreOptions.length > 0) {
+        batchMoreOptions.forEach((option) => {
+          option.addEventListener('click', () => {
+            setSelectedOutputCount(Number(option.dataset.count));
+            closeBatchMoreMenu();
+          });
+        });
+      }
+
+      document.addEventListener('click', (event) => {
+        if (batchMoreMenu && !batchMoreMenu.hidden && 
+            batchMoreActions && !batchMoreActions.contains(event.target)) {
+          closeBatchMoreMenu();
+        }
       });
 
       const batchModelUploadBtn = document.getElementById('batchModelUploadBtn');
@@ -850,10 +1080,13 @@
         }
       });
 
-      function createTaskListItem(taskId, imageCount, status = 'ready') {
+      function createTaskListItem(taskId, imageCount, status = 'ready', batchId = null) {
         const item = document.createElement('div');
         item.className = 'batch-task-item';
         item.dataset.taskId = taskId;
+        if (batchId) {
+          item.dataset.batchId = batchId;
+        }
         
         const statusClass = status === 'ready' ? 'is-active' : 
                            status === 'generating' ? 'is-generating' :
@@ -881,6 +1114,9 @@
             ` : ''}
           </div>
           <button class="batch-task-status ${statusClass}" type="button" data-task-id="${taskId}">${statusText}</button>
+          ${status === 'completed' && batchId ? `
+            <button class="batch-task-download" type="button" data-batch-id="${batchId}" data-task-id="${taskId}">下载</button>
+          ` : ''}
         `;
 
         const statusBtn = item.querySelector('.batch-task-status');
@@ -889,6 +1125,14 @@
             statusBtn.classList.toggle('is-active');
             statusBtn.classList.toggle('is-inactive');
             statusBtn.textContent = statusBtn.classList.contains('is-active') ? '已就绪' : '未就绪';
+          });
+        }
+
+        const downloadBtn = item.querySelector('.batch-task-download');
+        if (downloadBtn) {
+          downloadBtn.addEventListener('click', () => {
+            const bid = downloadBtn.dataset.batchId;
+            downloadBatchZip(bid);
           });
         }
 
@@ -1115,10 +1359,11 @@
             globalConfig.promptConfig = {
               mode: 'auto',
               styleMode: styleMode,
-              sceneStyle: styleMode === 'auto' ? document.getElementById('batchSceneStyle').value : undefined,
+              sceneStyle: styleMode === 'auto' ? 'modern' : undefined,
               customStyle: styleMode === 'manual' ? document.getElementById('batchCustomStyle').value : undefined,
               sceneTypes: selectedScenes,
-              sceneNotes: document.getElementById('batchSceneNotes').value
+              sceneNotes: document.getElementById('batchSceneNotes').value,
+              outputCount: selectedOutputCount
             };
           } else {
             globalConfig.promptConfig = {
@@ -1184,6 +1429,18 @@
             const batchId = result.data.batchId;
             console.log('批次创建成功:', batchId);
             
+            // 保存批次ID，避免重复加载
+            loadedBatchIds.add(batchId);
+            
+            // 保存 taskId -> batchId 映射
+            taskBatchMap.set(taskId, batchId);
+            
+            // 更新任务项的batchId
+            const taskItem = document.querySelector(`.batch-task-item[data-task-id="${taskId}"]`);
+            if (taskItem) {
+              taskItem.dataset.batchId = batchId;
+            }
+            
             // 开始轮询进度
             pollProgress(batchId, taskId);
           } else {
@@ -1213,6 +1470,21 @@
               if (task.status === 'completed') {
                 updateTaskStatus(taskId, 'completed');
                 console.log('任务完成:', taskId);
+                
+                // 添加下载按钮
+                const taskItem = document.querySelector(`.batch-task-item[data-task-id="${taskId}"]`);
+                if (taskItem && !taskItem.querySelector('.batch-task-download')) {
+                  const downloadBtn = document.createElement('button');
+                  downloadBtn.className = 'batch-task-download';
+                  downloadBtn.type = 'button';
+                  downloadBtn.dataset.batchId = batchId;
+                  downloadBtn.dataset.taskId = taskId;
+                  downloadBtn.textContent = '下载';
+                  downloadBtn.addEventListener('click', () => {
+                    downloadBatchZip(batchId);
+                  });
+                  taskItem.appendChild(downloadBtn);
+                }
               } else if (task.status === 'failed') {
                 updateTaskStatus(taskId, 'failed');
                 console.error('任务失败:', taskId);
@@ -1234,10 +1506,16 @@
           return;
         }
 
-        if (confirm('确定要清空所有任务吗？')) {
+        if (confirm('确定要清空所有任务吗？清空后将不再显示这些任务记录。')) {
+          // 将所有已加载的批次添加到隐藏列表
+          loadedBatchIds.forEach(batchId => {
+            hideBatch(batchId);
+          });
+          
           tasks.clear();
           pendingImages = [];
           taskCounter = 0;
+          loadedBatchIds.clear();
           renderThumbnails();
           batchTaskList.innerHTML = '';
           updateGenerateButton();
