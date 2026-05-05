@@ -91,6 +91,21 @@ ZPAY_DEFAULT_CHANNEL = (os.getenv('ZPAY_DEFAULT_CHANNEL') or 'alipay').strip()
 ZPAY_SUCCESS_STATUSES = {'TRADE_SUCCESS', 'TRADE_FINISHED', 'SUCCESS'}
 VIP_PLAN_CONFIG_TABLE = 'vip_plan_config'
 
+REDIS_HOST = (os.getenv('REDIS_HOST') or 'localhost').strip()
+REDIS_PORT = int(os.getenv('REDIS_PORT') or 6379)
+REDIS_PASSWORD = (os.getenv('REDIS_PASSWORD') or '').strip() or None
+REDIS_DB = int(os.getenv('REDIS_DB') or 0)
+REDIS_MAX_CONNECTIONS = int(os.getenv('REDIS_MAX_CONNECTIONS') or 50)
+REDIS_SOCKET_TIMEOUT = int(os.getenv('REDIS_SOCKET_TIMEOUT') or 5)
+REDIS_SOCKET_CONNECT_TIMEOUT = int(os.getenv('REDIS_SOCKET_CONNECT_TIMEOUT') or 5)
+
+REDIS_CACHE_TTL = {
+    'task_status': int(os.getenv('REDIS_CACHE_TTL_TASK') or 30),
+    'user_points': int(os.getenv('REDIS_CACHE_TTL_POINTS') or 60),
+    'user_profile': int(os.getenv('REDIS_CACHE_TTL_PROFILE') or 300),
+    'vip_config': int(os.getenv('REDIS_CACHE_TTL_VIP') or 3600),
+}
+
 
 def get_env_csv(name: str) -> set[str]:
     raw_value = os.getenv(name, '').strip()

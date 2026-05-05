@@ -16,6 +16,15 @@ from config import (
     build_supabase_request_url,
     _build_supabase_service_headers,
     _get_supabase_user_id,
+    REDIS_CACHE_TTL,
+)
+from redis_client import (
+    cache_get,
+    cache_set,
+    cache_delete,
+    build_task_cache_key,
+    build_user_points_cache_key,
+    build_user_profile_cache_key,
 )
 from utils import (
     parse_iso_datetime,
@@ -42,6 +51,12 @@ def _fetch_user_points_row(user_id: str, _logger: logging.Logger | None = None) 
     if not normalized_user_id:
         return None
 
+    cache_key = build_user_points_cache_key(normalized_user_id)
+    cached_result = cache_get(cache_key)
+    if cached_result is not None:
+        log.debug('Cache hit for user points %s', normalized_user_id)
+        return cached_result
+
     response = requests.get(
         build_supabase_request_url(f'/rest/v1/{SUPABASE_POINTS_TABLE}'),
         headers=_build_supabase_service_headers(),
@@ -57,7 +72,12 @@ def _fetch_user_points_row(user_id: str, _logger: logging.Logger | None = None) 
     if not isinstance(payload, list) or not payload:
         return None
     row = payload[0]
-    return row if isinstance(row, dict) else None
+    result = row if isinstance(row, dict) else None
+    
+    if result:
+        cache_set(cache_key, result, REDIS_CACHE_TTL.get('user_points', 60))
+    
+    return result
 
 
 def _normalize_points_row(points_row: dict | None, user_id: str = '') -> dict:
@@ -272,6 +292,9 @@ def _spend_user_points_direct(user_id: str, amount: int, transaction_type: str =
             transaction_row = transaction_payload
     except requests.RequestException as exc:
         log.warning('Failed to insert direct spend transaction for %s: %s', normalized_user_id, exc)
+    
+    cache_delete(build_user_points_cache_key(normalized_user_id))
+    
     return {
         'success': True,
         'spent': True,
@@ -340,6 +363,9 @@ def add_user_points_direct(user_id: str, amount: int, transaction_type: str = 'r
             transaction_row = transaction_payload
     except requests.RequestException as exc:
         log.warning('Failed to insert direct add transaction for %s: %s', normalized_user_id, exc)
+    
+    cache_delete(build_user_points_cache_key(normalized_user_id))
+    
     return {
         'success': True,
         'added': True,
@@ -477,6 +503,7 @@ def persist_generation_task(task: dict, _logger: logging.Logger | None = None) -
     try:
         response = _post_payload(db_payload)
         if response.status_code < 400:
+            cache_delete(build_task_cache_key(db_payload.get('id')))
             return
         response_text = response.text or ''
         if response.status_code == 400 and 'generation_tasks' in response_text and any(column in response_text for column in ('completed_at', 'completed_at_ts', 'created_at_ts', 'updated_at_ts', 'trace')):
@@ -488,6 +515,7 @@ def persist_generation_task(task: dict, _logger: logging.Logger | None = None) -
             log.warning('Generation task table missing new trace columns, falling back to legacy payload for task %s', db_payload.get('id'))
             legacy_response = _post_payload(legacy_payload)
             if legacy_response.status_code < 400:
+                cache_delete(build_task_cache_key(db_payload.get('id')))
                 return
             log.warning('Failed to persist generation task %s with legacy payload: status=%s body=%s', db_payload.get('id'), legacy_response.status_code, legacy_response.text)
             legacy_response.raise_for_status()
@@ -504,6 +532,13 @@ def fetch_generation_task_row(task_id: str, _logger: logging.Logger | None = Non
     normalized_task_id = str(task_id or '').strip()
     if not normalized_task_id:
         return None
+
+    cache_key = build_task_cache_key(normalized_task_id)
+    cached_result = cache_get(cache_key)
+    if cached_result is not None:
+        log.debug('Cache hit for task %s', normalized_task_id)
+        return cached_result
+
     try:
         response = requests.get(
             build_supabase_request_url(f'/rest/v1/{SUPABASE_GENERATION_TASKS_TABLE}'),
@@ -520,7 +555,12 @@ def fetch_generation_task_row(task_id: str, _logger: logging.Logger | None = Non
         if response.status_code >= 400:
             log.warning('Failed to fetch generation task %s: status=%s body=%s', normalized_task_id, response.status_code, response.text)
             return None
-        return _extract_single_supabase_row(response.json())
+        result = _extract_single_supabase_row(response.json())
+        
+        if result:
+            cache_set(cache_key, result, REDIS_CACHE_TTL.get('task_status', 30))
+        
+        return result
     except Exception as exc:
         log.warning('Failed to fetch generation task %s: %s', normalized_task_id, exc)
         return None
