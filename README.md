@@ -11,6 +11,7 @@
 - 套图（Suite）生成：6 张电商详情页套图，LLM 规划 + 并行生成
 - A+ 详情页生成：结构化电商 A+ 模块图文
 - 服饰穿搭（Fashion）：AI 模特生成、场景规划、成图质检
+- 批量任务（Batch）：批量创建图片生成任务，支持商品套图/A+详情页/服饰穿戴
 - 生成任务持久化：支持刷新恢复、状态轮询、失败自动返还积分
 - 任务链路耗时打点：后端生成、图片存储、前端轮询、渲染和图片加载均可拆分排查
 - LLM Chat 双模式：Ark 直连为主，自动 fallback 到备选接口
@@ -41,6 +42,7 @@
 │   ├── suite.html            # 套图工作台
 │   ├── aplus.html            # A+ 详情页工作台
 │   ├── fashion.html          # 服饰穿搭工作台
+│   ├── batch.html            # 批量任务工作台
 │   └── settings.html         # 配置管理页面
 │
 ├── generation/               # AI 生图模块
@@ -95,8 +97,8 @@ gunicorn -w 4 -b 0.0.0.0:5078 --timeout 300 --access-logfile - app:app
 
 | 触发条件 | 标签 |
 |----------|------|
-| 推送到 `main` 分支 | `10.7` + `latest` |
-| GitHub Actions 手动触发 | `10.7` + `latest` |
+| 推送到 `main` 分支 | `10.8` + `latest` |
+| GitHub Actions 手动触发 | `10.8` + `latest` |
 
 - 构建平台：`linux/amd64` + `linux/arm64`
 - 镜像内使用 Gunicorn 运行 Flask 应用：`gunicorn -w 4 -b 0.0.0.0:5078 --timeout 300 --access-logfile - app:app`
@@ -317,7 +319,7 @@ Generation task trace summary polled_succeeded: {...}
 ```
   GET    /                                          landing 首页
   GET    /suite           /aplus       /fashion     工作台页面
-  GET    /settings        /auth         /logout      页面 / 登录入口
+  GET    /batch           /settings    /auth        页面入口
 
   GET    /api/app-mode                               当前模式查询
   POST   /api/auth/login    /register                邮箱密码登录/注册
@@ -333,6 +335,10 @@ Generation task trace summary polled_succeeded: {...}
   POST   /api/download-zip                           批量下载
   GET    /api/generation-tasks/<id>                  任务查询
   POST   /api/generation-tasks/<id>/cancel           任务取消
+  POST   /api/batch/create                           创建批量任务
+  GET    /api/batch/<id>/progress                    批量任务进度
+  POST   /api/batch/<id>/cancel                      取消批量任务
+  GET    /api/batch/queue/status                     队列状态
   POST   /api/pay/create                             创建支付
   GET|POST /api/pay/notify                           支付回调
   GET|PATCH|POST /api/settings*                      配置管理
@@ -410,6 +416,19 @@ POST {MODE3_OPENAI_BASE_URL}/images/edits
 ---
 
 ## 近期更新
+
+### 2026-05-05 · v10.8
+
+- **批量任务功能**：新增 `/batch` 页面，支持批量创建图片生成任务
+- **三种生成类型**：商品套图、A+详情页、服饰穿戴
+- **自动/手动模式**：AI 自动生成提示词或手动输入自定义提示词
+- **多图片上传**：每个任务支持 1-3 张参考图
+- **进度实时查询**：轮询机制实时获取任务进度
+- **任务取消功能**：支持取消正在进行的批量任务
+- **数据库表**：`batch_tasks`、`batch_task_items`、`batch_task_images`
+- **任务队列**：线程池异步处理，最大并发数 3，300 秒超时保护
+- **导航栏更新**：suite/aplus/fashion 页面新增"04 批量任务"入口
+- **Docker 镜像 10.8 + latest**
 
 ### 2026-05-04 · v10.7
 

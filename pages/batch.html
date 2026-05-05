@@ -1,0 +1,1251 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>批量任务 - AI商品套图</title>
+  <link rel="stylesheet" href="/static/css/workspace.css?v=batch-20260504">
+  <script src="/static/js/shared-topbar.js?v=batch-20260504" defer></script>
+  <style>
+    .batch-page .workspace-layout {
+      grid-template-columns: minmax(340px, 380px) minmax(0, 1fr);
+    }
+
+    .batch-config-section {
+      display: grid;
+      gap: 12px;
+    }
+
+    .batch-actions-bar {
+      display: grid;
+      grid-template-columns: 1fr 1fr;
+      gap: 16px;
+      padding: 0;
+      border-radius: 0;
+      border: none;
+      background: transparent;
+      box-shadow: none;
+      backdrop-filter: none;
+      position: static;
+      margin-top: 16px;
+    }
+
+    .batch-module-card {
+      background: #ffffff;
+      border-radius: 12px;
+      border: 1px solid #e5e7eb;
+      overflow: hidden;
+    }
+
+    .batch-module-header {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      padding: 16px 20px;
+      border-bottom: 1px solid #f3f4f6;
+      background: #fafafa;
+    }
+
+    .batch-module-title {
+      font-size: 14px;
+      font-weight: 600;
+      color: #111827;
+      margin: 0;
+    }
+
+    .batch-module-close {
+      width: 24px;
+      height: 24px;
+      border-radius: 6px;
+      border: 1px solid #e5e7eb;
+      background: #ffffff;
+      color: #6b7280;
+      cursor: pointer;
+      display: grid;
+      place-items: center;
+      font-size: 14px;
+      transition: all 0.15s ease;
+    }
+
+    .batch-module-close:hover {
+      background: #f3f4f6;
+      border-color: #d1d5db;
+      color: #111827;
+    }
+
+    .batch-module-body {
+      padding: 20px;
+    }
+
+    .batch-task-list {
+      display: grid;
+      gap: 12px;
+    }
+
+    .batch-task-item {
+      display: flex;
+      align-items: center;
+      gap: 12px;
+      padding: 12px;
+      border-radius: 8px;
+      border: 1px solid #f3f4f6;
+      background: #ffffff;
+      transition: all 0.15s ease;
+    }
+
+    .batch-task-item:hover {
+      border-color: #e5e7eb;
+      background: #fafafa;
+    }
+
+    .batch-task-icon {
+      width: 32px;
+      height: 32px;
+      border-radius: 6px;
+      background: #f3f4f6;
+      display: grid;
+      place-items: center;
+      font-size: 14px;
+      color: #6b7280;
+    }
+
+    .batch-task-info {
+      flex: 1;
+      min-width: 0;
+    }
+
+    .batch-task-name {
+      font-size: 13px;
+      font-weight: 500;
+      color: #111827;
+      margin: 0;
+    }
+
+    .batch-task-meta {
+      font-size: 12px;
+      color: #9ca3af;
+      margin-top: 2px;
+    }
+
+    .batch-task-status {
+      padding: 4px 12px;
+      border-radius: 6px;
+      font-size: 12px;
+      font-weight: 500;
+      cursor: pointer;
+      transition: all 0.15s ease;
+      white-space: nowrap;
+    }
+
+    .batch-task-status.is-active {
+      background: #3b82f6;
+      color: #ffffff;
+      border: 1px solid #3b82f6;
+    }
+
+    .batch-task-status.is-inactive {
+      background: #ffffff;
+      color: #6b7280;
+      border: 1px solid #e5e7eb;
+    }
+
+    .batch-task-status.is-generating {
+      background: #10b981;
+      color: #ffffff;
+      border: 1px solid #10b981;
+      cursor: default;
+    }
+
+    .batch-task-status.is-completed {
+      background: #059669;
+      color: #ffffff;
+      border: 1px solid #059669;
+      cursor: default;
+    }
+
+    .batch-task-status.is-failed {
+      background: #ef4444;
+      color: #ffffff;
+      border: 1px solid #ef4444;
+      cursor: default;
+    }
+
+    .batch-task-progress {
+      margin-top: 8px;
+    }
+
+    .batch-task-progress-bar {
+      width: 100%;
+      height: 4px;
+      background: #f3f4f6;
+      border-radius: 2px;
+      overflow: hidden;
+    }
+
+    .batch-task-progress-fill {
+      height: 100%;
+      background: #3b82f6;
+      border-radius: 2px;
+      transition: width 0.3s ease;
+    }
+
+    .batch-task-progress-text {
+      font-size: 11px;
+      color: #6b7280;
+      margin-top: 4px;
+      display: flex;
+      justify-content: space-between;
+    }
+
+    .batch-task-status:hover {
+      transform: translateY(-1px);
+    }
+
+    .batch-upload-zone {
+      border: 2px dashed #d1d5db;
+      border-radius: 8px;
+      padding: 32px;
+      text-align: center;
+      background: #fafafa;
+      cursor: pointer;
+      transition: all 0.15s ease;
+      height: 220px;
+      position: relative;
+      display: flex;
+      flex-direction: column;
+      align-items: center;
+      justify-content: center;
+    }
+
+    .batch-upload-zone:hover {
+      border-color: #9ca3af;
+      background: #f3f4f6;
+    }
+
+    .batch-upload-zone.has-images {
+      padding: 16px;
+      justify-content: flex-start;
+      overflow-y: auto;
+    }
+
+    .batch-upload-zone-text {
+      font-size: 13px;
+      color: #6b7280;
+      margin: 0;
+    }
+
+    .batch-upload-zone.has-images .batch-upload-zone-text {
+      display: none;
+    }
+
+    .batch-upload-thumbnails {
+      display: grid;
+      grid-template-columns: repeat(3, 1fr);
+      gap: 12px;
+      width: 100%;
+      margin-bottom: 12px;
+    }
+
+    .batch-thumbnail-item {
+      position: relative;
+      aspect-ratio: 1;
+      border-radius: 8px;
+      overflow: hidden;
+      border: 1px solid #e5e7eb;
+      background: #ffffff;
+    }
+
+    .batch-thumbnail-item img {
+      width: 100%;
+      height: 100%;
+      object-fit: cover;
+    }
+
+    .batch-thumbnail-delete {
+      position: absolute;
+      top: 4px;
+      right: 4px;
+      width: 20px;
+      height: 20px;
+      border-radius: 50%;
+      background: rgba(239, 68, 68, 0.9);
+      color: #ffffff;
+      border: none;
+      cursor: pointer;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      font-size: 12px;
+      font-weight: bold;
+      transition: all 0.15s ease;
+    }
+
+    .batch-thumbnail-delete:hover {
+      background: #ef4444;
+      transform: scale(1.1);
+    }
+
+    .batch-upload-hint {
+      font-size: 12px;
+      color: #9ca3af;
+      margin-top: 8px;
+    }
+
+    .batch-upload-actions {
+      display: grid;
+      grid-template-columns: 1fr 1fr;
+      gap: 12px;
+      margin-top: 16px;
+    }
+
+    .batch-upload-btn {
+      height: 44px;
+      border-radius: 8px;
+      border: 1px solid #3b82f6;
+      background: #3b82f6;
+      color: #ffffff;
+      font-size: 13px;
+      font-weight: 500;
+      cursor: pointer;
+      transition: all 0.15s ease;
+    }
+
+    .batch-upload-btn:hover {
+      background: #2563eb;
+      border-color: #2563eb;
+    }
+
+    .batch-generate-btn {
+      height: 44px;
+      border-radius: 8px;
+      border: 1px solid #111827;
+      background: #111827;
+      color: #ffffff;
+      font-size: 13px;
+      font-weight: 500;
+      cursor: pointer;
+      transition: all 0.15s ease;
+    }
+
+    .batch-generate-btn:hover {
+      background: #1f2937;
+      border-color: #1f2937;
+    }
+
+    .batch-generate-btn:disabled {
+      opacity: 0.5;
+      cursor: not-allowed;
+    }
+
+    @media (max-width: 1280px) {
+      .batch-actions-bar {
+        grid-template-columns: 1fr;
+      }
+    }
+
+    .checkbox-group {
+      display: grid;
+      gap: 8px;
+    }
+
+    .checkbox-item {
+      display: flex;
+      align-items: center;
+      gap: 10px;
+      padding: 10px 12px;
+      border-radius: 12px;
+      border: 1px solid var(--line);
+      background: rgba(255, 255, 255, 0.96);
+      cursor: pointer;
+      transition: all 0.2s ease;
+    }
+
+    .checkbox-item:hover {
+      border-color: var(--line-strong);
+      background: #fff;
+    }
+
+    .checkbox-item input[type="checkbox"] {
+      width: 18px;
+      height: 18px;
+      accent-color: var(--accent);
+      cursor: pointer;
+    }
+
+    .checkbox-item label {
+      flex: 1;
+      font-size: 13px;
+      color: var(--text);
+      cursor: pointer;
+    }
+
+    .checkbox-item.is-checked {
+      border-color: var(--line-accent);
+      background: rgba(17, 24, 39, 0.03);
+    }
+
+    @media (max-width: 1280px) {
+      .batch-page .workspace-layout {
+        grid-template-columns: 1fr;
+      }
+
+      .batch-actions-row {
+        grid-template-columns: 1fr;
+      }
+    }
+  </style>
+</head>
+<body data-page-mode="batch" class="batch-page">
+  <div class="app-shell">
+    <header class="console-topbar" data-shared-topbar>
+      <div class="console-brand">
+        <a class="console-home" href="/" data-topbar-home>AI Commerce Console</a>
+        <div>
+          <div class="console-kicker" data-topbar-kicker>Batch Workspace / Multi-Task Processing</div>
+          <div class="console-title" data-topbar-title>批量任务工作台</div>
+        </div>
+      </div>
+      <div class="console-topbar-meta" data-topbar-meta></div>
+    </header>
+
+    <main class="workspace-layout">
+      <aside class="control-rail">
+        <nav class="side-nav" aria-label="功能导航">
+          <a class="nav-item" href="/suite" data-mode="suite" data-nav-link="true" aria-pressed="false">
+            <span class="nav-item-index">01</span>
+            <span class="nav-item-label">商品套图</span>
+          </a>
+          <a class="nav-item" href="/aplus" data-mode="aplus" data-nav-link="true" aria-pressed="false">
+            <span class="nav-item-index">02</span>
+            <span class="nav-item-label">A+详情页</span>
+          </a>
+          <a class="nav-item" href="/fashion" data-mode="fashion" data-nav-link="true" aria-pressed="false">
+            <span class="nav-item-index">03</span>
+            <span class="nav-item-label">服饰穿戴</span>
+          </a>
+          <a class="nav-item active" href="/batch" data-mode="batch" data-nav-link="true" aria-pressed="true">
+            <span class="nav-item-index">04</span>
+            <span class="nav-item-label">批量任务</span>
+          </a>
+        </nav>
+
+        <section class="panel stack-panel">
+          <div class="panel-head">
+            <span class="panel-kicker">global config</span>
+            <h2>全局配置</h2>
+          </div>
+          <div class="batch-config-section">
+            <label class="field">
+              <span class="field-label">生成类型</span>
+              <select id="batchGenType">
+                <option value="suite" selected>商品套图</option>
+                <option value="aplus">A+详情页</option>
+                <option value="fashion">服饰穿戴</option>
+              </select>
+            </label>
+
+            <div id="suiteAplusConfig">
+              <div class="grid-2">
+                <label class="field">
+                  <span class="field-label">目标平台</span>
+                  <select id="batchPlatform">
+                    <option selected>亚马逊</option>
+                    <option>淘宝天猫1688</option>
+                    <option>Temu</option>
+                    <option>TikTok Shop</option>
+                    <option>拼多多抖音电商</option>
+                    <option>OZON</option>
+                    <option>独立站</option>
+                    <option>Shopee</option>
+                    <option>阿里国际站</option>
+                    <option>速卖通</option>
+                    <option>SHEIN</option>
+                    <option>京东</option>
+                  </select>
+                </label>
+                <label class="field">
+                  <span class="field-label">国家参考</span>
+                  <select id="batchCountry">
+                    <option selected>中国</option>
+                    <option>美国</option>
+                    <option>欧洲</option>
+                    <option>俄罗斯</option>
+                    <option>东南亚</option>
+                    <option>西班牙</option>
+                    <option>德国</option>
+                    <option>日本</option>
+                    <option>巴西</option>
+                  </select>
+                </label>
+                <label class="field">
+                  <span class="field-label">文字类型</span>
+                  <select id="batchTextType">
+                    <option selected>中文</option>
+                    <option>英文</option>
+                    <option>俄语</option>
+                    <option>西语</option>
+                    <option>德语</option>
+                    <option>泰语</option>
+                    <option>葡萄牙语</option>
+                    <option>无文字</option>
+                  </select>
+                </label>
+                <label class="field">
+                  <span class="field-label">输出比例</span>
+                  <select id="batchRatio">
+                    <option value="1:1" selected>1:1</option>
+                    <option value="3:4">3:4</option>
+                    <option value="9:16">9:16</option>
+                    <option value="16:9">16:9</option>
+                  </select>
+                </label>
+              </div>
+
+              <label class="field full" style="margin-top: 12px;">
+                <span class="field-label">核心卖点</span>
+                <textarea id="batchSellingPoints" placeholder="1. 产品名称&#10;2. 核心卖点&#10;3. 适用人群&#10;4. 期望场景&#10;5. 具体参数"></textarea>
+              </label>
+
+              <div class="field" style="margin-top: 12px;">
+                <span class="field-label">AI提示词模式</span>
+                <div class="model-tabs fashion-model-tabs" style="margin-top: 8px;">
+                  <button class="model-tab active" data-prompt-mode="auto" type="button">自动生成</button>
+                  <button class="model-tab" data-prompt-mode="manual" type="button">手动输入</button>
+                </div>
+              </div>
+
+              <div id="manualPromptConfig" hidden style="margin-top: 12px;">
+                <label class="field full">
+                  <span class="field-label">自定义提示词</span>
+                  <textarea id="batchCustomPrompt" placeholder="输入完整的AI生成提示词，例如：&#10;A modern minimalist product photography of [product], clean white background, soft lighting, professional studio setup, high-end commercial style..." style="min-height: 120px;"></textarea>
+                </label>
+              </div>
+
+              <div class="field" style="margin-top: 12px;">
+                <span class="field-label">场景风格</span>
+                <div class="model-tabs fashion-model-tabs" style="margin-top: 8px;">
+                  <button class="model-tab active" data-style-mode="auto" type="button">自动生成</button>
+                  <button class="model-tab" data-style-mode="manual" type="button">手动输入</button>
+                </div>
+              </div>
+
+              <div id="autoStyleConfig" style="margin-top: 12px;">
+                <label class="field">
+                  <span class="field-label">选择风格</span>
+                  <select id="batchSceneStyle">
+                    <option value="modern" selected>现代简约</option>
+                    <option value="luxury">高端奢华</option>
+                    <option value="natural">自然清新</option>
+                    <option value="tech">科技感</option>
+                    <option value="vintage">复古经典</option>
+                    <option value="minimalist">极简主义</option>
+                    <option value="lifestyle">生活方式</option>
+                    <option value="business">商务专业</option>
+                    <option value="cozy">温馨家居</option>
+                    <option value="fashion">时尚潮流</option>
+                    <option value="artistic">艺术创意</option>
+                    <option value="pastoral">清新田园</option>
+                    <option value="industrial">工业风格</option>
+                    <option value="nordic">北欧风格</option>
+                    <option value="japanese">日式风格</option>
+                    <option value="chinese">中式古典</option>
+                    <option value="bohemian">波西米亚</option>
+                    <option value="romantic">浪漫唯美</option>
+                    <option value="youthful">青春活力</option>
+                    <option value="elegant">优雅精致</option>
+                  </select>
+                </label>
+              </div>
+
+              <div id="manualStyleConfig" hidden style="margin-top: 12px;">
+                <label class="field full">
+                  <span class="field-label">自定义风格</span>
+                  <textarea id="batchCustomStyle" placeholder="描述期望的风格，例如：现代简约风格，干净利落的线条，柔和的光线..." style="min-height: 80px;"></textarea>
+                </label>
+              </div>
+
+              <div id="autoPromptConfig" style="margin-top: 12px;">
+              </div>
+
+              <div id="sceneTypeConfig">
+                <div class="field" style="margin-top: 12px;">
+                  <span class="field-label">场景类型</span>
+                  <div class="checkbox-group" id="batchSceneTypes" style="margin-top: 8px;">
+                    <div class="checkbox-item is-checked">
+                      <input type="checkbox" id="sceneHero" checked>
+                      <label for="sceneHero">首屏主视觉</label>
+                    </div>
+                    <div class="checkbox-item is-checked">
+                      <input type="checkbox" id="sceneUsage" checked>
+                      <label for="sceneUsage">使用场景图</label>
+                    </div>
+                    <div class="checkbox-item">
+                      <input type="checkbox" id="sceneMood">
+                      <label for="sceneMood">场景氛围图</label>
+                    </div>
+                    <div class="checkbox-item">
+                      <input type="checkbox" id="sceneBrand">
+                      <label for="sceneBrand">品牌故事图</label>
+                    </div>
+                    <div class="checkbox-item">
+                      <input type="checkbox" id="sceneEffect">
+                      <label for="sceneEffect">效果对比图</label>
+                    </div>
+                    <div class="checkbox-item">
+                      <input type="checkbox" id="sceneCraft">
+                      <label for="sceneCraft">工艺制作图</label>
+                    </div>
+                    <div class="checkbox-item">
+                      <input type="checkbox" id="sceneSeries">
+                      <label for="sceneSeries">系列展示图</label>
+                    </div>
+                    <div class="checkbox-item">
+                      <input type="checkbox" id="sceneAfterSales">
+                      <label for="sceneAfterSales">售后保障图</label>
+                    </div>
+                    <div class="checkbox-item is-checked">
+                      <input type="checkbox" id="sceneSelling" checked>
+                      <label for="sceneSelling">核心卖点图</label>
+                    </div>
+                    <div class="checkbox-item">
+                      <input type="checkbox" id="sceneMultiAngle">
+                      <label for="sceneMultiAngle">多角度图</label>
+                    </div>
+                    <div class="checkbox-item is-checked">
+                      <input type="checkbox" id="sceneDetail" checked>
+                      <label for="sceneDetail">商品细节图</label>
+                    </div>
+                    <div class="checkbox-item">
+                      <input type="checkbox" id="sceneSize">
+                      <label for="sceneSize">尺寸/容量/尺码图</label>
+                    </div>
+                    <div class="checkbox-item">
+                      <input type="checkbox" id="sceneSpec">
+                      <label for="sceneSpec">详细规格/参数表</label>
+                    </div>
+                    <div class="checkbox-item">
+                      <input type="checkbox" id="sceneAccessories">
+                      <label for="sceneAccessories">配件/赠品图</label>
+                    </div>
+                    <div class="checkbox-item">
+                      <input type="checkbox" id="sceneIngredients">
+                      <label for="sceneIngredients">商品成分图</label>
+                    </div>
+                    <div class="checkbox-item">
+                      <input type="checkbox" id="sceneTips">
+                      <label for="sceneTips">使用建议图</label>
+                    </div>
+                  </div>
+                </div>
+
+                <label class="field full" id="sceneNotesField" style="margin-top: 12px;">
+                  <span class="field-label">补充说明（可选）</span>
+                  <textarea id="batchSceneNotes" placeholder="补充场景要求、特殊效果、目标受众等信息..." style="min-height: 60px;"></textarea>
+                </label>
+              </div>
+            </div>
+
+            <div id="fashionConfig" hidden>
+              <label class="field">
+                <span class="field-label">输出规格</span>
+                <select id="batchFashionRatio">
+                  <option value="3:4" selected>3:4</option>
+                  <option value="1:1">1:1</option>
+                  <option value="9:16">9:16</option>
+                </select>
+              </label>
+
+              <div class="field" style="margin-top: 12px;">
+                <span class="field-label">模特来源</span>
+                <div class="model-tabs fashion-model-tabs" style="margin-top: 8px;">
+                  <button class="model-tab active" data-model="ai" type="button">AI 生成</button>
+                  <button class="model-tab" data-model="custom" type="button">我的模特</button>
+                </div>
+              </div>
+
+              <div id="aiModelConfig" style="margin-top: 12px;">
+                <div class="grid-2">
+                  <label class="field"><span class="field-label">性别</span><select id="batchGender"><option selected>女</option><option>男</option></select></label>
+                  <label class="field"><span class="field-label">年龄</span><select id="batchAge"><option>婴儿（0-3岁）</option><option>幼儿（3-6岁）</option><option>儿童（6-12岁）</option><option>少年（12-18岁）</option><option selected>青年（18-35岁）</option><option>中年（35-55岁）</option><option>中老年（55-65岁）</option><option>老年（65岁以上）</option></select></label>
+                  <label class="field"><span class="field-label">人种</span><select id="batchEthnicity"><option selected>欧美白人</option><option>东亚</option><option>东南亚</option><option>非洲</option><option>拉丁</option></select></label>
+                  <label class="field"><span class="field-label">体型</span><select id="batchBodyType"><option selected>标准</option><option>偏瘦</option><option>偏胖</option></select></label>
+                </div>
+              </div>
+
+              <div id="customModelConfig" hidden style="margin-top: 12px;">
+                <label class="field full">
+                  <span class="field-label">上传模特图片</span>
+                  <div class="upload-box" style="margin-top: 8px;">
+                    <button class="upload-btn" id="batchModelUploadBtn" type="button">上传模特</button>
+                    <input id="batchModelFileInput" type="file" accept="image/*" hidden>
+                  </div>
+                </label>
+              </div>
+            </div>
+          </div>
+        </section>
+      </aside>
+
+      <section class="workspace-main">
+        <div class="batch-actions-bar">
+          <div class="batch-module-card">
+            <div class="batch-module-header">
+              <h3 class="batch-module-title">任务列表</h3>
+              <button class="batch-module-close" id="clearAllTasksBtn" type="button" title="关闭">×</button>
+            </div>
+            <div class="batch-module-body">
+              <div class="batch-task-list" id="batchTaskList">
+                <!-- 任务列表项将在这里动态生成 -->
+              </div>
+            </div>
+          </div>
+
+          <div class="batch-module-card">
+            <div class="batch-module-header">
+              <h3 class="batch-module-title">上传和进度</h3>
+              <button class="batch-module-close" type="button" title="关闭">×</button>
+            </div>
+            <div class="batch-module-body">
+              <div class="batch-upload-zone" id="batchUploadZone">
+                <p class="batch-upload-zone-text">文件拖拽区 / 点击上传</p>
+              </div>
+              <input id="batchFileInput" type="file" accept="image/*" multiple hidden>
+              <div class="batch-upload-actions">
+                <button class="batch-upload-btn" id="batchUploadBtn" type="button">上传</button>
+                <button class="batch-generate-btn" id="batchGenerateBtn" type="button" disabled>开始生成</button>
+              </div>
+            </div>
+          </div>
+        </div>
+      </section>
+    </main>
+  </div>
+
+  <script>
+    document.addEventListener('DOMContentLoaded', () => {
+      const batchTaskList = document.getElementById('batchTaskList');
+      const batchUploadZone = document.getElementById('batchUploadZone');
+      const batchFileInput = document.getElementById('batchFileInput');
+      const batchUploadBtn = document.getElementById('batchUploadBtn');
+      const batchGenerateBtn = document.getElementById('batchGenerateBtn');
+      const batchGenType = document.getElementById('batchGenType');
+      const clearAllTasksBtn = document.getElementById('clearAllTasksBtn');
+
+      const suiteAplusConfig = document.getElementById('suiteAplusConfig');
+      const fashionConfig = document.getElementById('fashionConfig');
+
+      const aiModelConfig = document.getElementById('aiModelConfig');
+      const customModelConfig = document.getElementById('customModelConfig');
+      const modelTabs = document.querySelectorAll('.model-tabs .model-tab');
+
+      const autoPromptConfig = document.getElementById('autoPromptConfig');
+      const manualPromptConfig = document.getElementById('manualPromptConfig');
+      const promptModeTabs = document.querySelectorAll('[data-prompt-mode]');
+      const sceneTypeConfig = document.getElementById('sceneTypeConfig');
+      const sceneNotesField = document.getElementById('sceneNotesField');
+
+      const autoStyleConfig = document.getElementById('autoStyleConfig');
+      const manualStyleConfig = document.getElementById('manualStyleConfig');
+      const styleModeTabs = document.querySelectorAll('[data-style-mode]');
+
+      let taskCounter = 0;
+      const tasks = new Map();
+      let pendingImages = []; // 临时存储预览图片，不关联任务
+
+      function toggleConfigByGenType(genType) {
+        suiteAplusConfig.hidden = genType === 'fashion';
+        fashionConfig.hidden = genType !== 'fashion';
+        
+        // 商品套图时隐藏场景类型配置，A+详情页时显示
+        if (sceneTypeConfig) {
+          sceneTypeConfig.hidden = genType === 'suite';
+        }
+        
+        // A+详情页时隐藏补充说明字段
+        if (sceneNotesField) {
+          sceneNotesField.hidden = genType === 'aplus';
+        }
+      }
+
+      function toggleStyleMode(mode) {
+        autoStyleConfig.hidden = mode !== 'auto';
+        manualStyleConfig.hidden = mode !== 'manual';
+
+        styleModeTabs.forEach(tab => {
+          const isActive = tab.dataset.styleMode === mode;
+          tab.classList.toggle('active', isActive);
+          tab.setAttribute('aria-pressed', isActive ? 'true' : 'false');
+        });
+      }
+
+      function toggleModelConfig(modelType) {
+        aiModelConfig.hidden = modelType !== 'ai';
+        customModelConfig.hidden = modelType !== 'custom';
+
+        modelTabs.forEach(tab => {
+          const isActive = tab.dataset.model === modelType;
+          tab.classList.toggle('active', isActive);
+          tab.setAttribute('aria-pressed', isActive ? 'true' : 'false');
+        });
+      }
+
+      function togglePromptMode(mode) {
+        autoPromptConfig.hidden = mode !== 'auto';
+        manualPromptConfig.hidden = mode !== 'manual';
+
+        promptModeTabs.forEach(tab => {
+          const isActive = tab.dataset.promptMode === mode;
+          tab.classList.toggle('active', isActive);
+          tab.setAttribute('aria-pressed', isActive ? 'true' : 'false');
+        });
+      }
+
+      batchGenType.addEventListener('change', () => {
+        toggleConfigByGenType(batchGenType.value);
+      });
+
+      modelTabs.forEach(tab => {
+        tab.addEventListener('click', (e) => {
+          e.preventDefault();
+          toggleModelConfig(tab.dataset.model);
+        });
+      });
+
+      styleModeTabs.forEach(tab => {
+        tab.addEventListener('click', (e) => {
+          e.preventDefault();
+          toggleStyleMode(tab.dataset.styleMode);
+        });
+      });
+
+      promptModeTabs.forEach(tab => {
+        tab.addEventListener('click', (e) => {
+          e.preventDefault();
+          togglePromptMode(tab.dataset.promptMode);
+        });
+      });
+
+      const batchModelUploadBtn = document.getElementById('batchModelUploadBtn');
+      const batchModelFileInput = document.getElementById('batchModelFileInput');
+
+      if (batchModelUploadBtn && batchModelFileInput) {
+        batchModelUploadBtn.addEventListener('click', () => {
+          batchModelFileInput.click();
+        });
+
+        batchModelFileInput.addEventListener('change', (e) => {
+          const files = Array.from(e.target.files);
+          console.log('上传模特图片：', files);
+          alert(`已选择 ${files.length} 张模特图片`);
+        });
+      }
+
+      const checkboxItems = document.querySelectorAll('.checkbox-item');
+      checkboxItems.forEach(item => {
+        const checkbox = item.querySelector('input[type="checkbox"]');
+        if (checkbox) {
+          checkbox.addEventListener('change', () => {
+            item.classList.toggle('is-checked', checkbox.checked);
+          });
+        }
+      });
+
+      function createTaskListItem(taskId, imageCount, status = 'ready') {
+        const item = document.createElement('div');
+        item.className = 'batch-task-item';
+        item.dataset.taskId = taskId;
+        
+        const statusClass = status === 'ready' ? 'is-active' : 
+                           status === 'generating' ? 'is-generating' :
+                           status === 'completed' ? 'is-completed' : 'is-failed';
+        
+        const statusText = status === 'ready' ? '已就绪' :
+                          status === 'generating' ? '生成中' :
+                          status === 'completed' ? '已完成' : '失败';
+
+        item.innerHTML = `
+          <div class="batch-task-icon">📦</div>
+          <div class="batch-task-info">
+            <p class="batch-task-name">商品 #${taskId}</p>
+            <p class="batch-task-meta">${imageCount} 张图片</p>
+            ${status === 'generating' ? `
+              <div class="batch-task-progress">
+                <div class="batch-task-progress-bar">
+                  <div class="batch-task-progress-fill" style="width: 0%"></div>
+                </div>
+                <div class="batch-task-progress-text">
+                  <span class="progress-status">正在生成...</span>
+                  <span class="progress-percent">0%</span>
+                </div>
+              </div>
+            ` : ''}
+          </div>
+          <button class="batch-task-status ${statusClass}" type="button" data-task-id="${taskId}">${statusText}</button>
+        `;
+
+        const statusBtn = item.querySelector('.batch-task-status');
+        if (status === 'ready') {
+          statusBtn.addEventListener('click', () => {
+            statusBtn.classList.toggle('is-active');
+            statusBtn.classList.toggle('is-inactive');
+            statusBtn.textContent = statusBtn.classList.contains('is-active') ? '已就绪' : '未就绪';
+          });
+        }
+
+        return item;
+      }
+
+      function updateTaskProgress(taskId, progress, statusText) {
+        const taskItem = document.querySelector(`.batch-task-item[data-task-id="${taskId}"]`);
+        if (!taskItem) return;
+
+        const progressFill = taskItem.querySelector('.batch-task-progress-fill');
+        const progressStatus = taskItem.querySelector('.progress-status');
+        const progressPercent = taskItem.querySelector('.progress-percent');
+
+        if (progressFill) {
+          progressFill.style.width = `${progress}%`;
+        }
+        if (progressStatus) {
+          progressStatus.textContent = statusText;
+        }
+        if (progressPercent) {
+          progressPercent.textContent = `${progress}%`;
+        }
+      }
+
+      function updateTaskStatus(taskId, status) {
+        const taskItem = document.querySelector(`.batch-task-item[data-task-id="${taskId}"]`);
+        if (!taskItem) return;
+
+        const statusBtn = taskItem.querySelector('.batch-task-status');
+        if (!statusBtn) return;
+
+        statusBtn.classList.remove('is-active', 'is-inactive', 'is-generating', 'is-completed', 'is-failed');
+        
+        const statusConfig = {
+          ready: { class: 'is-active', text: '已就绪' },
+          generating: { class: 'is-generating', text: '生成中' },
+          completed: { class: 'is-completed', text: '已完成' },
+          failed: { class: 'is-failed', text: '失败' }
+        };
+
+        const config = statusConfig[status] || statusConfig.ready;
+        statusBtn.classList.add(config.class);
+        statusBtn.textContent = config.text;
+      }
+
+      function updateTaskList() {
+        if (!batchTaskList) return;
+
+        batchTaskList.innerHTML = '';
+        tasks.forEach((task, taskId) => {
+          const item = createTaskListItem(taskId, task.images.length);
+          batchTaskList.appendChild(item);
+        });
+      }
+
+      function updateGenerateButton() {
+        // 只要有待处理的图片就可以生成
+        batchGenerateBtn.disabled = pendingImages.length === 0;
+      }
+
+      function renderThumbnails() {
+        // 清空上传区域
+        batchUploadZone.innerHTML = '';
+        
+        if (pendingImages.length === 0) {
+          // 没有图片，显示默认文本
+          batchUploadZone.innerHTML = '<p class="batch-upload-zone-text">文件拖拽区 / 点击上传</p>';
+          batchUploadZone.classList.remove('has-images');
+          return;
+        }
+
+        // 有图片，显示缩略图
+        batchUploadZone.classList.add('has-images');
+        
+        const thumbnailsContainer = document.createElement('div');
+        thumbnailsContainer.className = 'batch-upload-thumbnails';
+        
+        pendingImages.forEach((img, index) => {
+          const thumbnailItem = document.createElement('div');
+          thumbnailItem.className = 'batch-thumbnail-item';
+          thumbnailItem.innerHTML = `
+            <img src="${img.dataUrl}" alt="${img.name}">
+            <button class="batch-thumbnail-delete" data-index="${index}" type="button">×</button>
+          `;
+          
+          const deleteBtn = thumbnailItem.querySelector('.batch-thumbnail-delete');
+          deleteBtn.addEventListener('click', (e) => {
+            e.stopPropagation();
+            deletePendingImage(index);
+          });
+          
+          thumbnailsContainer.appendChild(thumbnailItem);
+        });
+        
+        batchUploadZone.appendChild(thumbnailsContainer);
+        
+        // 添加提示文字
+        const hint = document.createElement('div');
+        hint.className = 'batch-upload-hint';
+        hint.textContent = `已上传 ${pendingImages.length} 张图片，点击或拖拽继续上传`;
+        batchUploadZone.appendChild(hint);
+      }
+
+      function deletePendingImage(index) {
+        pendingImages.splice(index, 1);
+        renderThumbnails();
+        updateGenerateButton();
+      }
+
+      function handleBatchUpload(files) {
+        const imageFiles = Array.from(files).filter(f => f.type.startsWith('image/'));
+        if (imageFiles.length === 0) {
+          alert('请选择图片文件');
+          return;
+        }
+
+        // 读取图片文件并转换为dataUrl，添加到pendingImages
+        const imagePromises = imageFiles.map(file => {
+          return new Promise((resolve) => {
+            const reader = new FileReader();
+            reader.onload = (e) => {
+              resolve({
+                file: file,
+                name: file.name,
+                dataUrl: e.target.result
+              });
+            };
+            reader.readAsDataURL(file);
+          });
+        });
+
+        Promise.all(imagePromises).then(images => {
+          // 添加到pendingImages，最多保留最新的3张
+          pendingImages = pendingImages.concat(images).slice(-3);
+          renderThumbnails();
+          updateGenerateButton();
+        });
+      }
+
+      batchUploadZone.addEventListener('click', (e) => {
+        // 如果点击的是缩略图或删除按钮，不触发文件选择
+        if (e.target.closest('.batch-thumbnail-item') || e.target.closest('.batch-thumbnail-delete')) {
+          return;
+        }
+        batchFileInput.click();
+      });
+
+      batchUploadZone.addEventListener('dragover', (e) => {
+        e.preventDefault();
+        batchUploadZone.style.borderColor = '#3b82f6';
+        batchUploadZone.style.background = '#f3f4f6';
+      });
+
+      batchUploadZone.addEventListener('dragleave', (e) => {
+        e.preventDefault();
+        batchUploadZone.style.borderColor = '';
+        batchUploadZone.style.background = '';
+      });
+
+      batchUploadZone.addEventListener('drop', (e) => {
+        e.preventDefault();
+        batchUploadZone.style.borderColor = '';
+        batchUploadZone.style.background = '';
+        const files = e.dataTransfer.files;
+        handleBatchUpload(files);
+      });
+
+      batchFileInput.addEventListener('change', (e) => {
+        const files = e.target.files;
+        handleBatchUpload(files);
+        e.target.value = '';
+      });
+
+      batchUploadBtn.addEventListener('click', () => {
+        batchFileInput.click();
+      });
+
+      function batchGenerate() {
+        if (pendingImages.length === 0) {
+          alert('请上传图片');
+          return;
+        }
+
+        // 从pendingImages创建新任务
+        taskCounter++;
+        const taskId = taskCounter;
+        tasks.set(taskId, {
+          id: taskId,
+          images: [...pendingImages] // 复制图片数据
+        });
+
+        // 清空pendingImages
+        pendingImages = [];
+        renderThumbnails();
+        updateGenerateButton();
+
+        const genType = batchGenType.value;
+        let globalConfig = {
+          genType: genType
+        };
+
+        if (genType === 'suite' || genType === 'aplus') {
+          const promptMode = document.querySelector('[data-prompt-mode].active')?.dataset.promptMode || 'auto';
+
+          globalConfig = {
+            ...globalConfig,
+            platform: document.getElementById('batchPlatform').value,
+            country: document.getElementById('batchCountry').value,
+            textType: document.getElementById('batchTextType').value,
+            ratio: document.getElementById('batchRatio').value,
+            sellingPoints: document.getElementById('batchSellingPoints').value,
+            promptMode: promptMode
+          };
+
+          if (promptMode === 'auto') {
+            const selectedScenes = [];
+            document.querySelectorAll('#batchSceneTypes input[type="checkbox"]:checked').forEach(cb => {
+              selectedScenes.push(cb.id.replace('scene', '').toLowerCase());
+            });
+
+            const styleMode = document.querySelector('[data-style-mode].active')?.dataset.styleMode || 'auto';
+
+            globalConfig.promptConfig = {
+              mode: 'auto',
+              styleMode: styleMode,
+              sceneStyle: styleMode === 'auto' ? document.getElementById('batchSceneStyle').value : undefined,
+              customStyle: styleMode === 'manual' ? document.getElementById('batchCustomStyle').value : undefined,
+              sceneTypes: selectedScenes,
+              sceneNotes: document.getElementById('batchSceneNotes').value
+            };
+          } else {
+            globalConfig.promptConfig = {
+              mode: 'manual',
+              customPrompt: document.getElementById('batchCustomPrompt').value
+            };
+          }
+        } else if (genType === 'fashion') {
+          const modelType = document.querySelector('.model-tab.active')?.dataset.model || 'ai';
+
+          globalConfig = {
+            ...globalConfig,
+            ratio: document.getElementById('batchFashionRatio').value,
+            modelType: modelType
+          };
+
+          if (modelType === 'ai') {
+            globalConfig.modelConfig = {
+              gender: document.getElementById('batchGender').value,
+              age: document.getElementById('batchAge').value,
+              ethnicity: document.getElementById('batchEthnicity').value,
+              bodyType: document.getElementById('batchBodyType').value
+            };
+          }
+        }
+
+        console.log('批量生成配置：', globalConfig);
+        console.log('新任务ID：', taskId);
+
+        const genTypeNames = {
+          suite: '商品套图',
+          aplus: 'A+详情页',
+          fashion: '服饰穿戴'
+        };
+
+        // 将任务添加到任务列表并开始生成
+        const task = tasks.get(taskId);
+        const item = createTaskListItem(taskId, task.images.length, 'generating');
+        batchTaskList.appendChild(item);
+
+        // 调用真实的API
+        createBatchTask(globalConfig, task.images, taskId);
+      }
+
+      async function createBatchTask(config, images, taskId) {
+        try {
+          const formData = new FormData();
+          formData.append('config', JSON.stringify(config));
+          formData.append('tasks', JSON.stringify([{ taskId: taskId, imageCount: images.length }]));
+
+          images.forEach((img, index) => {
+            formData.append(`images_${taskId}_${index}`, img.file);
+          });
+
+          const response = await fetch('/api/batch/create', {
+            method: 'POST',
+            body: formData
+          });
+
+          const result = await response.json();
+
+          if (result.success) {
+            const batchId = result.data.batchId;
+            console.log('批次创建成功:', batchId);
+            
+            // 开始轮询进度
+            pollProgress(batchId, taskId);
+          } else {
+            console.error('批次创建失败:', result.error);
+            updateTaskStatus(taskId, 'failed');
+            alert('创建任务失败: ' + result.error);
+          }
+        } catch (error) {
+          console.error('创建批次失败:', error);
+          updateTaskStatus(taskId, 'failed');
+          alert('创建任务失败: ' + error.message);
+        }
+      }
+
+      async function pollProgress(batchId, taskId) {
+        try {
+          const response = await fetch(`/api/batch/${batchId}/progress`);
+          const result = await response.json();
+
+          if (result.success) {
+            const batch = result.data;
+            const task = batch.tasks.find(t => t.taskId === taskId);
+
+            if (task) {
+              updateTaskProgress(taskId, task.progress, task.currentStep);
+
+              if (task.status === 'completed') {
+                updateTaskStatus(taskId, 'completed');
+                console.log('任务完成:', taskId);
+              } else if (task.status === 'failed') {
+                updateTaskStatus(taskId, 'failed');
+                console.error('任务失败:', taskId);
+              } else {
+                // 继续轮询
+                setTimeout(() => pollProgress(batchId, taskId), 2000);
+              }
+            }
+          }
+        } catch (error) {
+          console.error('查询进度失败:', error);
+          setTimeout(() => pollProgress(batchId, taskId), 2000);
+        }
+      }
+
+      // 清空所有任务
+      clearAllTasksBtn.addEventListener('click', () => {
+        if (tasks.size === 0 && pendingImages.length === 0) {
+          return;
+        }
+
+        if (confirm('确定要清空所有任务吗？')) {
+          tasks.clear();
+          pendingImages = [];
+          taskCounter = 0;
+          renderThumbnails();
+          batchTaskList.innerHTML = '';
+          updateGenerateButton();
+        }
+      });
+
+      batchGenerateBtn.addEventListener('click', batchGenerate);
+    });
+  </script>
+</body>
+</html>

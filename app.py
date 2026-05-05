@@ -2130,6 +2130,175 @@ def fashion_page():
     return render_html_page('fashion.html')
 
 
+@app.get('/batch')
+def batch_page():
+    return render_html_page('batch.html')
+
+
+@app.post('/api/batch/create')
+def create_batch_task():
+    try:
+        session_data = g.get('supabase_session') or get_supabase_session()
+        user_id = _get_supabase_user_id(session_data)
+        if not user_id:
+            return jsonify({'success': False, 'error': '请先登录'}), 401
+        
+        config_str = request.form.get('config')
+        tasks_str = request.form.get('tasks')
+        
+        if not config_str or not tasks_str:
+            return jsonify({'success': False, 'error': '参数缺失'}), 400
+        
+        config = json.loads(config_str)
+        tasks = json.loads(tasks_str)
+        
+        from batch_models import create_batch_record, create_task_record
+        import base64
+        
+        batch_result = create_batch_record(
+            user_id=user_id,
+            gen_type=config.get('genType'),
+            platform=config.get('platform'),
+            country=config.get('country'),
+            text_type=config.get('textType'),
+            ratio=config.get('ratio'),
+            selling_points=config.get('sellingPoints'),
+            prompt_config=config.get('promptConfig'),
+            total_tasks=len(tasks),
+        )
+        
+        batch_id = batch_result['batch_id']
+        
+        for task in tasks:
+            task_index = task.get('taskId')
+            image_count = task.get('imageCount', 0)
+            
+            input_images = []
+            for i in range(image_count):
+                file_key = f'images_{task_index}_{i}'
+                if file_key in request.files:
+                    file = request.files[file_key]
+                    if file and file.filename:
+                        file_data = file.read()
+                        image_data = {
+                            'name': file.filename,
+                            'type': file.content_type,
+                            'data': base64.b64encode(file_data).decode('utf-8'),
+                            'bytes': file_data,
+                            'mime_type': file.content_type,
+                        }
+                        input_images.append(image_data)
+            
+            create_task_record(
+                batch_id=batch_id,
+                task_index=task_index,
+                input_images=[{'name': img['name'], 'type': img['type']} for img in input_images],
+            )
+            
+            from batch_worker import add_task_to_queue
+            add_task_to_queue(
+                batch_id=batch_id,
+                task_id=f"{batch_id}_task_{task_index}",
+                config=config,
+                input_images=input_images,
+                _logger=logger,
+            )
+        
+        from batch_worker import start_task_processor
+        start_task_processor(_logger=logger)
+        
+        return jsonify({
+            'success': True,
+            'data': {
+                'batchId': batch_id,
+                'taskCount': len(tasks),
+                'status': 'pending',
+                'createdAt': datetime.now(timezone.utc).isoformat(),
+            }
+        })
+    
+    except Exception as e:
+        logger.error(f"创建批量任务失败: {e}", exc_info=True)
+        return jsonify({'success': False, 'error': str(e)}), 500
+
+
+@app.get('/api/batch/<batch_id>/progress')
+def get_batch_progress(batch_id: str):
+    try:
+        session_data = g.get('supabase_session') or get_supabase_session()
+        user_id = _get_supabase_user_id(session_data)
+        if not user_id:
+            return jsonify({'success': False, 'error': '请先登录'}), 401
+        
+        from batch_models import fetch_batch_progress
+        
+        progress = fetch_batch_progress(batch_id, user_id)
+        
+        if not progress:
+            return jsonify({'success': False, 'error': '批次不存在'}), 404
+        
+        return jsonify({
+            'success': True,
+            'data': progress
+        })
+    
+    except Exception as e:
+        logger.error(f"查询批次进度失败: {e}", exc_info=True)
+        return jsonify({'success': False, 'error': str(e)}), 500
+
+
+@app.post('/api/batch/<batch_id>/cancel')
+def cancel_batch_task(batch_id: str):
+    try:
+        session_data = g.get('supabase_session') or get_supabase_session()
+        user_id = _get_supabase_user_id(session_data)
+        if not user_id:
+            return jsonify({'success': False, 'error': '请先登录'}), 401
+        
+        from batch_models import cancel_batch as cancel_batch_db
+        from batch_worker import cancel_batch as cancel_batch_queue
+        
+        db_result = cancel_batch_db(batch_id, user_id)
+        
+        queue_cancelled = cancel_batch_queue(batch_id, _logger=logger)
+        
+        return jsonify({
+            'success': True,
+            'data': {
+                'batchId': batch_id,
+                'status': 'cancelled',
+                'queueCancelled': queue_cancelled
+            }
+        })
+    
+    except ValueError as e:
+        return jsonify({'success': False, 'error': str(e)}), 400
+    except Exception as e:
+        logger.error(f"取消批次失败: {e}", exc_info=True)
+        return jsonify({'success': False, 'error': str(e)}), 500
+
+
+@app.get('/api/batch/queue/status')
+def get_queue_status():
+    try:
+        session_data = g.get('supabase_session') or get_supabase_session()
+        user_id = _get_supabase_user_id(session_data)
+        if not user_id:
+            return jsonify({'success': False, 'error': '请先登录'}), 401
+        
+        from batch_worker import get_queue_status
+        status = get_queue_status()
+        
+        return jsonify({
+            'success': True,
+            'data': status
+        })
+    
+    except Exception as e:
+        logger.error(f"获取队列状态失败: {e}", exc_info=True)
+        return jsonify({'success': False, 'error': str(e)}), 500
+
+
 @app.get('/settings')
 def settings_page():
     return render_html_page('settings.html')
@@ -4040,6 +4209,9 @@ def generate_aplus():
 
 
 if __name__ == '__main__':
+    from batch_worker import start_background_processor
+    start_background_processor(interval=5, _logger=logger)
+    
     host = get_supabase_setting('HOST', get_optional_env('HOST', '0.0.0.0')) or '0.0.0.0'
     port = get_supabase_setting_int('PORT', get_optional_int_env('PORT', 5078))
     debug = get_supabase_setting_bool('FLASK_DEBUG', get_optional_bool_env('FLASK_DEBUG', False))
