@@ -272,6 +272,24 @@ def claim_daily_free_points(user_id: str, amount: int) -> dict | None:
         }
 
 
+def _record_points_transaction(user_id: str, amount: int, transaction_type: str, reason: str, metadata: dict | None) -> None:
+    try:
+        requests.post(
+            build_supabase_request_url('/rest/v1/user_points_transactions'),
+            headers=_build_supabase_service_headers(),
+            json={
+                'user_id': user_id,
+                'amount': amount,
+                'transaction_type': transaction_type,
+                'reason': reason,
+                'metadata': metadata or {},
+            },
+            timeout=10,
+        )
+    except Exception as e:
+        logger.warning('Failed to record points transaction for %s: %s', user_id, e)
+
+
 def spend_user_points(user_id: str, amount: int, transaction_type: str = 'consume', reason: str = '', metadata: dict | None = None) -> dict | None:
     normalized_user_id = str(user_id or '').strip()
     if not normalized_user_id:
@@ -294,20 +312,6 @@ def spend_user_points(user_id: str, amount: int, transaction_type: str = 'consum
         {
             'p_user_id': normalized_user_id,
             'p_amount': normalized_amount,
-            'p_transaction_type': normalized_transaction_type,
-            'p_reason': normalized_reason,
-            'p_metadata': normalized_metadata,
-        },
-        {
-            'target_user_id': normalized_user_id,
-            'spend_points': normalized_amount,
-            'target_type': normalized_transaction_type,
-            'target_reason': normalized_reason,
-            'target_metadata': normalized_metadata,
-        },
-        {
-            'p_user_id': normalized_user_id,
-            'p_amount': normalized_amount,
         },
     ]
     last_error_text = ''
@@ -316,6 +320,13 @@ def spend_user_points(user_id: str, amount: int, transaction_type: str = 'consum
         try:
             payload = _post_supabase_rpc('spend_user_points', rpc_payload)
             if isinstance(payload, dict):
+                _record_points_transaction(
+                    normalized_user_id,
+                    -normalized_amount,
+                    normalized_transaction_type,
+                    normalized_reason,
+                    normalized_metadata,
+                )
                 if payload.get('spent') is True:
                     return payload
                 if payload.get('success') is True and payload.get('spent') is False:
@@ -345,15 +356,8 @@ def spend_user_points(user_id: str, amount: int, transaction_type: str = 'consum
                     error_text = response.text or ''
             last_error_text = error_text
             if response is not None and response.status_code >= 400 and (
-                '积分余额不足' in error_text or 'INSUFFICIENT_POINTS' in error_text
+                '积分余额不足' in error_text or 'INSUFFICIENT_POINTS' in error_text or 'Insufficient points' in error_text
             ):
-                try:
-                    fallback_result = _spend_user_points_direct(normalized_user_id, normalized_amount, normalized_transaction_type, normalized_reason, normalized_metadata)
-                    if isinstance(fallback_result, dict) and fallback_result.get('spent'):
-                        return fallback_result
-                except requests.RequestException as fallback_exc:
-                    logger.warning('Direct spend user points fallback failed for %s: %s', normalized_user_id, fallback_exc)
-                    return build_spend_failure(str(fallback_exc))
                 balance_row = get_user_points_balance(normalized_user_id) or ensure_user_points_balance(normalized_user_id) or {}
                 return {
                     'success': False,
@@ -363,12 +367,6 @@ def spend_user_points(user_id: str, amount: int, transaction_type: str = 'consum
                 }
             if response is not None and response.status_code == 404 and 'Could not find the function' in error_text:
                 continue
-            if response is not None and response.status_code == 400 and 'INSUFFICIENT_POINTS' in error_text:
-                try:
-                    return _spend_user_points_direct(normalized_user_id, normalized_amount, normalized_transaction_type, normalized_reason, normalized_metadata)
-                except requests.RequestException as fallback_exc:
-                    logger.warning('Direct spend user points fallback failed for %s: %s', normalized_user_id, fallback_exc)
-                    return build_spend_failure(str(fallback_exc))
             logger.warning('Failed to spend user points for %s: %s', normalized_user_id, exc)
             return build_spend_failure(error_text or str(exc))
         except requests.RequestException as exc:
@@ -3765,8 +3763,6 @@ def build_generation_result_from_payload(form_payload: dict, file_payloads: dict
                     break
             if not generated_items or image_bytes is None:
                 raise ValueError('生成结果为空')
-            if not verification or not verification.get('passed'):
-                raise RuntimeError((verification or {}).get('reason', '质检未通过'))
             download_name, relative_path, image_url, storage_trace = save_generated_image(task_id, index, 'fashion-look', image_bytes, mime_type)
             return {
                 'sort': index,
@@ -3780,6 +3776,7 @@ def build_generation_result_from_payload(form_payload: dict, file_payloads: dict
                 'image_path': relative_path,
                 'download_name': download_name,
                 'verification': verification,
+                'verification_passed': verification.get('passed') if verification else False,
                 'trace': storage_trace,
             }
 
