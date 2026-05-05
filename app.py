@@ -2152,12 +2152,49 @@ def create_batch_task():
         config = json.loads(config_str)
         tasks = json.loads(tasks_str)
         
+        gen_type = config.get('genType', 'suite')
+        output_count = int(config.get('outputCount', 6))
+        
+        total_output_count = len(tasks) * output_count
+        
+        consume_payload = build_points_consume_payload(
+            gen_type,
+            output_count=total_output_count,
+            transaction_type='consume',
+            reason=f'批量生图-{gen_type}',
+            metadata={'batch_task_count': len(tasks), 'output_per_task': output_count},
+        )
+        points_cost = int(consume_payload['amount'])
+        
+        balance_row = get_user_points_balance(user_id)
+        current_balance = int(balance_row.get('balance', 0)) if balance_row else 0
+        
+        if current_balance < points_cost:
+            return jsonify({
+                'success': False,
+                'error': f'积分不足，需要 {points_cost} 积分，当前余额 {current_balance} 积分',
+                'required': points_cost,
+                'balance': current_balance,
+            }), 400
+        
+        spend_result = spend_user_points(
+            user_id,
+            points_cost,
+            'consume',
+            f'批量生图-{gen_type}',
+            {'batch_task_count': len(tasks), 'output_per_task': output_count, 'gen_type': gen_type},
+        )
+        
+        if not spend_result or not spend_result.get('spent'):
+            error_msg = spend_result.get('error', '积分扣除失败') if spend_result else '积分扣除失败'
+            return jsonify({'success': False, 'error': error_msg}), 400
+        
         from batch_models import create_batch_record, create_task_record
         import base64
         
         batch_result = create_batch_record(
             user_id=user_id,
-            gen_type=config.get('genType'),
+            gen_type=gen_type,
             platform=config.get('platform'),
             country=config.get('country'),
             text_type=config.get('textType'),
@@ -2165,6 +2202,7 @@ def create_batch_task():
             selling_points=config.get('sellingPoints'),
             prompt_config=config.get('promptConfig'),
             total_tasks=len(tasks),
+            points_cost=points_cost,
         )
         
         batch_id = batch_result['batch_id']
@@ -2214,6 +2252,8 @@ def create_batch_task():
                 'taskCount': len(tasks),
                 'status': 'pending',
                 'createdAt': datetime.now(timezone.utc).isoformat(),
+                'pointsCost': points_cost,
+                'balance': spend_result.get('balance_row', {}).get('balance', 0),
             }
         })
     

@@ -30,6 +30,7 @@ def create_batch_record(
     selling_points: Optional[str] = None,
     prompt_config: Optional[Dict] = None,
     total_tasks: int = 0,
+    points_cost: int = 0,
     _logger: logging.Logger | None = None
 ) -> Dict:
     log = _logger or logger
@@ -57,6 +58,7 @@ def create_batch_record(
         'total_tasks': total_tasks,
         'completed_tasks': 0,
         'failed_tasks': 0,
+        'points_cost': points_cost,
         'created_at': datetime.now(timezone.utc).isoformat(),
         'updated_at': datetime.now(timezone.utc).isoformat(),
     }
@@ -342,6 +344,7 @@ def fetch_batch_progress(
         'totalTasks': batch_row.get('total_tasks', 0),
         'completedTasks': batch_row.get('completed_tasks', 0),
         'failedTasks': batch_row.get('failed_tasks', 0),
+        'points_cost': batch_row.get('points_cost', 0),
         'tasks': tasks,
     }
 
@@ -350,6 +353,7 @@ def cancel_batch(
     batch_id: str,
     user_id: str,
     reason: Optional[str] = None,
+    refund_points: bool = True,
     _logger: logging.Logger | None = None
 ) -> Dict:
     log = _logger or logger
@@ -363,6 +367,8 @@ def cancel_batch(
     
     if progress['status'] in ['completed', 'cancelled']:
         raise ValueError(f"批次状态为{progress['status']}，无法取消")
+    
+    points_cost = progress.get('points_cost', 0) or 0
     
     update_batch_status(batch_id, 'cancelled', _logger=_logger)
     
@@ -384,11 +390,28 @@ def cancel_batch(
     
     cancelled_count = len([t for t in progress['tasks'] if t['status'] == 'pending'])
     
+    refunded_points = 0
+    if refund_points and points_cost > 0:
+        from app import add_user_points
+        try:
+            add_user_points(
+                user_id,
+                points_cost,
+                'refund',
+                f'批量任务取消返还-{batch_id}',
+                {'batch_id': batch_id, 'reason': reason}
+            )
+            refunded_points = points_cost
+            log.info(f"取消批次返还积分: batch_id={batch_id}, points={points_cost}")
+        except Exception as e:
+            log.error(f"返还积分失败: {e}")
+    
     log.info(f"取消批次: batch_id={batch_id}, cancelled_tasks={cancelled_count}")
     
     return {
         'batchId': batch_id,
         'status': 'cancelled',
         'cancelledTasks': cancelled_count,
+        'refundedPoints': refunded_points,
         'message': '批次任务已取消'
     }

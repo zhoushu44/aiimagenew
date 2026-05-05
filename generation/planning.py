@@ -48,6 +48,21 @@ CHAT_COMPLETION_FALLBACK_ERROR_TOKENS = (
 )
 
 
+def _format_error_brief(error_text: str) -> str:
+    error_lower = error_text.lower()
+    if 'ssl' in error_lower or 'eof' in error_lower:
+        return 'SSL_ERROR'
+    if 'timed out' in error_lower or 'timeout' in error_lower:
+        return 'TIMEOUT_ERROR'
+    if 'connection aborted' in error_lower or 'connection reset' in error_lower:
+        return 'CONNECTION_ERROR'
+    if 'max retries exceeded' in error_lower:
+        return 'MAX_RETRIES_EXCEEDED'
+    if len(error_text) > 80:
+        return error_text[:80] + '...'
+    return error_text
+
+
 def get_env(name: str) -> str:
     value = os.getenv(name, '').strip()
     if not value:
@@ -173,10 +188,9 @@ def call_chat_completion(system_prompt: str, user_content, temperature: float = 
             raise
 
         logger.warning(
-            'Primary chat completion failed with fallbackable error, fallback to Ark chat model=%s base_url=%s original_error=%s',
+            'Primary chat failed, fallback to Ark: model=%s error=%s',
             fallback_model,
-            fallback_base_url,
-            error_text,
+            _format_error_brief(error_text),
         )
         try:
             response = _run_chat_completion(

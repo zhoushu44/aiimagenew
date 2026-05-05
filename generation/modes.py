@@ -319,6 +319,41 @@ def is_retryable_mode1_error(exc: Exception) -> bool:
     return status_code in {408, 409, 425, 429, 500, 502, 503, 504, 524}
 
 
+def is_ssl_or_network_error(exc: Exception) -> bool:
+    message = str(exc or '').lower()
+    ssl_network_fragments = (
+        'ssl',
+        'sslerror',
+        'eof',
+        'unexpected eof',
+        'connection aborted',
+        'connection reset',
+        'timed out',
+        'timeout',
+        'protocolerror',
+    )
+    return any(fragment in message for fragment in ssl_network_fragments)
+
+
+def format_error_brief(exc: Exception) -> str:
+    message = str(exc or '')
+    if is_ssl_or_network_error(exc):
+        if 'SSL' in message or 'ssl' in message:
+            return 'SSL_ERROR'
+        if 'timed out' in message.lower() or 'timeout' in message.lower():
+            return 'TIMEOUT_ERROR'
+        if 'connection aborted' in message.lower():
+            return 'CONNECTION_ABORTED'
+        if 'connection reset' in message.lower():
+            return 'CONNECTION_RESET'
+        if 'eof' in message.lower():
+            return 'SSL_EOF_ERROR'
+        return 'NETWORK_ERROR'
+    if len(message) > 100:
+        return message[:100] + '...'
+    return message
+
+
 def is_retryable_mode2_error(exc: Exception) -> bool:
     message = str(exc or '')
     retryable_fragments = (
@@ -379,6 +414,8 @@ def is_server_error(exc: Exception) -> bool:
 def compute_retry_delay(base_delay: float, attempt: int, exc: Exception) -> float:
     if is_server_error(exc):
         return min(base_delay * (2 ** attempt), 30.0)
+    if is_ssl_or_network_error(exc):
+        return min(base_delay * (2 ** attempt) * 2, 60.0)
     return base_delay * (attempt + 1)
 
 
@@ -768,14 +805,12 @@ def call_mode1_single_image_with_retry(prompt: str, image_payloads, image_size_r
                 raise
             wait_seconds = compute_retry_delay(retry_delay_seconds, attempt, exc)
             log.warning(
-                'Mode1 single image failed, retrying in %.2fs (%s/%s): image_type=%s reference_count=%s plan_type=%s error=%s',
+                'Mode1 single image failed, retrying in %.2fs (%s/%s): image_type=%s error=%s',
                 wait_seconds,
                 attempt + 1,
                 retry_attempts,
                 image_type or '',
-                len(image_payloads or []),
-                str((plan_item or {}).get('type') or ''),
-                exc,
+                format_error_brief(exc),
             )
             time.sleep(wait_seconds)
     log.exception(
@@ -868,14 +903,12 @@ def call_mode2_single_image_with_retry(prompt: str, image_payloads, image_size_r
                 raise
             wait_seconds = compute_retry_delay(retry_delay_seconds, attempt, exc)
             log.warning(
-                'Mode2 single image failed, retrying in %.2fs (%s/%s): image_type=%s reference_count=%s plan_type=%s error=%s',
+                'Mode2 single image failed, retrying in %.2fs (%s/%s): image_type=%s error=%s',
                 wait_seconds,
                 attempt + 1,
                 retry_attempts,
                 image_type or '',
-                len(image_payloads or []),
-                str((plan_item or {}).get('type') or ''),
-                exc,
+                format_error_brief(exc),
             )
             time.sleep(wait_seconds)
     log.exception(
@@ -969,14 +1002,12 @@ def call_mode3_single_image_with_retry(prompt: str, image_payloads, image_size_r
                 raise
             wait_seconds = compute_retry_delay(retry_delay_seconds, attempt, exc)
             log.warning(
-                'Mode3 single image failed, retrying in %.2fs (%s/%s): image_type=%s reference_count=%s plan_type=%s error=%s',
+                'Mode3 single image failed, retrying in %.2fs (%s/%s): image_type=%s error=%s',
                 wait_seconds,
                 attempt + 1,
                 retry_attempts,
                 image_type or '',
-                len(image_payloads or []),
-                str((plan_item or {}).get('type') or ''),
-                exc,
+                format_error_brief(exc),
             )
             time.sleep(wait_seconds)
     log.exception(
