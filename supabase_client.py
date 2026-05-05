@@ -26,6 +26,15 @@ from redis_client import (
     build_user_points_cache_key,
     build_user_profile_cache_key,
 )
+
+try:
+    from app import emit_task_update
+    _websocket_enabled = True
+except ImportError:
+    _websocket_enabled = False
+    def emit_task_update(task_id, task_data):
+        pass
+
 from utils import (
     parse_iso_datetime,
     normalize_vip_plan_key,
@@ -504,6 +513,11 @@ def persist_generation_task(task: dict, _logger: logging.Logger | None = None) -
         response = _post_payload(db_payload)
         if response.status_code < 400:
             cache_delete(build_task_cache_key(db_payload.get('id')))
+            if _websocket_enabled:
+                try:
+                    emit_task_update(db_payload.get('id'), db_payload)
+                except Exception as ws_exc:
+                    log.warning('Failed to emit WebSocket update for task %s: %s', db_payload.get('id'), ws_exc)
             return
         response_text = response.text or ''
         if response.status_code == 400 and 'generation_tasks' in response_text and any(column in response_text for column in ('completed_at', 'completed_at_ts', 'created_at_ts', 'updated_at_ts', 'trace')):
@@ -516,6 +530,11 @@ def persist_generation_task(task: dict, _logger: logging.Logger | None = None) -
             legacy_response = _post_payload(legacy_payload)
             if legacy_response.status_code < 400:
                 cache_delete(build_task_cache_key(db_payload.get('id')))
+                if _websocket_enabled:
+                    try:
+                        emit_task_update(db_payload.get('id'), db_payload)
+                    except Exception as ws_exc:
+                        log.warning('Failed to emit WebSocket update for task %s: %s', db_payload.get('id'), ws_exc)
                 return
             log.warning('Failed to persist generation task %s with legacy payload: status=%s body=%s', db_payload.get('id'), legacy_response.status_code, legacy_response.text)
             legacy_response.raise_for_status()

@@ -1,4 +1,70 @@
 document.addEventListener('DOMContentLoaded', () => {
+  let socket = null;
+  const socketReconnectAttempts = [];
+  const MAX_SOCKET_RECONNECT_ATTEMPTS = 5;
+  
+  const initWebSocket = () => {
+    const protocol = window.location.protocol === 'https:' ? 'wss:' : 'ws:';
+    const wsUrl = `${protocol}//${window.location.host}`;
+    
+    try {
+      socket = new WebSocket(wsUrl);
+      
+      socket.onopen = () => {
+        console.log('[WebSocket] Connected');
+        socketReconnectAttempts.length = 0;
+      };
+      
+      socket.onclose = (event) => {
+        console.log('[WebSocket] Disconnected:', event.code, event.reason);
+        if (socketReconnectAttempts.length < MAX_SOCKET_RECONNECT_ATTEMPTS) {
+          const delay = Math.min(1000 * Math.pow(2, socketReconnectAttempts.length), 30000);
+          console.log(`[WebSocket] Reconnecting in ${delay}ms...`);
+          setTimeout(() => {
+            socketReconnectAttempts.push(Date.now());
+            initWebSocket();
+          }, delay);
+        }
+      };
+      
+      socket.onerror = (error) => {
+        console.error('[WebSocket] Error:', error);
+      };
+      
+      socket.onmessage = (event) => {
+        try {
+          const data = JSON.parse(event.data);
+          if (data.type === 'task_update' && data.task_id && data.task) {
+            window.dispatchEvent(new CustomEvent('taskUpdate', {
+              detail: {
+                taskId: data.task_id,
+                task: data.task
+              }
+            }));
+          }
+        } catch (e) {
+          console.error('[WebSocket] Failed to parse message:', e);
+        }
+      };
+    } catch (error) {
+      console.error('[WebSocket] Failed to initialize:', error);
+    }
+  };
+  
+  const subscribeTask = (taskId) => {
+    if (socket && socket.readyState === WebSocket.OPEN) {
+      socket.send(JSON.stringify({ type: 'subscribe_task', task_id: taskId }));
+    }
+  };
+  
+  const unsubscribeTask = (taskId) => {
+    if (socket && socket.readyState === WebSocket.OPEN) {
+      socket.send(JSON.stringify({ type: 'unsubscribe_task', task_id: taskId }));
+    }
+  };
+  
+  initWebSocket();
+  
   const generateBtn = document.getElementById('generateBtn');
     const introView = document.getElementById('introView');
     const resultView = document.getElementById('resultView');
@@ -322,9 +388,9 @@ document.addEventListener('DOMContentLoaded', () => {
     const PENDING_GENERATION_MAX_STATUS_FAILURES = 3;
 
     const getDynamicPollInterval = (elapsedMs) => {
-      if (elapsedMs < 30000) return 2000;
-      if (elapsedMs < 120000) return 4000;
-      return 6000;
+      if (elapsedMs < 30000) return 5000;
+      if (elapsedMs < 120000) return 8000;
+      return 10000;
     };
     let pendingGenerationTask = null;
     let pendingGenerationPollTimer = null;
@@ -1299,37 +1365,90 @@ document.addEventListener('DOMContentLoaded', () => {
       if (typeof onPending === 'function') {
         onPending(loadingMessage);
       }
+      
+      subscribeTask(normalizedTaskId);
+      
       const startedAt = Date.now();
-      while (Date.now() - startedAt < timeoutMs) {
-        const response = await fetch(`/api/generation-tasks/${encodeURIComponent(normalizedTaskId)}`);
-        const result = await parseJsonResponse(response);
-        if (!response.ok || !result?.success) {
-          throw new Error(result?.error || statusErrorMessage);
-        }
-        const task = result.task || {};
-        if (typeof onProgress === 'function') {
-          onProgress(task.result || {}, task);
-        }
-        if (task.status === 'succeeded') {
-          if (typeof onSuccess === 'function') {
-            onSuccess(task.result || {}, task);
+      let taskCompleted = false;
+      let taskResult = null;
+      let taskError = null;
+      
+      const taskUpdateHandler = (event) => {
+        const { taskId: updatedTaskId, task } = event.detail;
+        if (updatedTaskId === normalizedTaskId) {
+          if (typeof onProgress === 'function') {
+            onProgress(task.result || {}, task);
           }
-          return task.result || {};
-        }
-        if (task.status === 'failed') {
-          if (typeof onFailed === 'function') {
-            onFailed(task);
+          if (task.status === 'succeeded') {
+            taskCompleted = true;
+            taskResult = task.result || {};
+            if (typeof onSuccess === 'function') {
+              onSuccess(task.result || {}, task);
+            }
+          } else if (task.status === 'failed') {
+            taskCompleted = true;
+            taskError = new Error(task.error || '任务执行失败，请稍后重试');
+            if (typeof onFailed === 'function') {
+              onFailed(task);
+            }
+          } else {
+            if (typeof onPending === 'function') {
+              onPending(task.status === 'running' ? runningMessage : pendingMessage, task);
+            }
           }
-          throw new Error(task.error || '任务执行失败，请稍后重试');
         }
-        if (typeof onPending === 'function') {
-          onPending(task.status === 'running' ? runningMessage : pendingMessage, task);
+      };
+      
+      window.addEventListener('taskUpdate', taskUpdateHandler);
+      
+      try {
+        while (Date.now() - startedAt < timeoutMs && !taskCompleted && !taskError) {
+          const response = await fetch(`/api/generation-tasks/${encodeURIComponent(normalizedTaskId)}`);
+          const result = await parseJsonResponse(response);
+          if (!response.ok || !result?.success) {
+            throw new Error(result?.error || statusErrorMessage);
+          }
+          const task = result.task || {};
+          if (typeof onProgress === 'function') {
+            onProgress(task.result || {}, task);
+          }
+          if (task.status === 'succeeded') {
+            taskCompleted = true;
+            taskResult = task.result || {};
+            if (typeof onSuccess === 'function') {
+              onSuccess(task.result || {}, task);
+            }
+            break;
+          }
+          if (task.status === 'failed') {
+            taskCompleted = true;
+            taskError = new Error(task.error || '任务执行失败，请稍后重试');
+            if (typeof onFailed === 'function') {
+              onFailed(task);
+            }
+            break;
+          }
+          if (typeof onPending === 'function') {
+            onPending(task.status === 'running' ? runningMessage : pendingMessage, task);
+          }
+          const elapsedMs = Date.now() - startedAt;
+          const currentInterval = typeof intervalMs === 'number' ? intervalMs : getDynamicPollInterval(elapsedMs);
+          await new Promise((resolve) => window.setTimeout(resolve, currentInterval));
         }
-        const elapsedMs = Date.now() - startedAt;
-        const currentInterval = typeof intervalMs === 'number' ? intervalMs : getDynamicPollInterval(elapsedMs);
-        await new Promise((resolve) => window.setTimeout(resolve, currentInterval));
+        
+        if (taskError) {
+          throw taskError;
+        }
+        
+        if (!taskCompleted) {
+          throw new Error(timeoutMessage);
+        }
+        
+        return taskResult;
+      } finally {
+        window.removeEventListener('taskUpdate', taskUpdateHandler);
+        unsubscribeTask(normalizedTaskId);
       }
-      throw new Error(timeoutMessage);
     };
 
     const debugGenerationTrace = (...args) => {

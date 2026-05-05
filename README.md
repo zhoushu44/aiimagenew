@@ -98,13 +98,16 @@ REDIS_HOST=your-redis-host
 REDIS_PORT=6379
 REDIS_PASSWORD=your-redis-password
 REDIS_DB=0
-REDIS_MAX_CONNECTIONS=50
+REDIS_MAX_CONNECTIONS=200
 
 # 缓存TTL配置（秒）
 REDIS_CACHE_TTL_TASK=30
 REDIS_CACHE_TTL_POINTS=60
 REDIS_CACHE_TTL_PROFILE=300
 REDIS_CACHE_TTL_VIP=3600
+
+# 安全密钥（生产环境必须配置）
+SECRET_KEY=your-secret-key-here
 ```
 
 ### 3. 启动应用
@@ -145,6 +148,15 @@ python test_redis.py
 | 用户信息 | 300秒 | 用户资料缓存 |
 | VIP配置 | 3600秒 | VIP套餐配置缓存 |
 
+### 安全配置
+
+**SECRET_KEY** 是用于保护WebSocket连接和Session安全的密钥：
+
+- **作用**：加密Session、保护WebSocket连接、防止CSRF攻击
+- **生产环境**：必须配置，使用随机生成的64位十六进制字符串
+- **生成方法**：`python -c 'import secrets; print(secrets.token_hex(32))'`
+- **示例**：`SECRET_KEY=63d8d39d612af8f43552fad15e4757407c1a4ac4a41dcec17cb71b5bc3fe4308`
+
 ### 监控命令
 
 ```bash
@@ -164,8 +176,8 @@ redis-cli -h <host> -p <port> -a <password> info memory
 
 | 触发条件 | 标签 |
 |----------|------|
-| 推送到 `main` 分支 | `11.2` + `latest` |
-| GitHub Actions 手动触发 | `11.2` + `latest` |
+| 推送到 `main` 分支 | `11.3` + `latest` |
+| GitHub Actions 手动触发 | `11.3` + `latest` |
 
 - 构建平台：`linux/amd64` + `linux/arm64`
 - 镜像内使用 Gunicorn 运行 Flask 应用：`gunicorn -w 4 -b 0.0.0.0:5078 --timeout 300 --access-logfile - app:app`

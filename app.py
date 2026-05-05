@@ -23,6 +23,9 @@ from urllib.parse import urlencode, urljoin, urlparse
 import requests
 from dotenv import load_dotenv
 from flask import Flask, g, jsonify, make_response, redirect, request, send_file, send_from_directory
+from flask_limiter import Limiter
+from flask_limiter.util import get_remote_address
+from flask_socketio import SocketIO, emit, join_room, leave_room
 from openai import APIError, APIStatusError, OpenAI
 from PIL import Image
 from requests.adapters import HTTPAdapter
@@ -147,6 +150,16 @@ logger = logging.getLogger(__name__)
 
 app = Flask(__name__, static_folder=str(BASE_DIR / 'static'), static_url_path='/static')
 app.config['SEND_FILE_MAX_AGE_DEFAULT'] = 3600
+app.config['SECRET_KEY'] = os.getenv('SECRET_KEY', 'your-secret-key-here')
+
+socketio = SocketIO(app, cors_allowed_origins="*", async_mode='threading')
+
+limiter = Limiter(
+    app=app,
+    key_func=get_remote_address,
+    default_limits=["200 per minute"],
+    storage_uri="memory://",
+)
 
 _SESSION_CACHE: dict[str, tuple[float, dict]] = {}
 _SESSION_CACHE_LOCK = threading.Lock()
@@ -4246,6 +4259,7 @@ def generation_history_list():
 
 
 @app.get('/api/generation-tasks/<task_id>')
+@limiter.limit("30 per minute")
 def generation_task_status(task_id):
     session_data = g.get('supabase_session') or get_supabase_session()
     user_id = _get_supabase_user_id(session_data)
@@ -4389,6 +4403,40 @@ def generate_aplus():
         return jsonify({'success': False, 'error': f'服务端异常：{exc}'}), 500
 
 
+@socketio.on('connect')
+def handle_connect():
+    logger.info('WebSocket client connected: %s', request.sid)
+
+
+@socketio.on('disconnect')
+def handle_disconnect():
+    logger.info('WebSocket client disconnected: %s', request.sid)
+
+
+@socketio.on('subscribe_task')
+def handle_subscribe_task(data):
+    task_id = data.get('task_id')
+    if task_id:
+        join_room(f'task_{task_id}')
+        logger.debug('Client %s subscribed to task %s', request.sid, task_id)
+        emit('subscribed', {'task_id': task_id})
+
+
+@socketio.on('unsubscribe_task')
+def handle_unsubscribe_task(data):
+    task_id = data.get('task_id')
+    if task_id:
+        leave_room(f'task_{task_id}')
+        logger.debug('Client %s unsubscribed from task %s', request.sid, task_id)
+
+
+def emit_task_update(task_id, task_data):
+    socketio.emit('task_update', {
+        'task_id': task_id,
+        'task': task_data
+    }, room=f'task_{task_id}')
+
+
 if __name__ == '__main__':
     from batch_worker import start_background_processor
     start_background_processor(interval=5, _logger=logger)
@@ -4396,5 +4444,5 @@ if __name__ == '__main__':
     host = get_supabase_setting('HOST', get_optional_env('HOST', '0.0.0.0')) or '0.0.0.0'
     port = get_supabase_setting_int('PORT', get_optional_int_env('PORT', 5078))
     debug = get_supabase_setting_bool('FLASK_DEBUG', get_optional_bool_env('FLASK_DEBUG', False))
-    app.run(host=host, port=port, debug=debug, threaded=True)
+    socketio.run(app, host=host, port=port, debug=debug, allow_unsafe_werkzeug=True)
 

@@ -8,3 +8,7 @@ Pillow
 cos-python-sdk-v5>=1.9.40
 gunicorn
 redis>=4.5.0
+Flask-Limiter
+Flask-SocketIO
+python-engineio
+python-socketio
