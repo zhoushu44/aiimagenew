@@ -17,6 +17,17 @@
     fashion: SHARED_TOPBAR_CONFIG,
     auth: SHARED_TOPBAR_CONFIG,
     settings: SHARED_TOPBAR_CONFIG,
+    replicate: {
+      ...SHARED_TOPBAR_CONFIG,
+      homeLabel: 'AI Commerce Console',
+      homeHref: '/',
+      kicker: 'Replicate Workspace / Image Recreation',
+      title: '主图详情页sku复刻工作台',
+      actions: [
+        { kind: 'link', text: '生成记录', href: '/generation-record' },
+        { kind: 'account', text: '账号面板' },
+      ],
+    },
     'generation-record': {
       ...SHARED_TOPBAR_CONFIG,
       homeLabel: '生成记录',
@@ -36,6 +47,7 @@
     '/aplus': 'aplus',
     '/fashion': 'fashion',
     '/settings': 'settings',
+    '/replicate': 'replicate',
     '/generation-record': 'generation-record',
   };
 

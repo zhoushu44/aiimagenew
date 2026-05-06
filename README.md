@@ -124,11 +124,9 @@ python app.py
 gunicorn -w 4 -b 0.0.0.0:5078 --timeout 300 --access-logfile - app:app
 ```
 
-### 4. 测试Redis连接
+### 4. 验证 Redis 配置
 
-```bash
-python test_redis.py
-```
+可直接启动应用后观察日志，或使用 `redis-cli`/容器日志确认 Redis 连接是否正常。
 
 ## Redis缓存系统
 
@@ -176,8 +174,8 @@ redis-cli -h <host> -p <port> -a <password> info memory
 
 | 触发条件 | 标签 |
 |----------|------|
-| 推送到 `main` 分支 | `11.3` + `latest` |
-| GitHub Actions 手动触发 | `11.3` + `latest` |
+| 推送到 `main` 分支 | `11.4` + `latest` |
+| GitHub Actions 手动触发 | `11.4` + `latest` |
 
 - 构建平台：`linux/amd64` + `linux/arm64`
 - 镜像内使用 Gunicorn 运行 Flask 应用：`gunicorn -w 4 -b 0.0.0.0:5078 --timeout 300 --access-logfile - app:app`

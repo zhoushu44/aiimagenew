@@ -50,6 +50,7 @@ from generation.modes import (
     create_mode1_blank_canvas_payload,
     create_mode2_blank_canvas_payload,
     create_mode3_blank_canvas_payload,
+    create_replicate_layout_canvas_payload,
     build_mode1_reference_anchor_prompt,
     resolve_mode2_image_resolution,
     resolve_mode2_image_ratio,

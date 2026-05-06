@@ -24,6 +24,7 @@ from config import (
 from utils import IMAGE_SIZE_RATIO_MAP
 from image_utils import (
     build_enriched_image_prompt,
+    LazyImagePayload,
 )
 
 logger = logging.getLogger(__name__)
@@ -55,6 +56,60 @@ def pick_generated_image_item(response):
             raise ValueError(f'图像生成接口返回错误码：{error_code}')
         raise ValueError('图像生成接口未返回图片数据')
     return _normalize_generated_image_item(data[0])
+
+
+def _get_payload_bytes(image_payload) -> bytes | None:
+    if image_payload is None:
+        return None
+    content = getattr(image_payload, 'content', None)
+    if content:
+        return content
+    if isinstance(image_payload, dict):
+        content = image_payload.get('content')
+        if content:
+            return content
+        data_url = image_payload.get('data_url') or image_payload.get('dataUrl')
+    else:
+        data_url = getattr(image_payload, 'data_url', None) or getattr(image_payload, 'dataUrl', None)
+    if not isinstance(data_url, str) or ',' not in data_url:
+        return None
+    try:
+        return base64.b64decode(data_url.split(',', 1)[1])
+    except Exception:
+        return None
+
+
+def create_replicate_layout_canvas_payload(product_payloads, reference_payload, image_size_ratio: str = ''):
+    product_payloads = list(product_payloads or [])
+    if not product_payloads:
+        return create_mode1_blank_canvas_payload(image_size_ratio)
+    size = _resolve_image_size(image_size_ratio)
+    width, height = 2048, 2048
+    match = re.fullmatch(r'(\d+)x(\d+)', size)
+    if match:
+        width, height = int(match.group(1)), int(match.group(2))
+    canvas = Image.new('RGBA', (width, height), (248, 250, 252, 255))
+    product_bytes = _get_payload_bytes(product_payloads[0])
+    if product_bytes:
+        with Image.open(io.BytesIO(product_bytes)) as product_image:
+            product_image = product_image.convert('RGBA')
+            target_w = int(width * 0.66)
+            target_h = int(height * 0.66)
+            product_image.thumbnail((target_w, target_h), Image.Resampling.LANCZOS)
+            x = (width - product_image.width) // 2
+            y = int(height * 0.2) + (target_h - product_image.height) // 2
+            shadow = Image.new('RGBA', product_image.size, (0, 0, 0, 0))
+            shadow_alpha = product_image.getchannel('A').point(lambda p: int(p * 0.18))
+            shadow.putalpha(shadow_alpha)
+            canvas.alpha_composite(shadow, (x + int(width * 0.01), y + int(height * 0.012)))
+            canvas.alpha_composite(product_image, (x, y))
+    buffer = io.BytesIO()
+    canvas.convert('RGB').save(buffer, format='PNG', optimize=True)
+    return LazyImagePayload(
+        filename='replicate-product-anchor-canvas.png',
+        mime_type='image/png',
+        content=buffer.getvalue(),
+    )
 
 
 def collect_generated_images(response):
@@ -557,7 +612,19 @@ def create_mode3_blank_canvas_payload(image_size_ratio: str = ''):
     return _create_blank_canvas_payload('mode3', width, height)
 
 
-def build_mode1_reference_anchor_prompt(reference_count: int) -> str:
+def build_mode1_reference_anchor_prompt(reference_count: int, image_type: str = '') -> str:
+    if str(image_type or '').strip() == 'replicate':
+        return (
+            f'主图详情页复刻产品锚定执行约束（已接收 {max(reference_count or 0, 0)} 张 multipart image）：\n'
+            '- 第 1 张 multipart image 是产品主体锚定草图，只用于辅助锁定产品主体轮廓、大致尺寸和摆放，不包含原始参考图商品主体。\n'
+            '- 第 2 张 multipart image 是原始产品素材图，必须作为唯一商品主体一致性锚点；商品品类、外观造型、颜色体系、材质质感、核心结构、关键轮廓、比例、部件数量、部件位置、包装识别和可见细节都必须以第 2 张为准。\n'
+            '- 原始参考图不会作为 multipart image 参与生图，只能使用 prompt 中的参考图结构化 JSON 来参考文案、版式、商品占位、色块、边距、字体层级和商业海报结构。\n'
+            '- 参考图里的商品主体不是生成商品来源，严禁复制、继承或吸收参考图商品的品类、品牌、颜色、材质、造型、结构、功能、卖点、包装形态、外观细节或商品身份。\n'
+            '- 如果结构化 JSON 中的商品槽位信息和第 2 张产品图冲突，必须无条件以第 2 张产品图为准；槽位信息只能决定占位区域、陈列数量、大小比例和排列方向。\n'
+            '- 产品图只锁定商品主体，不提取产品图中的文字、场景、水流、台面、墙面、道具或环境；这些内容不能覆盖参考图版式。\n'
+            '- 最终画面要像参考图的同款电商主图模板，但商品主体必须明显且稳定来自第 2 张产品素材图，不能变成参考图里的商品。\n'
+            '- 禁止输出单个产品场景图；必须生成带有参考图式陈列、标题和促销信息区域的完整电商主图或详情页模块。\n\n'
+        )
     return (
         f'参考图执行约束（按 mode1 当前图生图模板执行，已接收 {max(reference_count or 0, 0)} 张参考图）：\n'
         '- 以下 multipart image 文件中的图片必须作为商品主体唯一锚点，不是风格灵感图，也不是可替换示例图。\n'
@@ -573,12 +640,12 @@ def build_mode1_reference_anchor_prompt(reference_count: int) -> str:
     )
 
 
-def call_mode1_image_edit(client: OpenAI, prompt: str, image_payloads, image_size_ratio: str = '', _logger: logging.Logger | None = None):
+def call_mode1_image_edit(client: OpenAI, prompt: str, image_payloads, image_size_ratio: str = '', image_type: str = '', _logger: logging.Logger | None = None):
     log = _logger or logger
     model = get_supabase_setting('ARK_IMAGE_MODEL', get_optional_env('ARK_IMAGE_MODEL', 'doubao-seedream-5-0-260128'))
     size = _resolve_image_size(image_size_ratio)
     watermark = get_supabase_setting_bool('ARK_IMAGE_WATERMARK', get_optional_bool_env('ARK_IMAGE_WATERMARK', False))
-    reference_instruction = build_mode1_reference_anchor_prompt(len(image_payloads or []))
+    reference_instruction = build_mode1_reference_anchor_prompt(len(image_payloads or []), image_type)
     request_payload = {
         'model': model,
         'prompt': reference_instruction + prompt,
@@ -590,7 +657,7 @@ def call_mode1_image_edit(client: OpenAI, prompt: str, image_payloads, image_siz
             'sequential_image_generation': 'disabled',
         },
     }
-    log.warning('Mode1 image edit request model=%s size=%s reference_count=%s', model, size, len(image_payloads or []))
+    log.warning('Mode1 image edit request model=%s size=%s reference_count=%s image_type=%s', model, size, len(image_payloads or []), image_type)
     response = client.images.generate(**request_payload)
     return pick_generated_image_item(response), model
 
@@ -777,7 +844,7 @@ def call_mode3_text2image(client: OpenAI, prompt: str):
 
 
 def call_mode1_single_image(prompt: str, image_payloads, image_size_ratio: str = '', text_type: str = '', country: str = '', product_json=None, image_type: str = '', plan_item=None, all_plan_types=None):
-    generated_item, _model = call_mode1_image_edit(get_mode1_client(), prompt, image_payloads or [create_mode1_blank_canvas_payload(image_size_ratio)], image_size_ratio)
+    generated_item, _model = call_mode1_image_edit(get_mode1_client(), prompt, image_payloads or [create_mode1_blank_canvas_payload(image_size_ratio)], image_size_ratio, image_type)
     return generated_item
 
 

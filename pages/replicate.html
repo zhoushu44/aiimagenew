@@ -1,0 +1,329 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>主图复刻 - AI Commerce Console</title>
+  <link rel="stylesheet" href="/static/css/workspace.css?v=replicate-20260505">
+  <link rel="stylesheet" href="/static/css/replicate.css?v=replicate-20260505">
+  <script src="/static/js/shared-topbar.js?v=replicate-20260505" defer></script>
+</head>
+<body data-page-mode="replicate" class="replicate-page">
+  <div class="app-shell">
+    <header class="console-topbar" data-shared-topbar>
+      <div class="console-brand">
+        <a class="console-home" href="/" data-topbar-home>AI Commerce Console</a>
+        <div>
+          <div class="console-kicker" data-topbar-kicker>Replicate Workspace / Image Recreation</div>
+          <div class="console-title" data-topbar-title>主图复刻工作台</div>
+        </div>
+      </div>
+      <div class="console-topbar-meta" data-topbar-meta></div>
+    </header>
+
+    <main class="workspace-layout">
+      <aside class="control-rail">
+        <nav class="side-nav" aria-label="功能导航">
+          <a class="nav-item" href="/suite" data-mode="suite" data-nav-link="true" aria-pressed="false">
+            <span class="nav-item-index">01</span>
+            <span class="nav-item-label">商品套图</span>
+          </a>
+          <a class="nav-item" href="/aplus" data-mode="aplus" data-nav-link="true" aria-pressed="false">
+            <span class="nav-item-index">02</span>
+            <span class="nav-item-label">A+详情页</span>
+          </a>
+          <a class="nav-item" href="/fashion" data-mode="fashion" data-nav-link="true" aria-pressed="false">
+            <span class="nav-item-index">03</span>
+            <span class="nav-item-label">服饰穿戴</span>
+          </a>
+          <a class="nav-item" href="/batch" data-mode="batch" data-nav-link="true" aria-pressed="false">
+            <span class="nav-item-index">04</span>
+            <span class="nav-item-label">批量任务</span>
+          </a>
+          <a class="nav-item active" href="/replicate" data-mode="replicate" data-nav-link="true" aria-pressed="true">
+            <span class="nav-item-index">05</span>
+            <span class="nav-item-label">主图详情页sku复刻</span>
+          </a>
+        </nav>
+
+        <section class="panel stack-panel">
+          <div class="panel-head">
+            <span class="panel-kicker">mode selection</span>
+            <h2>复刻模式</h2>
+          </div>
+          <div class="replicate-tabs">
+            <button class="replicate-tab active" data-tab="single" type="button">
+              <span class="tab-icon">◈</span>
+              <span>单图复刻</span>
+            </button>
+            <button class="replicate-tab" data-tab="batch" type="button">
+              <span class="tab-icon">◇</span>
+              <span>批量复刻</span>
+            </button>
+            <button class="replicate-tab" data-tab="sku" type="button">
+              <span class="tab-icon">◆</span>
+              <span>SKU复刻</span>
+            </button>
+          </div>
+        </section>
+
+        <section class="panel stack-panel" id="referenceSection">
+          <div class="panel-head">
+            <span class="panel-kicker">reference design</span>
+            <h2>参考设计图</h2>
+          </div>
+          
+          <div class="upload-box replicate-upload-box single-upload" id="singleUploadArea">
+            <div class="reference-preview" id="referencePreview">
+              <div class="preview-placeholder">
+                <div class="placeholder-icon">◈</div>
+                <div class="placeholder-text">上传参考图</div>
+                <div class="placeholder-hint">上传具有明确风格的参考图</div>
+              </div>
+            </div>
+            <input type="file" id="referenceInput" accept="image/*" hidden>
+          </div>
+
+          <div class="batch-upload-area" id="batchUploadArea" hidden>
+            <div class="batch-upload-header">
+              <div class="batch-upload-title">上传参考设计图</div>
+              <div class="batch-upload-count" id="batchUploadCount">0/20 张</div>
+            </div>
+            <div class="batch-upload-dropzone" id="batchDropzone">
+              <div class="batch-upload-icon">
+                <svg width="32" height="32" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                  <path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/>
+                  <polyline points="17 8 12 3 7 8"/>
+                  <line x1="12" y1="3" x2="12" y2="15"/>
+                </svg>
+              </div>
+              <div class="batch-upload-text">点击或拖拽上传多张图片</div>
+            </div>
+            <input type="file" id="batchInput" accept="image/*" multiple hidden>
+            <div class="batch-preview-grid" id="batchPreviewGrid"></div>
+          </div>
+
+          <div class="upload-box replicate-upload-box sku-single-upload" id="skuUploadArea" hidden>
+            <div class="reference-preview" id="skuPreview">
+              <div class="preview-placeholder">
+                <div class="placeholder-icon">◆</div>
+                <div class="placeholder-text">上传SKU图片</div>
+                <div class="placeholder-hint">上传需要替换的SKU图片</div>
+              </div>
+            </div>
+            <input type="file" id="skuInput" accept="image/*" hidden>
+          </div>
+        </section>
+
+        <section class="panel stack-panel" id="productSection">
+          <div class="panel-head">
+            <span class="panel-kicker">product materials</span>
+            <h2>产品素材图</h2>
+          </div>
+          <div class="upload-box replicate-upload-box">
+            <div class="product-header">
+              <div class="product-count-badge" id="productCount">0/6</div>
+              <button class="upload-btn replicate-upload-btn" id="productUploadBtn" type="button">上传产品图</button>
+              <input type="file" id="productInput" accept="image/*" multiple hidden>
+            </div>
+            <div class="product-grid" id="productGrid"></div>
+            <div class="hint">最多上传 6 张产品素材图</div>
+          </div>
+        </section>
+
+        <section class="panel stack-panel" id="skuProductSection" hidden>
+          <div class="panel-head">
+            <span class="panel-kicker">SKU product images</span>
+            <h2>SKU 产品图</h2>
+          </div>
+          
+          <div class="sku-product-upload-area" id="skuProductUploadArea">
+            <div class="sku-product-header">
+              <div class="sku-product-title">SKU 产品图</div>
+              <div class="sku-product-count" id="skuProductCount">0/20 张</div>
+            </div>
+            <div class="sku-product-dropzone" id="skuProductDropzone">
+              <div class="sku-product-icon">
+                <svg width="32" height="32" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                  <path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/>
+                  <polyline points="17 8 12 3 7 8"/>
+                  <line x1="12" y1="3" x2="12" y2="15"/>
+                </svg>
+              </div>
+              <div class="sku-product-text">点击或拖拽上传 SKU 图片</div>
+              <div class="sku-product-hint">每张图片可单独填写产品信息（如尺码、颜色）</div>
+            </div>
+            <input type="file" id="skuProductInput" accept="image/*" multiple hidden>
+          </div>
+
+          <div class="sku-product-list-area" id="skuProductListArea" hidden>
+            <div class="sku-product-header">
+              <div class="sku-product-title">SKU 产品图</div>
+              <div class="sku-product-count" id="skuProductListCount">0/20 张</div>
+            </div>
+            <div class="sku-product-grid" id="skuProductGrid"></div>
+          </div>
+        </section>
+
+        <section class="panel stack-panel" id="promptSection">
+          <div class="panel-head">
+            <span class="panel-kicker">Option Selection</span>
+            <h2>参数选择</h2>
+          </div>
+          <label class="field full" id="promptLabel">
+            <span class="field-label">提示词输入</span>
+            <textarea id="promptInput" placeholder="添加「会员专享」文字，使用轻奢金主题"></textarea>
+          </label>
+          <div class="selector-row">
+            <div class="selector-item">
+              <label class="selector-label">尺寸比例</label>
+              <select id="modelSelect" class="selector-dropdown">
+                <option value="1:1">1:1</option>
+                <option value="4:3">4:3</option>
+                <option value="16:9">16:9</option>
+                <option value="9:16">9:16</option>
+              </select>
+            </div>
+            <div class="selector-item">
+              <label class="selector-label">生成数量</label>
+              <select id="sizeSelect" class="selector-dropdown">
+                <option value="1">数量1</option>
+                <option value="2">数量2</option>
+                <option value="3">数量3</option>
+                <option value="4">数量4</option>
+              </select>
+            </div>
+          </div>
+        </section>
+
+        <section class="action-bar panel">
+          <button class="generate-btn" id="generateBtn">
+            <span class="btn-icon">✦</span>
+            <span>开始复刻</span>
+          </button>
+        </section>
+      </aside>
+
+      <section class="workspace-main">
+        <div class="intro-view active" id="introView">
+          <section class="hero-console panel">
+            <div class="hero-main">
+              <div class="hero-copy">
+                <span class="small-label">01 / Replicate Console</span>
+                <h1>AI 主图复刻</h1>
+                <p>上传参考设计图和产品素材，AI 将自动复刻出符合参考风格的主图。</p>
+                <p class="hero-note">Style Replication / Smart Generation</p>
+              </div>
+              <div class="hero-metrics">
+                <article class="metric-card">
+                  <span class="stat-label">input</span>
+                  <span class="stat-value">2+</span>
+                  <span class="result-meta">参考图 + 产品素材，风格精准复刻。</span>
+                </article>
+                <article class="metric-card">
+                  <span class="stat-label">output</span>
+                  <span class="stat-value">1</span>
+                  <span class="result-meta">生成符合参考风格的主图结果。</span>
+                </article>
+              </div>
+            </div>
+            <div class="showcase-grid compact-showcase-grid">
+              <article class="showcase-card hero-showcase compact-hero-showcase">
+                <div class="showcase-topline"><span>replicate flow</span><span>style</span></div>
+                <div class="showcase-title">风格精准复刻</div>
+                <p>上传参考图和产品素材，AI 自动分析风格并生成符合要求的主图。</p>
+                <div class="preview-strip">
+                  <div class="strip-item"><span class="small-label">mode</span><span class="strip-value">single</span></div>
+                  <div class="strip-item"><span class="small-label">style</span><span class="strip-value">replicate</span></div>
+                  <div class="strip-item"><span class="small-label">output</span><span class="strip-value">preview</span></div>
+                </div>
+              </article>
+              <article class="showcase-card"><span class="section-index">01</span><div class="mini-title">参考图</div><div class="mini-sub">上传具有明确风格的设计参考图。</div></article>
+              <article class="showcase-card"><span class="section-index">02</span><div class="mini-title">产品图</div><div class="mini-sub">上传需要复刻的产品素材图片。</div></article>
+              <article class="showcase-card"><span class="section-index">03</span><div class="mini-title">生成</div><div class="mini-sub">AI 自动分析风格并生成结果。</div></article>
+            </div>
+          </section>
+        </div>
+
+        <div class="result-view" id="resultView">
+          <section class="result-console panel">
+            <div class="result-header">
+              <div class="result-heading">
+                <span class="small-label">02 / Generated Result</span>
+                <div class="result-taskbar">
+                  <div class="task-summary">
+                    <h2>生成结果</h2>
+                    <div class="task-summary-line">AI 复刻的主图结果，支持重新生成和下载。</div>
+                  </div>
+                  <div class="toolbar">
+                    <button class="tool-btn" id="downloadResultBtn" type="button">下载结果</button>
+                  </div>
+                </div>
+                <p class="result-meta">系统将根据参考图风格和产品素材生成主图结果。</p>
+                <div class="result-status-message" id="resultStatusMessage"></div>
+                <div class="progress-bar-wrapper" id="generationProgressBar" hidden>
+                  <div class="progress-bar"><div class="progress-bar-fill"></div></div>
+                  <button class="progress-cancel-btn" id="progressCancelBtn" type="button" title="取消生成">×</button>
+                </div>
+              </div>
+            </div>
+            <div class="result-preview-container" id="resultPreviewContainer">
+              <div class="result-preview" id="resultPreview">
+                <div class="result-placeholder">
+                  <div class="placeholder-icon">✦</div>
+                  <div class="placeholder-text">等待生成</div>
+                  <div class="placeholder-hint">上传参考图和产品图后开始复刻</div>
+                </div>
+              </div>
+            </div>
+            <div class="result-actions">
+              <button class="regenerate-btn" id="regenerateBtn" type="button">
+                <span class="btn-icon">↻</span>
+                <span>重新生成全部</span>
+              </button>
+            </div>
+          </section>
+        </div>
+      </section>
+    </main>
+  </div>
+
+  <div class="preview-modal" id="previewModal" hidden>
+    <div class="preview-backdrop" id="previewBackdrop"></div>
+    <div class="preview-dialog" role="dialog" aria-modal="true" aria-labelledby="previewTitle">
+      <div class="preview-header-bar">
+        <div>
+          <div class="small-label">预览</div>
+          <div class="preview-title" id="previewTitle">图片预览</div>
+        </div>
+        <div class="preview-actions">
+          <button class="tool-btn" id="previewDownloadBtn" type="button">下载当前图</button>
+          <button class="tool-btn" id="previewCloseBtn" type="button">关闭</button>
+        </div>
+      </div>
+      <div class="preview-stage">
+        <img id="previewImage" alt="预览图片">
+      </div>
+    </div>
+  </div>
+
+  <div class="sku-edit-modal" id="skuEditModal" hidden>
+    <div class="sku-edit-backdrop" id="skuEditBackdrop"></div>
+    <div class="sku-edit-dialog" role="dialog" aria-modal="true" aria-labelledby="skuEditTitle">
+      <div class="sku-edit-header">
+        <div class="sku-edit-title" id="skuEditTitle">SKU 1 产品信息</div>
+        <button class="sku-edit-close" id="skuEditCloseBtn" type="button">×</button>
+      </div>
+      <div class="sku-edit-body">
+        <textarea class="sku-edit-textarea" id="skuEditTextarea" placeholder="输入需要替换的文字内容（如：S 码、红色、尺寸信息等）" rows="4"></textarea>
+      </div>
+      <div class="sku-edit-footer">
+        <button class="sku-edit-btn sku-edit-cancel" id="skuEditCancelBtn" type="button">取消</button>
+        <button class="sku-edit-btn sku-edit-confirm" id="skuEditConfirmBtn" type="button">确认</button>
+      </div>
+    </div>
+  </div>
+
+  <script src="/static/js/replicate.js"></script>
+</body>
+</html>

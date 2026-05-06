@@ -62,6 +62,7 @@ from generation import (
     call_mode3_images_parallel_with_partial_retry,
     call_app_mode_image_generation, call_image_generation,
     create_mode1_blank_canvas_payload, create_mode2_blank_canvas_payload, create_mode3_blank_canvas_payload,
+    create_replicate_layout_canvas_payload,
     build_mode1_reference_anchor_prompt,
     generate_suite_images,
     generate_mode1_suite_images_parallel, generate_mode2_suite_images_parallel,
@@ -771,6 +772,11 @@ def get_generation_task(task_id: str, prefer_cache: bool = False) -> dict | None
                 return dict(task)
     db_task = normalize_generation_task_row(fetch_generation_task_row(normalized_task_id))
     if db_task:
+        with GENERATION_TASKS_LOCK:
+            cached_task = GENERATION_TASKS.get(normalized_task_id)
+            if cached_task and cached_task.get('updated_at_ts') and db_task.get('updated_at_ts'):
+                if float(cached_task.get('updated_at_ts') or 0) >= float(db_task.get('updated_at_ts') or 0):
+                    return dict(cached_task)
         cache_generation_task(db_task)
         return db_task
     with GENERATION_TASKS_LOCK:
@@ -787,6 +793,7 @@ def serialize_generation_task(task: dict | None) -> dict:
         'request_id': payload.get('request_id') or '',
         'status': payload.get('status') or 'missing',
         'result': payload.get('result') if isinstance(payload.get('result'), dict) else None,
+        'reference_analysis': payload.get('reference_analysis') if isinstance(payload.get('reference_analysis'), dict) else None,
         'error': payload.get('error') or '',
         'details': payload.get('details') or '',
         'refunded': bool(payload.get('refunded')),
@@ -1074,6 +1081,7 @@ def run_background_generation_task(task_id: str, builder, timeout: int = 600, ti
             task_id,
             status='succeeded',
             result=result_payload,
+            reference_analysis=result_payload.get('reference_analysis'),
             error='',
             details='',
             completed_at=_iso_utc_from_ts(finished_at),
@@ -1778,6 +1786,14 @@ def guard_authentication():
         g.admin_session = get_admin_session()
         return None
 
+    if path == '/api/generate-replicate' and request.method == 'POST':
+        async_task = str(request.form.get('async_task') or '').strip().lower() in {'1', 'true', 'yes'}
+        if not async_task:
+            g.supabase_session = get_supabase_session()
+            g.supabase_user = (g.supabase_session or {}).get('user') if g.supabase_session else None
+            g.admin_session = get_admin_session()
+            return None
+
     if path == '/settings' or path.startswith('/api/settings'):
         admin_session = get_admin_session()
         if admin_session:
@@ -2139,6 +2155,11 @@ def aplus_page():
 @app.get('/fashion')
 def fashion_page():
     return render_html_page('fashion.html')
+
+
+@app.get('/replicate')
+def replicate_page():
+    return render_html_page('replicate.html')
 
 
 @app.get('/batch')
@@ -3963,6 +3984,508 @@ def generate_suite():
         return jsonify({'success': False, 'error': f'请求失败：{exc}'}), 502
     except Exception as exc:
         return jsonify({'success': False, 'error': f'服务端异常：{exc}'}), 500
+
+
+@app.post('/api/generate-replicate')
+def generate_replicate():
+    try:
+        form_payload = {key: request.form.get(key, '') for key in request.form.keys()}
+        replicate_mode = str(form_payload.get('replicate_mode') or 'single').strip() or 'single'
+        if replicate_mode not in ('single', 'batch', 'sku'):
+            replicate_mode = 'single'
+        form_payload['replicate_mode'] = replicate_mode
+        form_payload['replicate_version'] = 'reference-analysis-v2'
+
+        if replicate_mode == 'batch':
+            file_payloads = {
+                'reference_image': get_image_payloads_from_request('reference_image', limit=20),
+                'product_images': get_image_payloads_from_request('product_images'),
+            }
+        else:
+            file_payloads = {
+                'reference_image': get_image_payloads_from_request('reference_image', limit=1),
+                'product_images': get_image_payloads_from_request('product_images'),
+            }
+
+        run_async = str(form_payload.get('async_task') or '').strip().lower() in {'1', 'true', 'yes'}
+
+        if run_async:
+            session_data = g.get('supabase_session') or get_supabase_session()
+            user_id = _get_supabase_user_id(session_data)
+            if not user_id:
+                return jsonify({'success': False, 'error': '请先登录'}), 401
+
+            task = create_generation_task(user_id, f'replicate-{replicate_mode}', '', None)
+            GENERATION_TASK_EXECUTOR.submit(run_replicate_generation_task, task['task_id'], form_payload, file_payloads)
+            return jsonify({'success': True, 'async_task': True, 'task': task, 'task_id': task['task_id']}), 202
+
+        result = build_replicate_generation_result(form_payload, file_payloads)
+        return jsonify(result)
+    except RequestEntityTooLarge as exc:
+        return handle_request_entity_too_large(exc)
+    except ValueError as exc:
+        return jsonify({'success': False, 'error': str(exc)}), 400
+    except RuntimeError as exc:
+        payload, status_code = parse_runtime_error(exc)
+        return jsonify(payload), status_code
+    except (APIError, APIStatusError) as exc:
+        payload, status_code = parse_ark_exception(exc)
+        return jsonify(payload), status_code
+    except requests.Timeout:
+        return jsonify({'success': False, 'error': '请求超时，请稍后重试'}), 504
+    except requests.RequestException as exc:
+        return jsonify({'success': False, 'error': f'请求失败：{exc}'}), 502
+    except Exception as exc:
+        return jsonify({'success': False, 'error': f'服务端异常：{exc}'}), 500
+
+
+def run_replicate_generation_task(task_id: str, form_payload: dict, file_payloads: dict):
+    run_background_generation_task(
+        task_id,
+        lambda: build_replicate_generation_result(form_payload, file_payloads, task_id),
+        timeout=600,
+        timeout_error='生成任务执行超时（10分钟），请稍后重试',
+    )
+
+
+REPLICATE_REFERENCE_ANALYSIS_SYSTEM_PROMPT = '你是电商主图参考图结构化解析专家。你只能分析参考图里的版式、文案、视觉结构、色块、促销信息和商品占位区域。禁止提取参考图中商品主体的品类、品牌、颜色、材质、造型、结构、功能、卖点或外观细节；参考图商品只能作为占位和陈列区域，不是待生成商品来源。你必须只输出合法 JSON，不要代码块、解释或额外文字。'
+
+
+REPLICATE_REFERENCE_ANALYSIS_USER_PROMPT = """请只分析这张参考图，提取用于复刻的文案和版式 JSON。
+
+要求：
+1. 只分析当前参考图里的文案、版式、视觉结构、促销信息、色块关系和商品占位区域，不要推断任何待替换产品的信息。
+2. 必须提取图片中可见中文文案，尽量保留原文、位置、字号层级和色块关系。
+3. 可以描述商品占位数量、排列区域、顶部标题区、底部促销条、右下角标签、背景、边距、主色、强调色。
+4. 严禁描述参考图商品主体本身，不能提取参考图商品的品类、品牌、颜色、材质、造型、结构、功能、卖点、外观细节或包装识别。
+5. 如果需要描述商品区域，只能写成“商品占位区域/商品槽位/陈列位置”，不能写参考图商品是什么、长什么样、什么颜色、什么材质。
+6. 如果某项看不清，写空字符串或空数组，不要臆测。
+7. 只返回 JSON，不要 Markdown。
+
+JSON 结构：
+{
+  "copywriting": {
+    "headline": "",
+    "sub_headline": "",
+    "bottom_banner_text": "",
+    "corner_badge_text": "",
+    "other_texts": []
+  },
+  "layout": {
+    "canvas_ratio": "",
+    "background": "",
+    "main_grid": "",
+    "product_count": "",
+    "product_arrangement": "",
+    "headline_position": "",
+    "bottom_banner_position": "",
+    "corner_badge_position": "",
+    "spacing_margins": ""
+  },
+  "visual_style": {
+    "primary_colors": [],
+    "accent_colors": [],
+    "font_style": "",
+    "lighting_shadow": "",
+    "commerce_style": ""
+  },
+  "replicate_rules": []
+}
+"""
+
+
+def parse_replicate_reference_analysis(text: str):
+    payload = parse_json_candidate(text, '参考图结构化信息格式异常')
+    if not isinstance(payload, dict):
+        raise ValueError('参考图结构化信息格式异常：顶层必须为对象')
+    copywriting = payload.get('copywriting') if isinstance(payload.get('copywriting'), dict) else {}
+    layout = payload.get('layout') if isinstance(payload.get('layout'), dict) else {}
+    visual_style = payload.get('visual_style') if isinstance(payload.get('visual_style'), dict) else {}
+    subject_guard_rules = [
+        '参考图中的商品主体只作为占位区域和陈列结构，不作为待生成商品特征来源',
+        '禁止从参考图商品主体继承品类、品牌、颜色、材质、造型、结构、功能、卖点、外观细节或包装识别',
+        '最终商品主体必须只来自用户上传的产品图或当前 SKU 产品图',
+        '如果结构化 JSON 中出现疑似参考图商品主体特征，生成时必须忽略这些主体特征，只保留其位置、大小、数量和排列关系',
+    ]
+    replicate_rules = [str(item).strip() for item in payload.get('replicate_rules') or [] if str(item).strip()]
+    for rule in subject_guard_rules:
+        if rule not in replicate_rules:
+            replicate_rules.append(rule)
+    return {
+        'copywriting': {
+            'headline': str(copywriting.get('headline') or '').strip(),
+            'sub_headline': str(copywriting.get('sub_headline') or '').strip(),
+            'bottom_banner_text': str(copywriting.get('bottom_banner_text') or '').strip(),
+            'corner_badge_text': str(copywriting.get('corner_badge_text') or '').strip(),
+            'other_texts': [str(item).strip() for item in copywriting.get('other_texts') or [] if str(item).strip()],
+        },
+        'layout': {
+            'canvas_ratio': str(layout.get('canvas_ratio') or '').strip(),
+            'background': str(layout.get('background') or '').strip(),
+            'main_grid': str(layout.get('main_grid') or '').strip(),
+            'product_count': str(layout.get('product_count') or '').strip(),
+            'product_arrangement': str(layout.get('product_arrangement') or '').strip(),
+            'headline_position': str(layout.get('headline_position') or '').strip(),
+            'bottom_banner_position': str(layout.get('bottom_banner_position') or '').strip(),
+            'corner_badge_position': str(layout.get('corner_badge_position') or '').strip(),
+            'spacing_margins': str(layout.get('spacing_margins') or '').strip(),
+        },
+        'visual_style': {
+            'primary_colors': [str(item).strip() for item in visual_style.get('primary_colors') or [] if str(item).strip()],
+            'accent_colors': [str(item).strip() for item in visual_style.get('accent_colors') or [] if str(item).strip()],
+            'font_style': str(visual_style.get('font_style') or '').strip(),
+            'lighting_shadow': str(visual_style.get('lighting_shadow') or '').strip(),
+            'commerce_style': str(visual_style.get('commerce_style') or '').strip(),
+        },
+        'replicate_rules': replicate_rules,
+    }
+
+
+def extract_replicate_reference_analysis(reference_payloads):
+    if not reference_payloads:
+        return {}
+    analysis, _response_text = call_chat_json_with_repair(
+        REPLICATE_REFERENCE_ANALYSIS_SYSTEM_PROMPT,
+        build_multimodal_content(REPLICATE_REFERENCE_ANALYSIS_USER_PROMPT, reference_payloads[:1]),
+        parse_replicate_reference_analysis,
+        '参考图结构化信息格式异常',
+        temperature=0.1,
+        timeout_seconds=90,
+        repair_attempts=1,
+    )
+    return analysis
+
+
+def build_replicate_reference_analysis_text(reference_analysis: dict) -> str:
+    if not isinstance(reference_analysis, dict) or not reference_analysis:
+        return '参考图结构化信息未提取成功，请直接依据参考图进行版式复刻。'
+    return json.dumps(reference_analysis, ensure_ascii=False, indent=2)
+
+
+def build_replicate_prompt(user_prompt: str, output_index: int, output_count: int, reference_analysis: dict | None = None) -> str:
+    reference_analysis_text = build_replicate_reference_analysis_text(reference_analysis or {})
+    prompt_parts = [
+        '执行主图详情页复刻商品图任务，目标是复刻参考图的电商模板，同时把产品图商品主体作为最高优先级锁定对象。',
+        '输入图片角色必须严格区分：第 1 张是产品主体锚定草图，只用于辅助锁定产品主体轮廓和大致摆放；第 2 张是原始产品图，是唯一商品主体一致性锚点。原始参考图不会作为生图视觉输入，只能使用下方已提取的参考图文案和版式 JSON。',
+        '最高优先级：第 2 张产品图决定商品主体。生成结果必须保持产品图商品的品类、外观造型、颜色体系、材质质感、核心结构、关键轮廓、比例、部件数量、部件位置、包装识别和可见细节，不得被参考图影响而改变。',
+        '参考图商品主体不是商品来源。严禁复制、继承或吸收参考图商品的品类、品牌、颜色、材质、造型、结构、功能、卖点、外观细节、包装形态或商品身份。',
+        '如果参考图中的商品和产品图商品不一致，必须无条件以第 2 张产品图为准；参考图商品只能被理解为商品槽位、占位面积、陈列数量和排列方向。',
+        '产品图只用于锁定商品主体，不从产品图提取文案、卖点、营销信息或版式信息；不得把产品图中的环境、台面、水流、墙面、道具当作复刻内容。',
+        '必须强参考已提取 JSON 的非商品主体信息：顶部标题区域、商品占位陈列方式、底部促销条、标签位置、背景色、边距、色块比例、字体层级都要尽量保留。',
+        '参考图文案和版式 JSON如下，只能来自参考图，不包含产品图解析；如果 JSON 中出现疑似参考图商品主体特征，必须忽略这些主体特征，只保留位置、大小、数量和排列关系：',
+        reference_analysis_text,
+        '生成时把第 2 张产品图商品放入参考图商品槽位。允许为了匹配多规格陈列复制同一产品主体并做轻微角度、大小、间距或排列变化，但不能改变商品品类、主色、材质、核心结构、关键轮廓、部件组合和包装识别。',
+        '输出必须是完整电商主图或详情页模块，不是单个产品场景图；不要展示对比图、不要分屏、不要水印、不要无关界面元素。',
+    ]
+    if output_count > 1:
+        prompt_parts.append(f'这是第 {output_index} 张结果，在保持同一参考版式和同一产品主体一致的前提下，做轻微构图、光影或文案表达差异。')
+    if user_prompt:
+        prompt_parts.append(f'用户补充要求：{user_prompt}')
+    return '\n'.join(prompt_parts)
+
+
+def build_replicate_generation_result(form_payload: dict, file_payloads: dict, task_id: str | None = None):
+    form = form_payload if isinstance(form_payload, dict) else {}
+    payloads = file_payloads if isinstance(file_payloads, dict) else {}
+
+    reference_payloads = list(payloads.get('reference_image') or [])
+    product_payloads = list(payloads.get('product_images') or [])
+    replicate_mode = str(form.get('replicate_mode') or 'single').strip() or 'single'
+    if str(form.get('replicate_version') or '').strip() != 'reference-analysis-v2':
+        raise ValueError('服务未加载最新复刻逻辑，请重启服务后重试')
+
+    if not reference_payloads:
+        raise ValueError('请上传参考设计图')
+    if not product_payloads:
+        raise ValueError('请至少上传一张产品素材图')
+
+    if replicate_mode == 'batch':
+        return _build_batch_replicate_result(form, payloads, reference_payloads, product_payloads, task_id)
+    if replicate_mode == 'sku':
+        return _build_sku_replicate_result(form, payloads, reference_payloads, product_payloads, task_id)
+    return _build_single_replicate_result(form, payloads, reference_payloads, product_payloads, task_id)
+
+
+def _build_single_replicate_result(form: dict, payloads: dict, reference_payloads: list, product_payloads: list, task_id: str | None = None):
+    reference_analysis = extract_replicate_reference_analysis(reference_payloads)
+
+    prompt = str(form.get('prompt') or '').strip()
+    image_size_ratio = str(form.get('image_size_ratio') or '1:1').strip() or '1:1'
+    try:
+        output_count = int(form.get('output_count') or 1)
+    except (TypeError, ValueError):
+        raise ValueError('生成数量必须是数字')
+    output_count = max(1, min(output_count, 4))
+
+    current_task_id = str(task_id or '').strip() or uuid.uuid4().hex
+    task_name = f'单图复刻-{current_task_id[:8]}'
+    generated_at = build_generated_at()
+    layout_canvas_payload = create_replicate_layout_canvas_payload(product_payloads, reference_payloads[0], image_size_ratio)
+    generation_payloads = [layout_canvas_payload] + product_payloads[:1]
+    reference_images = build_reference_images(current_task_id, reference_payloads[:1], source='replicate_reference')
+    reference_images.extend(
+        build_reference_images(
+            current_task_id,
+            product_payloads,
+            source='product',
+            start_sort=len(reference_images) + 1,
+        )
+    )
+
+    images = []
+    model = ''
+    generated_items = call_app_mode_image_generation(
+        None,
+        build_replicate_prompt(prompt, 1, output_count, reference_analysis),
+        generation_payloads,
+        image_size_ratio,
+        '中文',
+        '中国',
+        None,
+        'replicate',
+        max_images=output_count,
+    )
+    if len(generated_items or []) < output_count:
+        raise ValueError(f'图像生成接口返回数量不足，期望 {output_count} 张，实际 {len(generated_items or [])} 张')
+
+    for index, generated_item in enumerate(generated_items[:output_count], start=1):
+        image_bytes, mime_type = decode_generated_image(generated_item)
+        download_name, relative_path, image_url, storage_trace = save_generated_image(current_task_id, index, 'replicate', image_bytes, mime_type)
+        model = str(generated_item.get('model') or generated_item.get('revised_prompt') or model or '')
+        images.append({
+            'url': image_url,
+            'image_url': image_url,
+            'download_url': image_url,
+            'download_name': download_name,
+            'path': relative_path,
+            'type': 'replicate',
+            'sort': index,
+            'prompt': build_replicate_prompt(prompt, index, output_count, reference_analysis),
+            'reference_analysis': reference_analysis,
+            'trace': storage_trace,
+        })
+
+    reference_image_url = None
+    first_reference = reference_payloads[0] if reference_payloads else None
+    if first_reference:
+        reference_image_url = first_reference.get('data_url') if isinstance(first_reference, dict) else getattr(first_reference, 'data_url', None)
+
+    return {
+        'success': True,
+        'mode': 'replicate',
+        'replicate_mode': 'single',
+        'task_id': current_task_id,
+        'task_name': task_name,
+        'generated_at': generated_at,
+        'reference_image': {
+            'url': reference_image_url,
+        } if reference_image_url else None,
+        'reference_images': reference_images,
+        'reference_analysis': reference_analysis,
+        'images': images,
+        'prompt': prompt,
+        'image_size_ratio': image_size_ratio,
+        'output_count': output_count,
+        'model': model,
+    }
+
+
+def _build_batch_replicate_result(form: dict, payloads: dict, reference_payloads: list, product_payloads: list, task_id: str | None = None):
+    if len(reference_payloads) > 20:
+        raise ValueError('批量参考图最多20张')
+    if len(reference_payloads) == 0:
+        raise ValueError('请至少上传一张参考图')
+
+    prompt = str(form.get('prompt') or '').strip()
+    image_size_ratio = str(form.get('image_size_ratio') or '1:1').strip() or '1:1'
+    try:
+        output_count = int(form.get('output_count') or 1)
+    except (TypeError, ValueError):
+        raise ValueError('生成数量必须是数字')
+    output_count = max(1, min(output_count, 4))
+
+    current_task_id = str(task_id or '').strip() or uuid.uuid4().hex
+    task_name = f'批量复刻-{current_task_id[:8]}'
+    generated_at = build_generated_at()
+
+    all_images = []
+    all_reference_images = []
+    model = ''
+    total_sort = 0
+
+    for ref_index, ref_payload in enumerate(reference_payloads):
+        reference_analysis = extract_replicate_reference_analysis([ref_payload])
+        layout_canvas_payload = create_replicate_layout_canvas_payload(product_payloads, ref_payload, image_size_ratio)
+        generation_payloads = [layout_canvas_payload] + product_payloads[:1]
+
+        ref_reference_images = build_reference_images(current_task_id, [ref_payload], source='replicate_reference', start_sort=len(all_reference_images) + 1)
+        ref_reference_images.extend(
+            build_reference_images(
+                current_task_id,
+                product_payloads,
+                source='product',
+                start_sort=len(all_reference_images) + len(ref_reference_images) + 1,
+            )
+        )
+        all_reference_images.extend(ref_reference_images)
+
+        generated_items = call_app_mode_image_generation(
+            None,
+            build_replicate_prompt(prompt, 1, output_count, reference_analysis),
+            generation_payloads,
+            image_size_ratio,
+            '中文',
+            '中国',
+            None,
+            'replicate',
+            max_images=output_count,
+        )
+        if len(generated_items or []) < output_count:
+            raise ValueError(f'批量复刻第 {ref_index + 1} 张参考图生成数量不足，期望 {output_count} 张，实际 {len(generated_items or [])} 张')
+
+        for index, generated_item in enumerate(generated_items[:output_count], start=1):
+            total_sort += 1
+            image_bytes, mime_type = decode_generated_image(generated_item)
+            download_name, relative_path, image_url, storage_trace = save_generated_image(current_task_id, total_sort, 'replicate', image_bytes, mime_type)
+            model = str(generated_item.get('model') or generated_item.get('revised_prompt') or model or '')
+            all_images.append({
+                'url': image_url,
+                'image_url': image_url,
+                'download_url': image_url,
+                'download_name': download_name,
+                'path': relative_path,
+                'type': 'replicate',
+                'sort': total_sort,
+                'prompt': build_replicate_prompt(prompt, index, output_count, reference_analysis),
+                'reference_analysis': reference_analysis,
+                'batch_reference_index': ref_index,
+                'trace': storage_trace,
+            })
+
+    reference_image_url = None
+    first_reference = reference_payloads[0] if reference_payloads else None
+    if first_reference:
+        reference_image_url = first_reference.get('data_url') if isinstance(first_reference, dict) else getattr(first_reference, 'data_url', None)
+
+    return {
+        'success': True,
+        'mode': 'replicate',
+        'replicate_mode': 'batch',
+        'task_id': current_task_id,
+        'task_name': task_name,
+        'generated_at': generated_at,
+        'reference_image': {
+            'url': reference_image_url,
+        } if reference_image_url else None,
+        'reference_images': all_reference_images,
+        'reference_analysis': all_images[0].get('reference_analysis') if all_images else None,
+        'images': all_images,
+        'prompt': prompt,
+        'image_size_ratio': image_size_ratio,
+        'output_count': len(all_images),
+        'batch_reference_count': len(reference_payloads),
+        'model': model,
+    }
+
+
+def _build_sku_replicate_result(form: dict, payloads: dict, reference_payloads: list, product_payloads: list, task_id: str | None = None):
+    if len(product_payloads) > 20:
+        raise ValueError('SKU产品图最多20张')
+
+    reference_analysis = extract_replicate_reference_analysis(reference_payloads)
+
+    prompt = str(form.get('prompt') or '').strip()
+    image_size_ratio = str(form.get('image_size_ratio') or '1:1').strip() or '1:1'
+
+    current_task_id = str(task_id or '').strip() or uuid.uuid4().hex
+    task_name = f'SKU复刻-{current_task_id[:8]}'
+    generated_at = build_generated_at()
+
+    all_images = []
+    all_reference_images = []
+    model = ''
+    total_sort = 0
+
+    all_reference_images = build_reference_images(current_task_id, reference_payloads[:1], source='replicate_reference')
+    all_reference_images.extend(
+        build_reference_images(
+            current_task_id,
+            product_payloads,
+            source='product',
+            start_sort=len(all_reference_images) + 1,
+        )
+    )
+
+    sku_info_list = []
+    for sku_index in range(len(product_payloads)):
+        sku_info_val = str(form.get(f'sku_info_{sku_index}') or '').strip()
+        sku_info_list.append(sku_info_val)
+
+    for sku_index, sku_product in enumerate(product_payloads):
+        sku_info = sku_info_list[sku_index] if sku_index < len(sku_info_list) else ''
+        sku_prompt_part = f'，SKU变体：{sku_info}' if sku_info else ''
+
+        layout_canvas_payload = create_replicate_layout_canvas_payload([sku_product], reference_payloads[0], image_size_ratio)
+        generation_payloads = [layout_canvas_payload, sku_product]
+
+        generated_items = call_app_mode_image_generation(
+            None,
+            build_replicate_prompt(prompt + sku_prompt_part, 1, 1, reference_analysis),
+            generation_payloads,
+            image_size_ratio,
+            '中文',
+            '中国',
+            None,
+            'replicate',
+            max_images=1,
+        )
+        if len(generated_items or []) < 1:
+            raise ValueError(f'SKU复刻第 {sku_index + 1} 个产品生成失败')
+
+        total_sort += 1
+        generated_item = generated_items[0]
+        image_bytes, mime_type = decode_generated_image(generated_item)
+        download_name, relative_path, image_url, storage_trace = save_generated_image(current_task_id, total_sort, 'replicate', image_bytes, mime_type)
+        model = str(generated_item.get('model') or generated_item.get('revised_prompt') or model or '')
+        all_images.append({
+            'url': image_url,
+            'image_url': image_url,
+            'download_url': image_url,
+            'download_name': download_name,
+            'path': relative_path,
+            'type': 'replicate',
+            'sort': total_sort,
+            'prompt': build_replicate_prompt(prompt + sku_prompt_part, 1, 1, reference_analysis),
+            'reference_analysis': reference_analysis,
+            'sku_product_index': sku_index,
+            'sku_info': sku_info,
+            'trace': storage_trace,
+        })
+
+    reference_image_url = None
+    first_reference = reference_payloads[0] if reference_payloads else None
+    if first_reference:
+        reference_image_url = first_reference.get('data_url') if isinstance(first_reference, dict) else getattr(first_reference, 'data_url', None)
+
+    return {
+        'success': True,
+        'mode': 'replicate',
+        'replicate_mode': 'sku',
+        'task_id': current_task_id,
+        'task_name': task_name,
+        'generated_at': generated_at,
+        'reference_image': {
+            'url': reference_image_url,
+        } if reference_image_url else None,
+        'reference_images': all_reference_images,
+        'reference_analysis': reference_analysis,
+        'images': all_images,
+        'prompt': prompt,
+        'image_size_ratio': image_size_ratio,
+        'output_count': len(all_images),
+        'sku_product_count': len(product_payloads),
+        'model': model,
+    }
 
 
 @app.get('/api/generation-tasks')
