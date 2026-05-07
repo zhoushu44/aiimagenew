@@ -75,7 +75,7 @@ from generation import (
     parse_style_analysis, get_suite_type_rules, parse_selected_modules,
     parse_selected_style, build_style_reference_text,
     parse_product_json, parse_product_json_payload,
-    build_suite_plan, build_aplus_plan,
+    build_suite_plan, build_main_image_cover_plan, build_aplus_plan,
     parse_fashion_selected_model_payload_from_data, build_fashion_scene_plan,
     build_fashion_model_prompt, parse_fashion_scene_plan_payload,
     parse_fashion_scene_selections, parse_fashion_pose_camera_settings,
@@ -4239,9 +4239,17 @@ def build_generation_result_from_payload(form_payload: dict, file_payloads: dict
             },
         }
 
-    output_count, _ = get_suite_type_rules(form.get('output_count', '8'))
+    generation_task_type = str(form.get('generate_task_type') or '').strip()
+    is_main_image_task = generation_task_type == 'main_image'
+    if is_main_image_task:
+        try:
+            output_count = min(max(int(str(form.get('output_count') or '1').strip()), 1), 10)
+        except ValueError:
+            output_count = 1
+    else:
+        output_count, _ = get_suite_type_rules(form.get('output_count', '8'))
     task_id = uuid.uuid4().hex
-    task_name = build_task_name(platform, 'suite', output_count)
+    task_name = build_task_name(platform, 'main_image' if is_main_image_task else 'suite', output_count)
     generated_at = build_generated_at()
     reference_images = build_reference_images(task_id, image_payloads, source='product')
     if reference_payloads:
@@ -4258,30 +4266,45 @@ def build_generation_result_from_payload(form_payload: dict, file_payloads: dict
         logger.warning('Suite generation extracting product_json from uploaded reference images: mode=%s image_count=%s', mode, len(planning_payloads))
         product_json = extract_product_json_from_image_payloads(selling_text, planning_payloads)
     logger.warning(
-        'Suite generation upload payloads: mode=%s product_count=%s reference_count=%s total_generation_count=%s product_json_ready=%s',
+        'Suite generation upload payloads: mode=%s task_type=%s product_count=%s reference_count=%s total_generation_count=%s product_json_ready=%s',
         mode,
+        generation_task_type or 'detail_image',
         len(image_payloads),
         len(reference_payloads),
         len(planning_payloads),
         bool(product_json),
     )
-    plan = build_suite_plan(
-        platform,
-        selling_text,
-        output_count,
-        planning_payloads,
-        country,
-        text_type,
-        image_size_ratio,
-        selected_style,
-        mode,
-        product_json,
-    )
-    images = generate_suite_images(plan, planning_payloads, task_id, image_size_ratio, text_type, country, product_json)
+    if is_main_image_task:
+        plan = build_main_image_cover_plan(
+            platform,
+            selling_text,
+            output_count,
+            country,
+            '无文字',
+            image_size_ratio,
+            selected_style,
+            product_json,
+        )
+        generation_text_type = '无文字'
+    else:
+        plan = build_suite_plan(
+            platform,
+            selling_text,
+            output_count,
+            planning_payloads,
+            country,
+            text_type,
+            image_size_ratio,
+            selected_style,
+            mode,
+            product_json,
+        )
+        generation_text_type = text_type
+    images = generate_suite_images(plan, planning_payloads, task_id, image_size_ratio, generation_text_type, country, product_json)
 
     return {
         'success': True,
-        'mode': mode,
+        'mode': 'main_image' if is_main_image_task else mode,
         'task_id': task_id,
         'task_name': task_name,
         'generated_at': generated_at,

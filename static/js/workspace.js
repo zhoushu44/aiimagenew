@@ -189,9 +189,12 @@ document.addEventListener('DOMContentLoaded', () => {
     const referenceUploadBtn = document.getElementById('referenceUploadBtn');
     const referenceThumbs = document.getElementById('referenceThumbs');
     const moreActions = document.getElementById('moreActions');
+    const mainImageBtn = document.getElementById('mainImageBtn');
+    const mainImageMenu = document.getElementById('mainImageMenu');
+    const mainImageOptions = Array.from(document.querySelectorAll('[data-main-count]'));
     const moreBtn = document.getElementById('moreBtn');
     const moreMenu = document.getElementById('moreMenu');
-    const moreOptions = Array.from(document.querySelectorAll('.more-option'));
+    const moreOptions = Array.from(moreMenu ? moreMenu.querySelectorAll('[data-count]') : []);
     const outputCountValue = document.getElementById('outputCountValue');
     const gridLogicValue = document.getElementById('gridLogicValue');
     const navItems = Array.from(document.querySelectorAll('[data-mode]'));
@@ -304,6 +307,33 @@ document.addEventListener('DOMContentLoaded', () => {
       },
     };
     const modeConfig = {
+      main_image: {
+        heroEyebrow: '01 / Cover Shot',
+        title: 'AI商品主图',
+        description: '上传商品图与参考图后，系统将生成多版本商品封面主图候选，适合作为电商第一张展示图使用。',
+        note: 'Cover Only / Product First / No Detail Page',
+        resultEyebrow: '02 / Cover Candidates',
+        resultTitle: '主图生成结果',
+        resultSelectAllLabel: '全选主图',
+        outputSystemLabel: 'cover system',
+        outputSystemMeta: '多版本封面主图候选，不做详情页、尺寸图、材质图、人群图、对比图或细节放大图。',
+        gridLogicLabel: 'grid logic',
+        gridLogicMeta: '统一宫格展示，便于对比选择最佳封面主图。',
+        generateBtnLabel: '生成主图',
+        planLoadingLabel: '正在规划主图方案',
+        imageLoadingLabel: '正在生成主图，请稍候',
+        initialResultMeta: '系统将根据产品图、参考图与核心卖点生成多版本封面主图候选。',
+        initialTaskSummary: '所有图片均为商品封面主图候选，不包含详情页、尺寸图、材质图、人群图、对比图或细节放大图。',
+        resultFallback: '已生成主图候选',
+        itemFallback: '已生成封面主图候选。',
+        successFallback: '已完成 {count} 张主图生成',
+        errorFallback: '主图生成失败，请稍后重试',
+        selectedPrefix: '正在规划主图方案，并吸收「{style}」风格参考，请稍候…',
+        defaultPrefix: '正在规划主图方案，请稍候…',
+        imageProgress: '正在生成主图，请稍候…',
+        outputStatLabel: '主图张数',
+        estimatedSeconds: 90,
+      },
       suite: {
         heroEyebrow: '01 / Editorial Intro',
         title: 'AI商品套图',
@@ -449,6 +479,7 @@ document.addEventListener('DOMContentLoaded', () => {
     const isMode2Page = PAGE_MODE === 'mode2';
     let currentMode = PAGE_MODE;
     let selectedOutputCount = 6;
+    let selectedMainImageCount = 0;
     let selectedAplusModules = new Set(isAplusPage
       ? ['hero_value', 'usage_scene', 'core_selling', 'detail_zoom']
       : []);
@@ -845,6 +876,7 @@ document.addEventListener('DOMContentLoaded', () => {
       }
       outputCountValue.textContent = formatOutputCount(selectedOutputCount);
       gridLogicValue.textContent = getGridLogicLabel(selectedOutputCount);
+      syncMainImageButtonLabel();
       syncMoreButtonLabel();
     };
 
@@ -924,12 +956,36 @@ document.addEventListener('DOMContentLoaded', () => {
       persistState();
     };
 
+    const closeMainImageMenu = () => {
+      if (mainImageMenu && mainImageBtn) {
+        mainImageMenu.hidden = true;
+        mainImageBtn.setAttribute('aria-expanded', 'false');
+      }
+      persistState();
+    };
+
+    const syncMainImageButtonLabel = () => {
+      if (!mainImageBtn) {
+        return;
+      }
+      mainImageBtn.textContent = `主图(${selectedMainImageCount}张)`;
+      mainImageBtn.setAttribute('aria-label', `单独生成主图，当前已选 ${selectedMainImageCount} 张`);
+    };
+
+    const openMainImageMenu = () => {
+      if (mainImageMenu && mainImageBtn) {
+        mainImageMenu.hidden = false;
+        mainImageBtn.setAttribute('aria-expanded', 'true');
+      }
+      persistState();
+    };
+
     const syncMoreButtonLabel = () => {
       if (!moreBtn) {
         return;
       }
-      moreBtn.textContent = `…(${selectedOutputCount}张)`;
-      moreBtn.setAttribute('aria-label', `更多操作，当前已选输出 ${selectedOutputCount} 张`);
+      moreBtn.textContent = `详情页(${selectedOutputCount}张)`;
+      moreBtn.setAttribute('aria-label', `详情页生成，当前已选输出 ${selectedOutputCount} 张`);
     };
 
     const openMoreMenu = () => {
@@ -940,16 +996,64 @@ document.addEventListener('DOMContentLoaded', () => {
       persistState();
     };
 
+    const setSelectedMainImageCount = (count) => {
+      selectedMainImageCount = Math.min(Math.max(Number(count) || 0, 0), 10);
+      if (mainImageOptions && mainImageOptions.length > 0) {
+        mainImageOptions.forEach((option) => {
+          option.classList.toggle('is-selected', Number(option.dataset.mainCount) === selectedMainImageCount);
+        });
+      }
+      syncMainImageButtonLabel();
+      persistState();
+    };
+
     const setSelectedOutputCount = (count) => {
-      selectedOutputCount = count;
+      const normalizedCount = Number(count);
+      selectedOutputCount = Number.isFinite(normalizedCount) ? normalizedCount : 6;
       if (moreOptions && moreOptions.length > 0) {
         moreOptions.forEach((option) => {
-          option.classList.toggle('is-selected', Number(option.dataset.count) === count);
+          option.classList.toggle('is-selected', Number(option.dataset.count) === selectedOutputCount);
         });
       }
       syncMoreButtonLabel();
       syncOutputCountSummary();
       persistState();
+    };
+
+    const getCompositeGenerateSelection = (isMode2 = false) => {
+      const mainImageCount = Math.min(Math.max(Number(selectedMainImageCount) || 0, 0), 10);
+      const detailImageCount = isMode2 ? getMode2RequestedOutputCount() : Math.min(Math.max(Number(selectedOutputCount) || 0, 0), 10);
+      const shouldGenerateMainImage = mainImageCount > 0;
+      const shouldGenerateDetailImage = detailImageCount > 0;
+      let mode = 'none';
+      if (shouldGenerateMainImage && shouldGenerateDetailImage) {
+        mode = 'both';
+      } else if (shouldGenerateMainImage) {
+        mode = 'main_only';
+      } else if (shouldGenerateDetailImage) {
+        mode = 'detail_only';
+      }
+      return {
+        mode,
+        mainImageCount,
+        detailImageCount,
+        shouldGenerateMainImage,
+        shouldGenerateDetailImage,
+        totalOutputCount: mainImageCount + detailImageCount,
+      };
+    };
+
+    const getCompositeGenerateStatusMessage = (selection) => {
+      if (selection.mode === 'both') {
+        return `开始生成主图 ${selection.mainImageCount} 张和详情页 ${selection.detailImageCount} 张...`;
+      }
+      if (selection.mode === 'main_only') {
+        return `开始生成主图，共 ${selection.mainImageCount} 张...`;
+      }
+      if (selection.mode === 'detail_only') {
+        return `开始生成详情页，共 ${selection.detailImageCount} 张...`;
+      }
+      return '请至少选择 1 张主图或 1 张详情页。';
     };
 
     const toggleAplusModule = (key) => {
@@ -1664,6 +1768,36 @@ document.addEventListener('DOMContentLoaded', () => {
       });
     };
 
+    const getPendingGenerationTaskIds = () => {
+      if (Array.isArray(pendingGenerationTask?.taskIds)) {
+        return pendingGenerationTask.taskIds.filter(Boolean);
+      }
+      return pendingGenerationTask?.taskId ? [pendingGenerationTask.taskId] : [];
+    };
+
+    const getPendingGenerationSpendAmount = () => {
+      if (Array.isArray(pendingGenerationTask?.spendRecords)) {
+        return pendingGenerationTask.spendRecords.reduce((total, item) => total + (Number(item?.amount) || 0), 0);
+      }
+      return Number(pendingGenerationTask?.spendRecord?.amount) || 0;
+    };
+
+    const mergeGenerationTaskResults = (tasks) => {
+      const succeededTasks = Array.isArray(tasks) ? tasks : [];
+      const results = succeededTasks.map((task) => task?.result).filter((result) => result && Array.isArray(result.images));
+      const firstResult = results[0] || {};
+      return {
+        ...firstResult,
+        mode: currentMode,
+        images: results.flatMap((result) => result.images || []),
+        reference_images: results.flatMap((result) => result.reference_images || []),
+        plan: {
+          ...(firstResult.plan || {}),
+          summary: `已完成 ${results.reduce((total, result) => total + (Array.isArray(result.images) ? result.images.length : 0), 0)} 张结果生成`,
+        },
+      };
+    };
+
     const completePendingGenerationTask = (task) => {
       stopGenerationProgress();
       resetPendingGenerationPollState();
@@ -1700,7 +1834,7 @@ document.addEventListener('DOMContentLoaded', () => {
         frontendDisplayDelayMs: summary.frontendDisplayDelayMs,
         imageCount: currentResultItems.length,
       });
-      const spendAmount = Number(pendingGenerationTask?.spendRecord?.amount) || 0;
+      const spendAmount = getPendingGenerationSpendAmount();
       setResultStatus(`${getCurrentModeConfig().successFallback.replace('{count}', String(getCurrentOutputMetric(result)))}${spendAmount > 0 ? `，已消耗 ${spendAmount} 积分` : ''}`, 'success');
       if (result.mode === 'fashion') {
         syncFashionState({ fashionFlowStep: 'result' });
@@ -1739,23 +1873,26 @@ document.addEventListener('DOMContentLoaded', () => {
 
     const cancelPendingGenerationTask = async () => {
       const task = pendingGenerationTask;
-      if (!task?.taskId) {
+      const taskIds = getPendingGenerationTaskIds();
+      if (!taskIds.length) {
         return;
       }
-      const taskId = task.taskId;
       let refundInfo = '';
       try {
-        const response = await fetch(`/api/generation-tasks/${encodeURIComponent(taskId)}/cancel`, {
-          method: 'POST',
-          credentials: 'same-origin',
-        });
-        const result = await parseJsonResponse(response);
-        if (!response.ok || !result.success) {
-          console.warn('Cancel task request failed:', result.error);
-        }
-        if (result?.task?.refunded) {
+        const cancelResults = await Promise.all(taskIds.map(async (taskId) => {
+          const response = await fetch(`/api/generation-tasks/${encodeURIComponent(taskId)}/cancel`, {
+            method: 'POST',
+            credentials: 'same-origin',
+          });
+          const result = await parseJsonResponse(response);
+          if (!response.ok || !result.success) {
+            console.warn('Cancel task request failed:', result.error);
+          }
+          return result;
+        }));
+        if (cancelResults.some((result) => result?.task?.refunded)) {
           refundInfo = '，积分已返还';
-        } else if (result?.task?.refund_error) {
+        } else if (cancelResults.some((result) => result?.task?.refund_error)) {
           refundInfo = '，积分未返还';
         }
       } catch (error) {
@@ -1773,7 +1910,7 @@ document.addEventListener('DOMContentLoaded', () => {
 
     if (progressCancelBtn) {
       progressCancelBtn.addEventListener('click', () => {
-        if (pendingGenerationTask?.taskId) {
+        if (getPendingGenerationTaskIds().length) {
           cancelPendingGenerationTask();
         }
       });
@@ -1781,7 +1918,7 @@ document.addEventListener('DOMContentLoaded', () => {
 
     const pollPendingGenerationTask = async ({ immediate = false } = {}) => {
       stopPendingGenerationPolling();
-      if (!pendingGenerationTask?.taskId) {
+      if (!getPendingGenerationTaskIds().length) {
         return;
       }
       const startedAt = Number(pendingGenerationTask.startedAt) || Date.now();
@@ -1797,39 +1934,45 @@ document.addEventListener('DOMContentLoaded', () => {
         return;
       }
       try {
-        const response = await fetch(`/api/generation-tasks/${encodeURIComponent(pendingGenerationTask.taskId)}`);
-        const result = await parseJsonResponse(response);
-        if (!response.ok || !result.success) {
-          throw new Error(result.error || '生成任务状态查询失败');
-        }
+        const taskIds = getPendingGenerationTaskIds();
+        const taskResponses = await Promise.all(taskIds.map(async (taskId) => {
+          const response = await fetch(`/api/generation-tasks/${encodeURIComponent(taskId)}`);
+          const result = await parseJsonResponse(response);
+          if (!response.ok || !result.success) {
+            throw new Error(result.error || '生成任务状态查询失败');
+          }
+          return result.task || {};
+        }));
         pendingGenerationPollFailureCount = 0;
-        const task = result.task || {};
-        markTaskTraceEvent(task, 'frontend_poll_received', {
-          status: task.status || '',
+        taskResponses.forEach((task) => {
+          markTaskTraceEvent(task, 'frontend_poll_received', {
+            status: task.status || '',
+          });
+          debugGenerationTrace('poll_received', {
+            taskId: task.task_id || task.id || '',
+            status: task.status || '',
+            lastStage: task.trace?.last_stage || '',
+            lastAt: task.trace?.last_at || '',
+          });
         });
-        debugGenerationTrace('poll_received', {
-          taskId: task.task_id || pendingGenerationTask.taskId,
-          status: task.status || '',
-          lastStage: task.trace?.last_stage || '',
-          lastAt: task.trace?.last_at || '',
-        });
-        if (task.status === 'succeeded') {
-          markTaskTraceEvent(task, 'frontend_success_received');
-          completePendingGenerationTask(task);
-          return;
-        }
-        if (task.status === 'failed') {
-          const refunded = Boolean(task.refunded);
+        const failedTask = taskResponses.find((task) => task.status === 'failed');
+        if (failedTask) {
+          const refunded = Boolean(failedTask.refunded);
           stopPendingGenerationPolling();
           pendingGenerationTask = null;
           resetPendingGenerationPollState();
           resetResultState();
-          applyGenerateButtonReadyState({ mode: task.mode, fashionStep: task.mode === 'fashion' ? 'scene' : undefined });
-          setResultStatus(refunded ? `${task.error || '生成失败'}；本次扣减积分已自动返还。` : `${task.error || '生成失败'}${task.refund_error ? `；${task.refund_error}` : ''}`, 'error');
+          applyGenerateButtonReadyState({ mode: failedTask.mode, fashionStep: failedTask.mode === 'fashion' ? 'scene' : undefined });
+          setResultStatus(refunded ? `${failedTask.error || '生成失败'}；本次扣减积分已自动返还。` : `${failedTask.error || '生成失败'}${failedTask.refund_error ? `；${failedTask.refund_error}` : ''}`, 'error');
           saveStateToLocalStorage();
           return;
         }
-        setResultStatus(task.status === 'running' ? getCurrentModeConfig().imageProgress : '生成任务已提交，正在排队处理，请勿关闭页面。');
+        if (taskResponses.every((task) => task.status === 'succeeded')) {
+          taskResponses.forEach((task) => markTaskTraceEvent(task, 'frontend_success_received'));
+          completePendingGenerationTask(mergeGenerationTaskResults(taskResponses));
+          return;
+        }
+        setResultStatus(taskResponses.some((task) => task.status === 'running') ? getCurrentModeConfig().imageProgress : '生成任务已提交，正在排队处理，请勿关闭页面。');
       } catch (error) {
         pendingGenerationPollFailureCount += 1;
         const failureMessage = `正在等待生成任务完成，状态查询暂时失败：${error.message || error}`;
@@ -1852,16 +1995,48 @@ document.addEventListener('DOMContentLoaded', () => {
     };
 
     const savePendingGenerationTask = (taskId, spendRecord, mode = PAGE_MODE) => {
+      savePendingGenerationTasks([taskId], [spendRecord], mode);
+    };
+
+    const savePendingGenerationTasks = (taskIds, spendRecords, mode = PAGE_MODE) => {
       startGenerationProgress();
       resetPendingGenerationPollState();
       pendingGenerationTask = {
-        taskId,
+        taskIds: taskIds.filter(Boolean),
+        taskId: taskIds.find(Boolean) || '',
         mode,
-        spendRecord,
+        spendRecords: spendRecords.filter(Boolean),
+        spendRecord: spendRecords.find(Boolean) || null,
         startedAt: Date.now(),
       };
       saveStateToLocalStorage();
       pollPendingGenerationTask({ immediate: true });
+    };
+
+    const appendCompositeTaskFields = (formData, selection, taskType) => {
+      const isMainTask = taskType === 'main';
+      const mainImageCount = isMainTask ? selection.mainImageCount : 0;
+      const detailImageCount = isMainTask ? 0 : selection.detailImageCount;
+      formData.set('output_count', String(isMainTask ? mainImageCount : detailImageCount));
+      formData.set('main_image_count', String(mainImageCount));
+      formData.set('detail_image_count', String(detailImageCount));
+      formData.set('generate_main_image', isMainTask ? '1' : '0');
+      formData.set('generate_detail_image', isMainTask ? '0' : '1');
+      formData.set('generate_scope', isMainTask ? 'main_only' : 'detail_only');
+      formData.set('generate_task_type', isMainTask ? 'main_image' : 'detail_image');
+      if (isMainTask) {
+        const referenceAssets = getUploadedReferenceAssets();
+        if (referenceAssets.length) {
+          appendImageUrlsToFormData(formData, 'reference_image_urls', referenceAssets, 3);
+        } else {
+          appendFilesToFormData(formData, 'reference_images', getReferenceFiles());
+        }
+        if (currentProductJson) {
+          formData.append('product_json', JSON.stringify(currentProductJson));
+        }
+        formData.append('prioritize_reference', '1');
+        formData.append('generation_focus', 'product_main');
+      }
     };
 
     const fetchJsonWithTimeout = async (url, options = {}, timeoutMs = 70000, timeoutMessage = '推荐场景生成超时，请稍后重试') => {
@@ -3089,6 +3264,7 @@ document.addEventListener('DOMContentLoaded', () => {
           ...existingState,
           currentMode: PAGE_MODE,
           selectedOutputCount,
+          selectedMainImageCount,
           selectedAplusModules: Array.from(selectedAplusModules),
           currentStyleResults,
           selectedStyleIndex,
@@ -3113,6 +3289,10 @@ document.addEventListener('DOMContentLoaded', () => {
           moreMenu: {
             hidden: moreMenu ? moreMenu.hidden : true,
             expanded: moreBtn ? moreBtn.getAttribute('aria-expanded') === 'true' : false,
+          },
+          mainImageMenu: {
+            hidden: mainImageMenu ? mainImageMenu.hidden : true,
+            expanded: mainImageBtn ? mainImageBtn.getAttribute('aria-expanded') === 'true' : false,
           },
           scroll: captureScrollState(),
         };
@@ -3141,6 +3321,9 @@ document.addEventListener('DOMContentLoaded', () => {
         currentMode = PAGE_MODE;
         if (typeof state.selectedOutputCount === 'number') {
           selectedOutputCount = state.selectedOutputCount;
+        }
+        if (typeof state.selectedMainImageCount === 'number') {
+          selectedMainImageCount = Math.min(Math.max(state.selectedMainImageCount, 0), 10);
         }
         if (Array.isArray(state.selectedAplusModules) && state.selectedAplusModules.length) {
           selectedAplusModules = new Set(state.selectedAplusModules.filter((key) => APLUS_MODULE_META[key]));
@@ -3222,6 +3405,12 @@ document.addEventListener('DOMContentLoaded', () => {
           moreMenu.hidden = state.moreMenu?.hidden ?? !isExpanded;
           moreBtn.setAttribute('aria-expanded', isExpanded ? 'true' : 'false');
         }
+        if (mainImageMenu && mainImageBtn) {
+          const isExpanded = Boolean(state.mainImageMenu?.expanded);
+          mainImageMenu.hidden = state.mainImageMenu?.hidden ?? !isExpanded;
+          mainImageBtn.setAttribute('aria-expanded', isExpanded ? 'true' : 'false');
+        }
+        setSelectedMainImageCount(selectedMainImageCount);
 
         if (Number.isInteger(state.previewIndex) && state.previewIndex >= 0 && state.previewIndex < currentResultItems.length) {
           openPreview(state.previewIndex);
@@ -3403,6 +3592,26 @@ document.addEventListener('DOMContentLoaded', () => {
         showPreviewOffset(1);
       }
     });
+
+    if (mainImageBtn) {
+      mainImageBtn.addEventListener('click', (event) => {
+        event.stopPropagation();
+        if (mainImageMenu && mainImageMenu.hidden) {
+          openMainImageMenu();
+          return;
+        }
+        closeMainImageMenu();
+      });
+    }
+
+    if (mainImageOptions && mainImageOptions.length > 0) {
+      mainImageOptions.forEach((option) => {
+        option.addEventListener('click', () => {
+          setSelectedMainImageCount(Number(option.dataset.mainCount));
+          closeMainImageMenu();
+        });
+      });
+    }
 
     if (moreBtn) {
       moreBtn.addEventListener('click', (event) => {
@@ -3642,19 +3851,37 @@ document.addEventListener('DOMContentLoaded', () => {
           return;
         }
         const { endpoint, isMode2 } = requestConfig;
+        const compositeSelection = getCompositeGenerateSelection(isMode2);
+        if (!isMode2 && compositeSelection.mode === 'none') {
+          setResultStatus(getCompositeGenerateStatusMessage(compositeSelection), 'error');
+          return;
+        }
         if (currentMode === 'aplus') {
-          if (!selectedAplusModules.size) {
-            setResultStatus('请至少选择 1 个 A+ 模块后再生成。', 'error');
+          if (!selectedAplusModules.size && !compositeSelection.shouldGenerateMainImage) {
+            setResultStatus('请至少选择 1 张主图或 1 个 A+ 模块后再生成。', 'error');
             return;
           }
           formData.append('selected_modules', JSON.stringify(Array.from(selectedAplusModules)));
         } else if (!isMode2) {
           formData.append('output_count', String(selectedOutputCount));
         }
+        if (!isMode2) {
+          formData.append('main_image_count', String(compositeSelection.mainImageCount));
+          formData.append('detail_image_count', String(compositeSelection.detailImageCount));
+          formData.append('generate_main_image', compositeSelection.shouldGenerateMainImage ? '1' : '0');
+          formData.append('generate_detail_image', compositeSelection.shouldGenerateDetailImage ? '1' : '0');
+          formData.append('generate_scope', compositeSelection.mode);
+        }
 
-        const plannedOutputCount = isMode2
-          ? getMode2RequestedOutputCount()
-          : (currentMode === 'aplus' ? selectedAplusModules.size : selectedOutputCount);
+        const generationJobs = [];
+        if (!isMode2 && compositeSelection.shouldGenerateMainImage) {
+          generationJobs.push({ type: 'main', count: compositeSelection.mainImageCount });
+        }
+        if (isMode2 || compositeSelection.shouldGenerateDetailImage) {
+          generationJobs.push({ type: 'detail', count: isMode2 ? getMode2RequestedOutputCount() : compositeSelection.detailImageCount });
+        }
+        const plannedOutputCount = generationJobs.reduce((total, job) => total + job.count, 0);
+        const generationStartMessage = isMode2 ? config.defaultPrefix : getCompositeGenerateStatusMessage(compositeSelection);
         const quotePayload = await requestPointsQuote({
           mode: currentMode,
           outputCount: plannedOutputCount,
@@ -3664,6 +3891,11 @@ document.addEventListener('DOMContentLoaded', () => {
           metadata: {
             mode: currentMode,
             output_count: plannedOutputCount,
+            main_image_count: isMode2 ? 0 : compositeSelection.mainImageCount,
+            detail_image_count: isMode2 ? plannedOutputCount : compositeSelection.detailImageCount,
+            generate_scope: isMode2 ? 'detail_only' : compositeSelection.mode,
+            generate_main_image: isMode2 ? false : compositeSelection.shouldGenerateMainImage,
+            generate_detail_image: isMode2 ? true : compositeSelection.shouldGenerateDetailImage,
             selected_style: selectedStyle?.title || '',
             selected_modules: currentMode === 'aplus' ? Array.from(selectedAplusModules) : [],
           },
@@ -3679,7 +3911,7 @@ document.addEventListener('DOMContentLoaded', () => {
         }
         generateBtn.disabled = true;
         updateGenerateButtonLabel(config.planLoadingLabel);
-        setResultStatus(`正在校验积分并生成，预计消耗 ${pointsCost} 积分`);
+        setResultStatus(`${generationStartMessage} 正在校验积分，预计消耗 ${pointsCost} 积分`);
         startGenerationProgress();
         showResultView();
         renderLoadingResultCards(plannedOutputCount);
@@ -3696,6 +3928,11 @@ document.addEventListener('DOMContentLoaded', () => {
             metadata: {
               mode: currentMode,
               output_count: plannedOutputCount,
+              main_image_count: isMode2 ? 0 : compositeSelection.mainImageCount,
+              detail_image_count: isMode2 ? plannedOutputCount : compositeSelection.detailImageCount,
+              generate_scope: isMode2 ? 'detail_only' : compositeSelection.mode,
+              generate_main_image: isMode2 ? false : compositeSelection.shouldGenerateMainImage,
+              generate_detail_image: isMode2 ? true : compositeSelection.shouldGenerateDetailImage,
               selected_style: selectedStyle?.title || '',
               selected_modules: currentMode === 'aplus' ? Array.from(selectedAplusModules) : [],
             },
@@ -3707,20 +3944,28 @@ document.addEventListener('DOMContentLoaded', () => {
           if (isMode2) {
             result = await generateMode2Results(endpoint, formData, plannedOutputCount);
           } else {
-            formData.append('async_task', '1');
-            formData.append('points_request_id', spendRecord?.requestId || '');
-            formData.append('spend_record', JSON.stringify(spendRecord || {}));
-            const response = await fetch(endpoint, {
-              method: 'POST',
-              body: formData,
-            });
-            const taskPayload = await parseJsonResponse(response);
-            if (!response.ok || !taskPayload?.success || !taskPayload.task_id) {
-              const detailMessage = typeof taskPayload?.details === 'string' ? taskPayload.details.trim() : '';
-              const baseMessage = taskPayload?.error || config.errorFallback;
-              throw new Error(detailMessage ? `${baseMessage}｜${detailMessage}` : baseMessage);
+            const taskIds = [];
+            const spendRecords = [];
+            for (const job of generationJobs) {
+              const taskFormData = cloneFormData(formData);
+              appendCompositeTaskFields(taskFormData, compositeSelection, job.type);
+              taskFormData.append('async_task', '1');
+              taskFormData.append('points_request_id', spendRecord?.requestId || '');
+              taskFormData.append('spend_record', JSON.stringify(spendRecord || {}));
+              const response = await fetch(endpoint, {
+                method: 'POST',
+                body: taskFormData,
+              });
+              const taskPayload = await parseJsonResponse(response);
+              if (!response.ok || !taskPayload?.success || !taskPayload.task_id) {
+                const detailMessage = typeof taskPayload?.details === 'string' ? taskPayload.details.trim() : '';
+                const baseMessage = taskPayload?.error || config.errorFallback;
+                throw new Error(detailMessage ? `${baseMessage}｜${detailMessage}` : baseMessage);
+              }
+              taskIds.push(taskPayload.task_id);
+              spendRecords.push(spendRecord);
             }
-            savePendingGenerationTask(taskPayload.task_id, spendRecord, currentMode);
+            savePendingGenerationTasks(taskIds, spendRecords, currentMode);
             asyncSuiteTaskStarted = true;
           }
 
@@ -3739,7 +3984,7 @@ document.addEventListener('DOMContentLoaded', () => {
         } catch (error) {
           let refundFailed = false;
           const didSpendPoints = Boolean(spendRecord && !spendRecord.skipped && Number(spendRecord.amount) > 0);
-          if (didSpendPoints && !currentResultItems.length && !pendingGenerationTask?.taskId) {
+          if (didSpendPoints && !currentResultItems.length && !getPendingGenerationTaskIds().length) {
             try {
               const refundedPoints = await requestPointsRefund(spendRecord, error.message || config.errorFallback);
               syncSharedPointsState(refundedPoints);
@@ -3762,7 +4007,7 @@ document.addEventListener('DOMContentLoaded', () => {
             : (refundFailed ? `${error.message || config.errorFallback}；本次积分自动返还失败，请联系客服核查。` : `${error.message || config.errorFallback}；本次扣减积分已自动返还。`), 'error');
           persistState();
         } finally {
-          if (!pendingGenerationTask?.taskId) {
+          if (!getPendingGenerationTaskIds().length) {
             generateBtn.disabled = false;
             updateGenerateButtonLabel(config.generateBtnLabel);
           }

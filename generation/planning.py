@@ -442,6 +442,137 @@ def build_style_reference_text(selected_style) -> str:
     )
 
 
+MAIN_IMAGE_COVER_TYPES = [
+    {
+        'type': 'standard_cover',
+        'title': '标准爆款封面主图',
+        'goal': '生成最稳的电商第一张主图，产品主体清晰突出，背景干净高级。',
+        'keywords': ['商品封面', '主体突出', '干净高级'],
+        'direction': '产品居中或黄金比例构图，主体占画面主要视觉区域，背景克制高级，适合直接作为商品第一张展示图。',
+    },
+    {
+        'type': 'reference_style_cover',
+        'title': '参考图风格封面主图',
+        'goal': '参考上传参考图的构图、光影、背景氛围和视觉风格，但不替换产品主体。',
+        'keywords': ['参考风格', '光影氛围', '封面主图'],
+        'direction': '吸收参考图的构图、光影、背景氛围和色调，必须以商品图中的产品作为唯一主体。',
+    },
+    {
+        'type': 'selling_point_atmosphere_cover',
+        'title': '核心卖点氛围封面主图',
+        'goal': '把核心卖点转化为封面主图的视觉氛围，而不是说明图。',
+        'keywords': ['卖点氛围', '视觉重点', '封面表达'],
+        'direction': '根据核心卖点营造视觉氛围，让用户第一眼感受到产品优势，不添加文字说明、图标标注或详情页元素。',
+    },
+    {
+        'type': 'high_ctr_cover',
+        'title': '高点击率封面主图',
+        'goal': '增强第一眼点击吸引力，让产品轮廓更醒目。',
+        'keywords': ['高点击率', '强吸引力', '主体醒目'],
+        'direction': '画面对比更强，主体更醒目，轮廓更清晰，视觉吸引力更高，但不要夸张变形，不要添加促销文字。',
+    },
+    {
+        'type': 'premium_cover',
+        'title': '高级质感封面主图',
+        'goal': '提升产品档次和质感，让产品显得更有价值。',
+        'keywords': ['高级质感', '柔和光影', '产品档次'],
+        'direction': '使用更高级的光影、干净背景、柔和但有层次的质感表达，让产品显得更有档次。',
+    },
+    {
+        'type': 'minimal_clean_cover',
+        'title': '极简干净封面主图',
+        'goal': '让产品主体更清晰、更干净、更接近平台主图审美。',
+        'keywords': ['极简干净', '清晰主体', '平台主图'],
+        'direction': '采用极简干净背景，减少干扰元素，保留高级留白，让产品主体完整、清楚、突出。',
+    },
+    {
+        'type': 'scene_atmosphere_cover',
+        'title': '场景氛围封面主图',
+        'goal': '营造轻场景代入感，但保持产品为绝对主体。',
+        'keywords': ['场景氛围', '主体优先', '封面代入'],
+        'direction': '可以使用轻场景或氛围背景增强代入感，但不能出现详情说明、人群使用说明或复杂功能展示，产品仍是画面绝对主体。',
+    },
+    {
+        'type': 'bright_fresh_cover',
+        'title': '明亮清爽封面主图',
+        'goal': '生成更轻快、明亮、干净的商品封面主图。',
+        'keywords': ['明亮清爽', '轻快干净', '消费吸引'],
+        'direction': '使用明亮清爽的色调和干净光线，让画面更轻快、更易点击，产品主体保持清晰完整。',
+    },
+    {
+        'type': 'dark_premium_cover',
+        'title': '深色高级封面主图',
+        'goal': '生成更高端、更有视觉冲击力的封面主图。',
+        'keywords': ['深色高级', '视觉冲击', '高端质感'],
+        'direction': '使用深色或低调高级背景与精致光影，增强高端感和视觉冲击，但不得弱化产品真实颜色和结构。',
+    },
+    {
+        'type': 'backup_best_cover',
+        'title': '备用爆款封面主图',
+        'goal': '综合前面方向再生成一个可选封面主图。',
+        'keywords': ['备用封面', '爆款候选', '综合优化'],
+        'direction': '综合主体突出、参考图风格、卖点氛围、高点击率和高级质感，生成一张可作为备用封面的爆款主图。',
+    },
+]
+
+MAIN_IMAGE_COVER_TITLES = {item['title'] for item in MAIN_IMAGE_COVER_TYPES}
+
+
+def build_main_image_cover_plan(platform: str, selling_text: str, output_count: int, country: str, text_type: str, image_size_ratio: str, selected_style=None, product_json=None):
+    normalized_count = min(max(int(output_count or 0), 0), len(MAIN_IMAGE_COVER_TYPES))
+    selected_types = MAIN_IMAGE_COVER_TYPES[:normalized_count]
+    style_reference = build_style_reference_text(selected_style)
+    product_json_text = build_product_json_prompt_text(product_json)
+    shared_prompt = (
+        '生成一张电商商品封面主图。这张图必须适合作为商品第一张展示图使用。\n'
+        '主图生成只做多版本商品封面主图，不做详情页、不做功能说明图、不做尺寸图、不做人群图、不做对比图、不做细节放大图。\n'
+        '产品图用于锁定产品主体，必须保持产品外观、结构、颜色、材质、比例、细节一致。\n'
+        '参考图只用于学习构图、光影、背景氛围、色调和视觉风格，不得替换产品主体。\n'
+        '核心卖点只用于影响封面主图的氛围和视觉重点，不生成说明图、标签图或详情页风格图片。\n'
+        '禁止添加文字、水印、乱码、促销标签、参数标注、功能图标、尺寸说明、材质拆解和对比布局。\n'
+        '产品主体必须清晰、完整、突出，是画面绝对视觉中心。\n'
+        f'平台：{platform or "亚马逊"}\n'
+        f'国家市场：{country or "中国"}\n'
+        f'图片比例：{image_size_ratio or "1:1"}\n'
+        f'核心卖点：{selling_text or "（未填写）"}\n'
+        f'风格参考：\n{style_reference}\n'
+        f'不可变商品特征：\n{product_json_text}'
+    )
+    items = []
+    for index, item in enumerate(selected_types, start=1):
+        items.append(
+            {
+                'sort': index,
+                'type': item['title'],
+                'title': item['title'],
+                'keywords': item['keywords'],
+                'prompt': f'{shared_prompt}\n\n本张方向：{item["title"]}。\n目标：{item["goal"]}\n执行方式：{item["direction"]}',
+                'type_tag': 'Cover',
+                'module': 'opening_narrative',
+                'story_role': '商品封面主图候选',
+                'decision_task': item['goal'],
+                'info_density': 'low',
+                'scene_required': False,
+                'scene_type': '封面主图氛围',
+                'camera_shot': '商品主体清晰完整展示',
+                'subject_angle': '以最适合商品首图的角度展示',
+                'human_presence': 'none',
+                'action_type': '静态主图陈列',
+                'layout_anchor': '商品主体居中或黄金比例突出',
+                'layout_style': '无文字封面主图',
+                'font_style': '无文字',
+                'color_scheme': '匹配商品和参考图氛围的干净配色',
+                'decor_elements': [],
+                'must_differ_from': [],
+            }
+        )
+    return {
+        'summary': f'已规划 {normalized_count} 张商品封面主图候选，全部仅用于主图生成，不包含详情页、尺寸、材质、人群、对比或细节说明图。',
+        'output_count': normalized_count,
+        'items': items,
+    }
+
+
 def parse_product_json(text: str):
     try:
         payload = parse_json_candidate(text, '商品结构化信息格式异常')

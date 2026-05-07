@@ -84,6 +84,7 @@ from generation.planning import (
     build_suite_plan_prompt,
     parse_suite_plan,
     build_suite_plan,
+    build_main_image_cover_plan,
     parse_fashion_scene_plan,
     build_fashion_scene_plan_prompt,
     build_fashion_scene_plan,

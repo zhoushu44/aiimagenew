@@ -402,6 +402,7 @@ body.fashion-page .control-rail {
 .action-btn,
 .style-btn,
 .more-btn,
+.main-image-btn,
 .generate-model-btn,
 .upload-model-btn,
 .preview-nav,
@@ -453,6 +454,7 @@ body.fashion-page .control-rail {
 .upload-model-btn:hover,
 .tool-btn:hover,
 .more-btn:hover,
+.main-image-btn:hover,
 .card-action-btn:hover,
 .title-copy-btn:hover,
 .model-tab:hover,
@@ -1191,6 +1193,11 @@ textarea { min-height: 88px; resize: vertical; }
   cursor: pointer;
 }
 .more-actions { position: relative; }
+.more-actions-row {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 8px;
+}
 .more-btn {
   width: 100%;
   min-height: 40px;
