@@ -51,6 +51,7 @@ from supabase_client import (
 )
 from generation import (
     get_ark_client, get_mode1_client, get_mode2_client, get_mode3_client,
+    get_mode3_api_key,
     call_mode1_image_edit, call_mode1_text2image,
     call_mode2_image_edit, call_mode2_text2image, call_mode2_images_generate_with_retry,
     call_mode3_image_edit, call_mode3_text2image,
@@ -3546,7 +3547,7 @@ def generate_mode3_image_edit():
         def build_mode3_image_edit_result(task_id: str):
             product_json = extract_product_json_from_image_payloads(prompt, image_payloads)
             enriched_prompt = build_enriched_image_prompt(prompt, image_size_ratio, '中文', '中国', product_json, 'mode3-image-edit')
-            generated_item, model = call_mode3_image_edit(get_mode3_client(), enriched_prompt, image_payloads, image_size_ratio)
+            generated_item, model = call_mode3_image_edit(get_mode3_api_key(), enriched_prompt, image_payloads, image_size_ratio)
             response = build_mode2_success_response(task_id, 'mode3-image-edit', enriched_prompt, model, generated_item)
             response['mode'] = 'mode3-image-edit'
             return response
@@ -3601,7 +3602,7 @@ def generate_mode3_text2image():
             return jsonify({'success': False, 'error': 'prompt 不能为空'}), 400
 
         task_id = uuid.uuid4().hex
-        generated_item, model = call_mode3_text2image(get_mode3_client(), prompt)
+        generated_item, model = call_mode3_text2image(get_mode3_api_key(), prompt)
         return jsonify(build_mode2_success_response(task_id, 'mode3-text2image', prompt, model, generated_item))
     except RequestEntityTooLarge as exc:
         return handle_request_entity_too_large(exc)

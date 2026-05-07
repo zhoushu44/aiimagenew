@@ -139,16 +139,16 @@ gunicorn -w 4 -b 0.0.0.0:5078 --timeout 300 --access-logfile - app:app
 
 ### 缓存策略
 
-| 数据类型 | TTL | 说明 |
-|---------|-----|------|
-| 任务状态 | 30秒 | 任务查询缓存，状态更新时自动失效 |
-| 用户积分 | 60秒 | 积分查询缓存，消费/充值时自动失效 |
-| 用户信息 | 300秒 | 用户资料缓存 |
-| VIP配置 | 3600秒 | VIP套餐配置缓存 |
+| 数据类型  | TTL   | 说明                |
+| ----- | ----- | ----------------- |
+| 任务状态  | 30秒   | 任务查询缓存，状态更新时自动失效  |
+| 用户积分  | 60秒   | 积分查询缓存，消费/充值时自动失效 |
+| 用户信息  | 300秒  | 用户资料缓存            |
+| VIP配置 | 3600秒 | VIP套餐配置缓存         |
 
 ### 安全配置
 
-**SECRET_KEY** 是用于保护WebSocket连接和Session安全的密钥：
+**SECRET\_KEY** 是用于保护WebSocket连接和Session安全的密钥：
 
 - **作用**：加密Session、保护WebSocket连接、防止CSRF攻击
 - **生产环境**：必须配置，使用随机生成的64位十六进制字符串
@@ -172,10 +172,10 @@ redis-cli -h <host> -p <port> -a <password> info memory
 
 通过 GitHub Action 自动构建并推送 Docker 镜像，**不需要本地手动执行**。
 
-| 触发条件 | 标签 |
-|----------|------|
-| 推送到 `main` 分支 | `11.4` + `latest` |
-| GitHub Actions 手动触发 | `11.4` + `latest` |
+| 触发条件                | 标签                |
+| ------------------- | ----------------- |
+| 推送到 `main` 分支       | `11.5` + `latest` |
+| GitHub Actions 手动触发 | `11.5` + `latest` |
 
 - 构建平台：`linux/amd64` + `linux/arm64`
 - 镜像内使用 Gunicorn 运行 Flask 应用：`gunicorn -w 4 -b 0.0.0.0:5078 --timeout 300 --access-logfile - app:app`
@@ -213,6 +213,7 @@ proxy_buffering off;
 ```
 
 GitHub 仓库需要配置 Secrets：
+
 - `DOCKER_HUB_USERNAME` — Docker Hub 用户名
 - `DOCKER_HUB_TOKEN` — Docker Hub Access Token
 
@@ -236,160 +237,170 @@ Generation task trace summary polled_succeeded: {...}
 
 重点耗时字段：
 
-| 字段 | 含义 |
-|------|------|
-| `task_queue_ms` | 任务创建到后台开始执行 |
-| `backend_until_ready_ms` | 后台开始执行到结果 ready |
-| `storage_ms` | 图片保存/COS 上传耗时 |
-| `poll_after_success_ms` | 后端成功后多久被轮询发现 |
-| `frontendPollDetectMs` | 前端检测到任务成功的延迟 |
-| `frontendRenderMs` | 前端结果卡片渲染耗时 |
-| `frontendImageLoadMs` | 图片元素渲染后到 load 完成 |
-| `frontendDisplayDelayMs` | 后端成功到图片真正显示完成 |
-| `totalEndToEndMs` | 任务创建到图片显示完成总耗时 |
+| 字段                       | 含义               |
+| ------------------------ | ---------------- |
+| `task_queue_ms`          | 任务创建到后台开始执行      |
+| `backend_until_ready_ms` | 后台开始执行到结果 ready  |
+| `storage_ms`             | 图片保存/COS 上传耗时    |
+| `poll_after_success_ms`  | 后端成功后多久被轮询发现     |
+| `frontendPollDetectMs`   | 前端检测到任务成功的延迟     |
+| `frontendRenderMs`       | 前端结果卡片渲染耗时       |
+| `frontendImageLoadMs`    | 图片元素渲染后到 load 完成 |
+| `frontendDisplayDelayMs` | 后端成功到图片真正显示完成    |
+| `totalEndToEndMs`        | 任务创建到图片显示完成总耗时   |
 
----
+***
 
 ## .env 配置参考
 
 ### Flask
 
-| 配置项 | 默认值 | 说明 |
-|--------|--------|------|
-| `HOST` | `0.0.0.0` | 监听地址 |
-| `PORT` | `5078` | 监听端口 |
-| `FLASK_DEBUG` | `false` | 调试模式 |
-| `APP_MODE` | `mode1` | 生图模式：`mode1` / `mode2` / `mode3`（可在 Settings 页面切换） |
-| `UPLOAD_MAX_BYTES` | `15728640` | 上传总大小限制（15MB），可以在 Settings 页面调整 |
-| `UPLOAD_MAX_FILE_BYTES` | `8388608` | 单张图片大小限制（8MB） |
-| `GENERATED_SUITE_RETENTION_DAYS` | `7` | 生成图片保留天数 |
-| `GENERATED_SUITE_RETENTION_COUNT` | `20` | 最多保留的任务目录数 |
+| 配置项                               | 默认值        | 说明                                                 |
+| --------------------------------- | ---------- | -------------------------------------------------- |
+| `HOST`                            | `0.0.0.0`  | 监听地址                                               |
+| `PORT`                            | `5078`     | 监听端口                                               |
+| `FLASK_DEBUG`                     | `false`    | 调试模式                                               |
+| `APP_MODE`                        | `mode1`    | 生图模式：`mode1` / `mode2` / `mode3`（可在 Settings 页面切换） |
+| `UPLOAD_MAX_BYTES`                | `15728640` | 上传总大小限制（15MB），可以在 Settings 页面调整                    |
+| `UPLOAD_MAX_FILE_BYTES`           | `8388608`  | 单张图片大小限制（8MB）                                      |
+| `GENERATED_SUITE_RETENTION_DAYS`  | `7`        | 生成图片保留天数                                           |
+| `GENERATED_SUITE_RETENTION_COUNT` | `20`       | 最多保留的任务目录数                                         |
 
 ### OpenAI 兼容接口（Chat / 套图规划 / 风格分析）
 
-| 配置项 | 必填 | 说明 |
-|--------|------|------|
-| `OPENAI_API_KEY` | 是 | 接口密钥 |
-| `OPENAI_BASE_URL` | 是 | 接口地址 |
-| `OPENAI_MODEL` | 是 | 模型名 |
-| `CHAT_FALLBACK_TO_ARK` | 否 | 主接口失败时自动切 Ark（默认 `auto`） |
-| `ARK_CHAT_API_KEY` | 否 | 备选 Ark Chat 密钥 |
-| `ARK_CHAT_BASE_URL` | 否 | 备选 Ark Chat 地址 |
-| `ARK_CHAT_MODEL` | 否 | 备选 Ark Chat 模型 |
-| `SUITE_PLAN_TIMEOUT_SECONDS` | 否 | 套图规划超时秒数（默认 `180`，最小 `60`） |
+| 配置项                          | 必填 | 说明                         |
+| ---------------------------- | -- | -------------------------- |
+| `OPENAI_API_KEY`             | 是  | 接口密钥                       |
+| `OPENAI_BASE_URL`            | 是  | 接口地址                       |
+| `OPENAI_MODEL`               | 是  | 模型名                        |
+| `CHAT_FALLBACK_TO_ARK`       | 否  | 主接口失败时自动切 Ark（默认 `auto`）   |
+| `ARK_CHAT_API_KEY`           | 否  | 备选 Ark Chat 密钥             |
+| `ARK_CHAT_BASE_URL`          | 否  | 备选 Ark Chat 地址             |
+| `ARK_CHAT_MODEL`             | 否  | 备选 Ark Chat 模型             |
+| `SUITE_PLAN_TIMEOUT_SECONDS` | 否  | 套图规划超时秒数（默认 `180`，最小 `60`） |
 
 ### Mode1 图片生成（Ark 豆包）
 
-| 配置项 | 默认值 | 说明 |
-|--------|--------|------|
-| `MODE1_IMAGE_API_KEY` | — | API 密钥 |
-| `MODE1_IMAGE_BASE_URL` | `https://ark.cn-beijing.volces.com/api/v3` | 接口地址 |
-| `MODE1_IMAGE_MODEL` | `doubao-seedream-5-0-260128` | 生图模型 |
+| 配置项                    | 默认值                                        | 说明                                          |
+| ---------------------- | ------------------------------------------ | ------------------------------------------- |
+| `MODE1_IMAGE_API_KEY`  | —                                          | API 密钥，**支持逗号分隔配置多个 Key 实现 Round-Robin 轮询** |
+| `MODE1_IMAGE_BASE_URL` | `https://ark.cn-beijing.volces.com/api/v3` | 接口地址                                        |
+| `MODE1_IMAGE_MODEL`    | `doubao-seedream-5-0-260128`               | 生图模型                                        |
 
 ### Mode2 图片生成（即梦）
 
-| 配置项 | 默认值 | 说明 |
-|--------|--------|------|
-| `MODE2_IMAGE_API_KEY` | `any-value` | API 密钥 |
-| `MODE2_IMAGE_BASE_URL` | — | 接口地址 |
-| `MODE2_IMAGE_MODEL` | `jimeng-4.6` | 生图模型 |
-| `MODE2_SAMPLE_STRENGTH` | `0.65` | 参考图强度 |
-| `MODE2_ALLOWED_IMAGE_HOSTS` | — | 远程图片域名白名单 |
+| 配置项                         | 默认值          | 说明                                          |
+| --------------------------- | ------------ | ------------------------------------------- |
+| `MODE2_IMAGE_API_KEY`       | `any-value`  | API 密钥，**支持逗号分隔配置多个 Key 实现 Round-Robin 轮询** |
+| `MODE2_IMAGE_BASE_URL`      | —            | 接口地址                                        |
+| `MODE2_IMAGE_MODEL`         | `jimeng-4.6` | 生图模型                                        |
+| `MODE2_SAMPLE_STRENGTH`     | `0.65`       | 参考图强度                                       |
+| `MODE2_ALLOWED_IMAGE_HOSTS` | —            | 远程图片域名白名单                                   |
 
 ### Mode3 图片生成（gpt-image-2）
 
-| 配置项 | 默认值 | 说明 |
-|--------|--------|------|
-| `MODE3_IMAGE_API_KEY` | — | API 密钥 |
-| `MODE3_IMAGE_BASE_URL` | `https://code.ciyuanapi.xyz/v1` | 接口地址 |
-| `MODE3_IMAGE_MODEL` | `gpt-image-2` | 生图模型 |
+| 配置项                    | 默认值                             | 说明                                          |
+| ---------------------- | ------------------------------- | ------------------------------------------- |
+| `MODE3_IMAGE_API_KEY`  | —                               | API 密钥，**支持逗号分隔配置多个 Key 实现 Round-Robin 轮询** |
+| `MODE3_IMAGE_BASE_URL` | `https://code.ciyuanapi.xyz/v1` | 接口地址                                        |
+| `MODE3_IMAGE_MODEL`    | `gpt-image-2`                   | 生图模型                                        |
 
 以上均支持 fallback 到 `IMAGE_API_KEY` / `IMAGE_BASE_URL` / `IMAGE_MODEL`（通用配置），即只需要在对应 mode 不同时才写 `MODE?_` 前缀。
+
+### 全局并发控制 & 熔断
+
+| 配置项                                | 默认值  | 说明                            |
+| ---------------------------------- | ---- | ----------------------------- |
+| `API_KEY_CONCURRENCY_LIMIT`        | `10` | 每 Key 最大并发数，总并发 = Key 数量 × 此值 |
+| `API_KEY_FAILURE_THRESHOLD`        | `3`  | Key 连续失败 N 次触发熔断隔离            |
+| `API_KEY_FAILURE_COOLDOWN_SECONDS` | `60` | 熔断冷却时间（秒），过后自动恢复              |
+
+> **多 Key 示例**：`MODE3_IMAGE_API_KEY=sk-xxx1,sk-xxx2,sk-xxx3` — 3 个 Key 自动 Round-Robin 轮询，总并发 = 3 × 10 = 30。单个 Key 连续失败 3 次自动隔离 60s，期间轮询跳过该 Key。
 
 ### 并行生成（所有 mode 通用）
 
 `PARALLEL_WORKERS`、`RETRY_ATTEMPTS`、`RETRY_DELAY_SECONDS`、`PARTIAL_RETRY_ATTEMPTS`、`SEQUENTIAL_GENERATION`、`TIMEOUT_SECONDS` 对所有 mode 生效。如需单独覆盖，在对应 env var 前加 `MODE1_`/`MODE2_`/`MODE3_` 前缀，优先级：`MODE3_PARALLEL_WORKERS` > `PARALLEL_WORKERS` > 默认值 3。
 
-| 配置项 | 默认值 | 说明 |
-|--------|--------|------|
-| `PARALLEL_WORKERS` | `3` | 并发线程数 |
-| `RETRY_ATTEMPTS` | `2` | 单张重试次数 |
-| `RETRY_DELAY_SECONDS` | `0.5` | 重试间隔秒数 |
-| `PARTIAL_RETRY_ATTEMPTS` | `2` | 部分失败补图轮次 |
-| `SEQUENTIAL_GENERATION` | `auto` | 串行/并行策略 |
-| `TIMEOUT_SECONDS` | `180` | 单次请求超时秒数 |
+| 配置项                      | 默认值    | 说明       |
+| ------------------------ | ------ | -------- |
+| `PARALLEL_WORKERS`       | `3`    | 并发线程数    |
+| `RETRY_ATTEMPTS`         | `2`    | 单张重试次数   |
+| `RETRY_DELAY_SECONDS`    | `0.5`  | 重试间隔秒数   |
+| `PARTIAL_RETRY_ATTEMPTS` | `2`    | 部分失败补图轮次 |
+| `SEQUENTIAL_GENERATION`  | `auto` | 串行/并行策略  |
+| `TIMEOUT_SECONDS`        | `180`  | 单次请求超时秒数 |
 
 ### 服饰成图质检
 
-| 配置项 | 默认值 | 说明 |
-|--------|--------|------|
+| 配置项                                  | 默认值 | 说明         |
+| ------------------------------------ | --- | ---------- |
 | `FASHION_OUTPUT_MAX_VERIFY_ATTEMPTS` | `3` | 成图质检最大重试次数 |
 
 ### Supabase
 
-| 配置项 | 必填 | 说明 |
-|--------|------|------|
-| `SUPABASE_URL` | 是 | 项目 URL（也可用 `SUPABASE_PROJECT_URL`） |
-| `SUPABASE_ANON_KEY` | 是 | 前端 anon key（也可用 `SUPABASE_PUBLISHABLE_KEY`） |
-| `SUPABASE_SERVICE_ROLE_KEY` | 是 | 后端 service role key，严禁暴露（也可用 `SUPABASE_SERVICE_KEY`） |
+| 配置项                         | 必填 | 说明                                                   |
+| --------------------------- | -- | ---------------------------------------------------- |
+| `SUPABASE_URL`              | 是  | 项目 URL（也可用 `SUPABASE_PROJECT_URL`）                   |
+| `SUPABASE_ANON_KEY`         | 是  | 前端 anon key（也可用 `SUPABASE_PUBLISHABLE_KEY`）          |
+| `SUPABASE_SERVICE_ROLE_KEY` | 是  | 后端 service role key，严禁暴露（也可用 `SUPABASE_SERVICE_KEY`） |
 
 ### 积分
 
-| 配置项 | 默认值 | 说明 |
-|--------|--------|------|
-| `POINTS_SIGNUP_BONUS` | `100` | 注册奖励 |
-| `POINTS_DAILY_FREE` | `10` | 每日签到 |
-| `POINTS_RULE_SUITE` | `{"key":"suite","label":"套图","unit_cost":4,"minimum_cost":4,"metric":"output_count"}` | 套图积分规则 |
-| `POINTS_RULE_MODE2` | `{"key":"mode2","label":"AI 生图","unit_cost":4,"minimum_cost":4,"metric":"output_count"}` | mode2 规则 |
-| `POINTS_RULE_APLUS` | `{"key":"aplus","label":"A+ 模块","unit_cost":4,"minimum_cost":4,"metric":"selected_modules_count"}` | A+ 规则 |
-| `POINTS_RULE_FASHION` | `{"key":"fashion","label":"服饰场景","unit_cost":4,"minimum_cost":4,"metric":"selected_scene_count"}` | 服饰规则 |
-| `GENERATION_TASK_TTL_SECONDS` | `7200` | 任务内存 TTL |
-| `GENERATION_TASK_POLL_RETENTION_SECONDS` | `86400` | 轮询保留时间 |
-| `GENERATION_TASK_WORKERS` | `2` | 异步任务线程数 |
+| 配置项                                      | 默认值                                                                                                | 说明       |
+| ---------------------------------------- | -------------------------------------------------------------------------------------------------- | -------- |
+| `POINTS_SIGNUP_BONUS`                    | `100`                                                                                              | 注册奖励     |
+| `POINTS_DAILY_FREE`                      | `10`                                                                                               | 每日签到     |
+| `POINTS_RULE_SUITE`                      | `{"key":"suite","label":"套图","unit_cost":4,"minimum_cost":4,"metric":"output_count"}`              | 套图积分规则   |
+| `POINTS_RULE_MODE2`                      | `{"key":"mode2","label":"AI 生图","unit_cost":4,"minimum_cost":4,"metric":"output_count"}`           | mode2 规则 |
+| `POINTS_RULE_APLUS`                      | `{"key":"aplus","label":"A+ 模块","unit_cost":4,"minimum_cost":4,"metric":"selected_modules_count"}` | A+ 规则    |
+| `POINTS_RULE_FASHION`                    | `{"key":"fashion","label":"服饰场景","unit_cost":4,"minimum_cost":4,"metric":"selected_scene_count"}`  | 服饰规则     |
+| `GENERATION_TASK_TTL_SECONDS`            | `7200`                                                                                             | 任务内存 TTL |
+| `GENERATION_TASK_POLL_RETENTION_SECONDS` | `86400`                                                                                            | 轮询保留时间   |
+| `GENERATION_TASK_WORKERS`                | `2`                                                                                                | 异步任务线程数  |
 
 #### 积分规则 JSON 字段
 
-| 字段 | 类型 | 说明 |
-|------|------|------|
-| `key` | string | 规则标识 |
-| `label` | string | 前端名称 |
-| `unit_cost` | int | 每单位消耗积分 |
-| `minimum_cost` | int | 最低消耗 |
-| `metric` | string | 计数方式 |
+| 字段             | 类型     | 说明      |
+| -------------- | ------ | ------- |
+| `key`          | string | 规则标识    |
+| `label`        | string | 前端名称    |
+| `unit_cost`    | int    | 每单位消耗积分 |
+| `minimum_cost` | int    | 最低消耗    |
+| `metric`       | string | 计数方式    |
 
 积分读取优先级：Supabase `api_settings` 表 → `.env` → 代码默认值。
 
 ### ZPay
 
-| 配置项 | 必填 | 说明 |
-|--------|------|------|
-| `ZPAY_PID` | 是 | 商户 ID |
-| `ZPAY_KEY` | 是 | 签名密钥 |
-| `ZPAY_GATEWAY` | 是 | 支付提交地址 |
-| `ZPAY_NOTIFY_URL` | 是 | 异步回调地址（公网可达） |
-| `ZPAY_RETURN_URL` | 是 | 支付完成跳转地址 |
-| `ZPAY_DEFAULT_CHANNEL` | 否 | 默认通道（`alipay`） |
+| 配置项                    | 必填 | 说明             |
+| ---------------------- | -- | -------------- |
+| `ZPAY_PID`             | 是  | 商户 ID          |
+| `ZPAY_KEY`             | 是  | 签名密钥           |
+| `ZPAY_GATEWAY`         | 是  | 支付提交地址         |
+| `ZPAY_NOTIFY_URL`      | 是  | 异步回调地址（公网可达）   |
+| `ZPAY_RETURN_URL`      | 是  | 支付完成跳转地址       |
+| `ZPAY_DEFAULT_CHANNEL` | 否  | 默认通道（`alipay`） |
 
 ### COS
 
-| 配置项 | 必填 | 说明 |
-|--------|------|------|
-| `COS_SECRET_ID` | 否 | 腾讯云 SecretId |
-| `COS_SECRET_KEY` | 否 | 腾讯云 SecretKey |
-| `COS_REGION` | 否 | 地域（如 `ap-guangzhou`） |
-| `COS_BUCKET` | 否 | **存储桶名**（纯名称，不含域名，如 `aiimg-1234567890`） |
-| `COS_CDN_DOMAIN` | 否 | CDN 域名（不带协议头，如 `cdn.example.com`） |
+| 配置项              | 必填 | 说明                                      |
+| ---------------- | -- | --------------------------------------- |
+| `COS_SECRET_ID`  | 否  | 腾讯云 SecretId                            |
+| `COS_SECRET_KEY` | 否  | 腾讯云 SecretKey                           |
+| `COS_REGION`     | 否  | 地域（如 `ap-guangzhou`）                    |
+| `COS_BUCKET`     | 否  | **存储桶名**（纯名称，不含域名，如 `aiimg-1234567890`） |
+| `COS_CDN_DOMAIN` | 否  | CDN 域名（不带协议头，如 `cdn.example.com`）       |
 
 > **注意**：`COS_BUCKET` 填腾讯云控制台的纯桶名，不要填域名。CDN 加速域名填在 `COS_CDN_DOMAIN`。COS 配置支持 `.env` 和 Settings 页面 `config.json` 两种方式，`cos_utils` 优先读环境变量，其次读取 `config.json` 的 `LOCAL_CONFIG`。
 
 ### 管理员
 
-| 配置项 | 默认值 | 说明 |
-|--------|--------|------|
-| `ADMIN_PASSWORD` | — | 管理员登录密码 |
-| `ADMIN_ALLOWED_PHONE` | — | 允许登录管理后台的手机号 |
+| 配置项                   | 默认值 | 说明           |
+| --------------------- | --- | ------------ |
+| `ADMIN_PASSWORD`      | —   | 管理员登录密码      |
+| `ADMIN_ALLOWED_PHONE` | —   | 允许登录管理后台的手机号 |
 
----
+***
 
 ## API 路由一览
 
@@ -423,7 +434,7 @@ Generation task trace summary polled_succeeded: {...}
   GET|PATCH|POST /api/settings*                      配置管理
 ```
 
----
+***
 
 ## 前端 Key 安全
 
@@ -431,20 +442,20 @@ Generation task trace summary polled_succeeded: {...}
 - 前端 JS 不再硬编码任何 Key
 - `SUPABASE_SERVICE_ROLE_KEY`、`ZPAY_KEY`、各 `API_KEY` 永远不在浏览器出现
 
----
+***
 
 ## Supabase 数据库
 
 ### 必需表
 
-| 表名 | 作用 |
-|------|------|
-| `user_points_balances` | 积分余额 |
-| `user_points_transactions` | 积分流水 |
-| `user_profiles` | 用户扩展（管理员、会员到期） |
-| `zpay_transactions` | ZPay 订单 |
-| `vip_plan_config` | VIP 套餐配置 |
-| `generation_tasks` | 生成任务持久化 |
+| 表名                         | 作用             |
+| -------------------------- | -------------- |
+| `user_points_balances`     | 积分余额           |
+| `user_points_transactions` | 积分流水           |
+| `user_profiles`            | 用户扩展（管理员、会员到期） |
+| `zpay_transactions`        | ZPay 订单        |
+| `vip_plan_config`          | VIP 套餐配置       |
+| `generation_tasks`         | 生成任务持久化        |
 
 迁移 SQL 位于 `supabase/migrations/`。
 
@@ -464,7 +475,7 @@ values ('default', 'plan_2',
 on conflict (config_key) do update set ... ;
 ```
 
----
+***
 
 ## 支付链路
 
@@ -472,7 +483,7 @@ on conflict (config_key) do update set ... ;
 2. **支付回调** `GET|POST /api/pay/notify`：验签 → 查询订单 → 校验金额 → 防重 → 更新状态 → 发放积分/延长会员
 3. **订阅续期**：未过期从原到期日叠加，已过期从当前时间开始
 
----
+***
 
 ## Mode3 技术参考
 
@@ -486,15 +497,25 @@ POST {MODE3_OPENAI_BASE_URL}/images/edits
 
 套图性能基准（6 张，mode3 并行）：
 
-| 阶段 | 耗时 | 说明 |
-|------|------|------|
-| LLM 套图规划 | ~86s | doubao-seed-2-0-mini，prompt ~2.6KB |
-| mode3 并行生成 | ~35s | 9 workers，单张 ~30s |
-| **总计** | **~121s** | 每张平摊 ~20s |
+| 阶段         | 耗时         | 说明                                  |
+| ---------- | ---------- | ----------------------------------- |
+| LLM 套图规划   | \~86s      | doubao-seed-2-0-mini，prompt \~2.6KB |
+| mode3 并行生成 | \~35s      | 9 workers，单张 \~30s                  |
+| **总计**     | **\~121s** | 每张平摊 \~20s                          |
 
----
+***
 
 ## 近期更新
+
+### 2026-05-07 · v11.5
+
+- **多 Key 轮询并发**：所有 mode 的 `MODE?_IMAGE_API_KEY` 支持逗号分隔多个 Key，系统自动 Round-Robin 轮询分配，线程安全受 `threading.Lock` 保护
+- **全局信号量并发控制**：新增 `DynamicSemaphore`，总并发 = Key 数量 × `API_KEY_CONCURRENCY_LIMIT`，跨任务共享，严格不超限
+- **Key 故障自动熔断**：单 Key 连续失败 ≥ 3 次自动隔离 60s，Round-Robin 自动跳过坏 Key，信号量容量动态缩减/恢复
+- **新增配置项**：`API_KEY_CONCURRENCY_LIMIT`（默认 10）、`API_KEY_FAILURE_THRESHOLD`（默认 3）、`API_KEY_FAILURE_COOLDOWN_SECONDS`（默认 60）
+- **Bug 修复**：修复 `call_mode3_image_edit` / `call_mode3_image_generation` 内层重复获取 Key 导致健康上报不一致；修复 `call_mode3_single_image` 中 client 未被使用的问题
+- **真实测试**：3 Key × 10 并发 → 30 并发，串行 3 张（\~96s 总计，3 个不同 Key）、并发 3 张（\~36s 总计，3 个不同 Key）全部通过
+- **Docker 镜像 11.5 + latest**
 
 ### 2026-05-05 · v10.9
 
@@ -553,7 +574,7 @@ POST {MODE3_OPENAI_BASE_URL}/images/edits
 ### 2026-05-03 · v10.2
 
 - **AI 帮写并发优化**：卖点文案与商品结构化提取改为并发执行，总耗时节省 61.4%，首屏等待从 12.77s 降到 6.46s
-- **卖点先展示**：卖点生成完成后立即展示，product_json 后台静默补齐
+- **卖点先展示**：卖点生成完成后立即展示，product\_json 后台静默补齐
 - **A+ 图片生成修复**：修复 `save_generated_image` 返回值解包错误导致首屏主视觉、使用场景图生成失败的问题
 - **Docker 镜像标签**：10.1 → 10.2，GitHub Action 自动打 `10.2` + `latest` 双标签
 
@@ -575,7 +596,7 @@ POST {MODE3_OPENAI_BASE_URL}/images/edits
 
 - **Flask 多线程**：`app.run()` 新增 `threaded=True`，AI 帮写等长耗时请求不再阻塞其他用户的页面加载和 API 调用
 - **Chat HTTP 重试优化**：主 API 调用不再对 HTTP 错误码（503 等）做自动重试，失败立刻走 fallback，节省 4-6s 额外延迟
-- **SSE/流式兼容 + Fallback 完善**：新增 SSE 流式格式解析支持，扩展 fallback token（新增 model_not_found / JSONDecodeError 等），通用 API 兼容性大幅提升
+- **SSE/流式兼容 + Fallback 完善**：新增 SSE 流式格式解析支持，扩展 fallback token（新增 model\_not\_found / JSONDecodeError 等），通用 API 兼容性大幅提升
 - **OpenAI 直连 Ark**：支持将 `OPENAI_API_KEY` / `OPENAI_BASE_URL` / `OPENAI_MODEL` 直接配置为 Ark 豆包的密钥和端点，不走 fallback 直连调用
 - **Docker 镜像标签**：9.7 → 9.8，自动打 `9.8` + `latest` 双标签
 
@@ -589,7 +610,7 @@ POST {MODE3_OPENAI_BASE_URL}/images/edits
 ### 2026-05-02 · v9.6
 
 - **COS 图片存储优化**：COS 客户端改为运行时懒加载，每次通过 `os.getenv()` 实时读取配置，避免 Settings 页面修改后不生效的问题
-- **Chat Fallback 增强**：新增 401 / authentication_error / auth_unavailable / token is expired 等认证类错误 token，主接口 Key 过期时自动切换到 Ark Chat 备用接口
+- **Chat Fallback 增强**：新增 401 / authentication\_error / auth\_unavailable / token is expired 等认证类错误 token，主接口 Key 过期时自动切换到 Ark Chat 备用接口
 - **AI 帮写按钮修复**：页面初始化时自动启用按钮，不再出现加载后 disabled 的情况
 - **Docker 镜像标签**：9.5 → 9.6，自动打 `9.6` + `latest` 双标签
 - **VIP 系统文档**：补充完整的 Supabase 建表 SQL、AI 提示词配置、积分规则与支付链路教程
@@ -611,17 +632,17 @@ POST {MODE3_OPENAI_BASE_URL}/images/edits
 - LLM 全模式切 doubao-seed-2-0-mini（Ark 直连），成本 ¥0.008/套
 - 套图规划 prompt 精简 63%（7KB→2.6KB），规划耗时 -34s
 - 重试间隔全局减半（1.5s→0.5s）
-- b64_json 回退到 url（b64 反慢 17s）
+- b64\_json 回退到 url（b64 反慢 17s）
 - 套图三轮优化：165s→121s（-27%）
 
 ### 2026-04-30
 
-- mode3 套图并发生成（9 workers，9 张图 ~1 分钟）
+- mode3 套图并发生成（9 workers，9 张图 \~1 分钟）
 - 三层断流重试（API 层 + 补图层 + 下载层）
 - A+ 模块 524 自动回退 Ark Chat
 - Supabase JSONB 查询编码修复
 
----
+***
 
 ## 本地验证
 
@@ -636,19 +657,22 @@ python -c "import app; print(len(list(app.app.url_map.iter_rules())), 'routes')"
 python -c "import cos_utils; print(cos_utils.is_cos_enabled())"
 ```
 
----
+***
 
 ## 常见问题
 
 ### 支付回调不生效
+
 1. `ZPAY_NOTIFY_URL` 是否公网可达
 2. `ZPAY_KEY` 是否正确
 3. `/api/pay/notify` 是否返回 `fail`（查看服务端日志中的 ZPAY 日志）
 
 ### 生成后刷新页面看不到结果
+
 1. Supabase 是否执行了 `generation_tasks` 建表 SQL
 2. `SUPABASE_SERVICE_ROLE_KEY` 是否正确
 3. `/api/generation-tasks/<task_id>` 返回 401/404 表示未登录或任务过期
 
 ### 前端提示 Supabase 配置缺失
+
 确保页面通过 Flask 返回（`http://127.0.0.1:5078/`），不是直接双击 HTML 文件。

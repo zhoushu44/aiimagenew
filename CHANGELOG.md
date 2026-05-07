@@ -1,5 +1,59 @@
 # 版本说明 (Changelog)
 
+## v11.5 (2026-05-07)
+
+### 多 Key 轮询并发 & 全局信号量
+
+- **多 Key 轮询**：所有 mode 的 `MODE?_IMAGE_API_KEY` 支持逗号分隔配置多个 Key，系统自动 Round-Robin 轮询分配
+- **`_parse_api_keys()`**：新增解析函数，自动 trim 空格、过滤空值
+- **线程安全**：所有轮询索引受 `threading.Lock` 保护，多线程下完美均匀分布
+- **全局信号量并发控制**：新增 `DynamicSemaphore`（基于 `threading.Condition`），总并发 = Key 数量 × `API_KEY_CONCURRENCY_LIMIT`
+- **跨任务共享**：多个任务共享同一全局信号量，总并发严格不超限
+- **每个 API 请求** 获取/释放信号量槽位（超时 300s），保证资源可控
+
+### Key 故障自动熔断
+
+- **熔断触发**：单个 Key 连续失败 ≥ `API_KEY_FAILURE_THRESHOLD`（默认 3）次 → 自动隔离
+- **冷却恢复**：`API_KEY_FAILURE_COOLDOWN_SECONDS`（默认 60s）冷却期过后自动恢复
+- **熔断期间**：Round-Robin 自动跳过坏 Key，剩余健康 Key 均匀分担
+- **信号量动态缩减**：坏 Key 触发时自动减去对应容量配额（如 3 Key×10=30 → 2 Key×10=20），恢复时自动加回
+- **成功调用清零**：`report_key_success()` 立即清空失败计数并解除熔断
+
+### 新增配置项
+
+| 配置项 | 默认值 | 说明 |
+|--------|--------|------|
+| `API_KEY_CONCURRENCY_LIMIT` | `10` | 每 Key 最大并发数 |
+| `API_KEY_FAILURE_THRESHOLD` | `3` | Key 连续失败 N 次触发熔断 |
+| `API_KEY_FAILURE_COOLDOWN_SECONDS` | `60` | 熔断冷却时间（秒） |
+
+### 并发架构升级
+
+- **两层并发**：全局任务线程池（`GENERATION_TASK_WORKERS`）+ 图片级全局信号量
+- **信号量集成**：`call_mode1_image_edit`、`call_mode2_images_generate_with_retry`、`call_mode3_image_edit`、`call_mode3_image_generation`、`call_image_generation` 全部接入 acquire/release + Key 健康上报
+- **Mode3 实测**：单 Key 10 并发 → 3 Key 30 并发
+- **真实生图测试**：串行 3 张（30.5s/31.0s/34.0s，3 个不同 Key 完美轮转）、3 张并发（35.5s 总耗时，3 个不同 Key）全部通过
+- **熔断机制测试**：坏 Key 自动隔离，信号量 50→40 动态缩减，恢复后 40→50
+
+### Bug 修复
+
+- 修复 `call_mode3_image_edit` 内层重复调用 `get_mode3_api_key()` 导致 Key 健康上报与实际使用 Key 不一致 — 改为接收 `api_key` 参数，不再内部二次获取
+- 修复 `call_mode3_image_generation` 同上问题 — 改为接收 `api_key` 参数
+- 修复 `call_mode3_single_image` 中 `get_mode3_client()` 创建的 client 未被实际使用 — 改为直接用 `get_mode3_api_key()` 传递
+- 修复 `call_mode3_text2image` 无效 `client` 参数 — 改为 `api_key` 参数
+
+### config.py 新增
+
+- `DynamicSemaphore` — 支持动态调整容量的信号量，`acquire(timeout)` / `release()` / `adjust(delta)` / `get_value()`
+- `get_round_robin_api_key(mode)` — 线程安全 Round-Robin 取 Key
+- `acquire_api_slot(timeout=300)` / `release_api_slot()` — 全局信号量槽位管理
+- `report_key_success(key)` / `report_key_failure(key)` — Key 健康状态上报
+- `get_semaphore_stats()` — 监控接口：信号量状态、熔断列表、失败计数
+- `_parse_api_keys(raw_keys)` — 逗号分隔 Key 串解析
+- `_sweep_recovered_keys()` — 自动扫描恢复冷却期结束的 Key
+
+***
+
 ## v11.4 (2026-05-06)
 
 ### 整体复刻功能
@@ -575,6 +629,9 @@
 
 | 版本    | 标签               | 日期         |
 | ----- | ---------------- | ---------- |
+| v11.5 | `11.5`, `latest` | 2026-05-07 |
+| v11.4 | `11.4`, `latest` | 2026-05-06 |
+| v11.3 | `11.3`, `latest` | 2026-05-05 |
 | v11.2 | `11.2`, `latest` | 2026-05-05 |
 | v11.1 | `11.1`, `latest` | 2026-05-05 |
 | v10.9 | `10.9`, `latest` | 2026-05-05 |

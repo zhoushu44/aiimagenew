@@ -20,6 +20,12 @@ from config import (
     get_optional_int_env,
     get_optional_bool_env,
     get_app_mode,
+    _parse_api_keys,
+    get_round_robin_api_key,
+    acquire_api_slot,
+    release_api_slot,
+    report_key_success,
+    report_key_failure,
 )
 from utils import IMAGE_SIZE_RATIO_MAP
 from image_utils import (
@@ -134,9 +140,10 @@ def _common_image_model(default: str = '') -> str:
 
 
 def get_mode1_api_key() -> str:
-    api_key = get_supabase_setting('MODE1_IMAGE_API_KEY', get_optional_env('MODE1_IMAGE_API_KEY', ''))
-    if not api_key:
-        api_key = _common_image_api_key('')
+    keys = _parse_api_keys(get_supabase_setting('MODE1_IMAGE_API_KEY', get_optional_env('MODE1_IMAGE_API_KEY', '')))
+    if keys:
+        return get_round_robin_api_key('mode1')
+    api_key = _common_image_api_key('')
     if not api_key:
         api_key = get_supabase_setting('ARK_API_KEY', get_optional_env('ARK_API_KEY', ''))
     if not api_key:
@@ -161,9 +168,10 @@ def get_mode1_client() -> OpenAI:
 
 
 def get_mode2_api_key() -> str:
-    api_key = get_supabase_setting('MODE2_IMAGE_API_KEY', get_optional_env('MODE2_IMAGE_API_KEY', ''))
-    if not api_key:
-        api_key = _common_image_api_key('any-value')
+    keys = _parse_api_keys(get_supabase_setting('MODE2_IMAGE_API_KEY', get_optional_env('MODE2_IMAGE_API_KEY', '')))
+    if keys:
+        return get_round_robin_api_key('mode2')
+    api_key = _common_image_api_key('any-value')
     return api_key
 
 
@@ -182,9 +190,10 @@ def get_mode2_client() -> OpenAI:
 
 
 def get_mode3_api_key() -> str:
-    api_key = get_supabase_setting('MODE3_IMAGE_API_KEY', get_optional_env('MODE3_IMAGE_API_KEY', ''))
-    if not api_key:
-        api_key = _common_image_api_key('')
+    keys = _parse_api_keys(get_supabase_setting('MODE3_IMAGE_API_KEY', get_optional_env('MODE3_IMAGE_API_KEY', '')))
+    if keys:
+        return get_round_robin_api_key('mode3')
+    api_key = _common_image_api_key('')
     if not api_key:
         api_key = get_supabase_setting('OPENAI_API_KEY', get_optional_env('OPENAI_API_KEY', ''))
     return api_key
@@ -658,7 +667,17 @@ def call_mode1_image_edit(client: OpenAI, prompt: str, image_payloads, image_siz
         },
     }
     log.warning('Mode1 image edit request model=%s size=%s reference_count=%s image_type=%s', model, size, len(image_payloads or []), image_type)
-    response = client.images.generate(**request_payload)
+    api_key = client.api_key
+    if not acquire_api_slot(timeout=300):
+        raise RuntimeError('mode1 图生图获取并发槽位超时')
+    try:
+        response = client.images.generate(**request_payload)
+    except Exception:
+        report_key_failure(api_key)
+        release_api_slot()
+        raise
+    report_key_success(api_key)
+    release_api_slot()
     return pick_generated_image_item(response), model
 
 
@@ -675,14 +694,23 @@ def call_mode2_images_generate_with_retry(client: OpenAI, request_payload: dict,
     retry_delay_seconds = get_mode2_retry_delay_seconds()
     total_attempts = retry_attempts + 1
     last_exc = None
+    api_key = client.api_key
     for attempt_index in range(total_attempts):
+        if not acquire_api_slot(timeout=300):
+            raise RuntimeError('mode2 生图获取并发槽位超时')
         try:
             response = client.images.generate(**request_payload)
             response_error = get_mode2_response_error(response)
             if response_error and is_retryable_mode2_error(Exception(response_error)):
+                report_key_failure(api_key)
+                release_api_slot()
                 raise RetryableMode2ResponseError(response_error)
+            report_key_success(api_key)
+            release_api_slot()
             return response
         except Exception as exc:
+            report_key_failure(api_key)
+            release_api_slot()
             last_exc = exc
             should_retry = attempt_index < retry_attempts and is_retryable_mode2_error(exc)
             if not should_retry:
@@ -721,15 +749,14 @@ def call_mode2_text2image(client: OpenAI, prompt: str, ratio: str, resolution: s
     return generated_item, model
 
 
-def call_mode3_image_generation(client: OpenAI, prompt: str, image_size_ratio: str = '', _logger: logging.Logger | None = None):
+def call_mode3_image_generation(api_key: str, prompt: str, image_size_ratio: str = '', _logger: logging.Logger | None = None):
     log = _logger or logger
     model = get_supabase_setting('MODE3_IMAGE_MODEL', get_optional_env('MODE3_IMAGE_MODEL', 'gpt-image-2'))
     size = get_mode3_image_generation_size(image_size_ratio)
     watermark = get_supabase_setting_bool('MODE3_IMAGE_WATERMARK', get_optional_bool_env('MODE3_IMAGE_WATERMARK', False))
     base_url = get_mode3_base_url()
-    api_key = get_mode3_api_key()
     if not api_key:
-        raise ValueError('mode3 文生图缺少 MODE3_OPENAI_API_KEY')
+        raise ValueError('mode3 文生图缺少 MODE3_IMAGE_API_KEY')
     request_url = f'{base_url}/images/generations'
     data = {
         'model': model,
@@ -743,6 +770,8 @@ def call_mode3_image_generation(client: OpenAI, prompt: str, image_size_ratio: s
     if watermark:
         data['watermark'] = 'true'
     log.warning('Mode3 image generation request model=%s size=%s base_url=%s', model, size, base_url)
+    if not acquire_api_slot(timeout=300):
+        raise RuntimeError('mode3 文生图获取并发槽位超时')
     try:
         response = requests.post(
             request_url,
@@ -751,9 +780,13 @@ def call_mode3_image_generation(client: OpenAI, prompt: str, image_size_ratio: s
             timeout=get_mode3_timeout_seconds(),
         )
     except Exception as exc:
+        report_key_failure(api_key)
+        release_api_slot()
         log.exception('Mode3 image generation request failed before response: model=%s size=%s base_url=%s error=%s', model, size, base_url, exc)
         raise
     if response.status_code >= 400:
+        report_key_failure(api_key)
+        release_api_slot()
         log.warning(
             'Mode3 image generation response error: model=%s size=%s base_url=%s status=%s body=%s',
             model,
@@ -766,21 +799,24 @@ def call_mode3_image_generation(client: OpenAI, prompt: str, image_size_ratio: s
     try:
         payload = response.json()
     except ValueError as exc:
+        report_key_failure(api_key)
+        release_api_slot()
         log.warning('Mode3 image generation response json parse failed: model=%s size=%s base_url=%s body=%s', model, size, base_url, response.text[:500])
         raise ValueError('mode3 文生图接口返回了无效 JSON') from exc
+    report_key_success(api_key)
+    release_api_slot()
     return pick_generated_image_item(payload), model
 
 
-def call_mode3_image_edit(client: OpenAI, prompt: str, image_payloads, image_size_ratio: str = '', _logger: logging.Logger | None = None):
+def call_mode3_image_edit(api_key: str, prompt: str, image_payloads, image_size_ratio: str = '', _logger: logging.Logger | None = None):
     log = _logger or logger
     model = get_supabase_setting('MODE3_IMAGE_MODEL', get_optional_env('MODE3_IMAGE_MODEL', 'gpt-image-2'))
     size = get_mode3_image_edit_size(image_size_ratio)
     watermark = get_supabase_setting_bool('MODE3_IMAGE_WATERMARK', get_optional_bool_env('MODE3_IMAGE_WATERMARK', False))
     reference_instruction = build_mode1_reference_anchor_prompt(len(image_payloads or []))
     base_url = get_mode3_base_url()
-    api_key = get_mode3_api_key()
     if not api_key:
-        raise ValueError('mode3 图生图缺少 MODE3_OPENAI_API_KEY')
+        raise ValueError('mode3 图生图缺少 MODE3_IMAGE_API_KEY')
     request_url = f'{base_url}/images/edits'
     data = {
         'model': model,
@@ -808,6 +844,8 @@ def call_mode3_image_edit(client: OpenAI, prompt: str, image_payloads, image_siz
         len(files),
         base_url,
     )
+    if not acquire_api_slot(timeout=300):
+        raise RuntimeError('mode3 图生图获取并发槽位超时')
     try:
         response = requests.post(
             request_url,
@@ -817,9 +855,13 @@ def call_mode3_image_edit(client: OpenAI, prompt: str, image_payloads, image_siz
             timeout=get_mode3_timeout_seconds(),
         )
     except Exception as exc:
+        report_key_failure(api_key)
+        release_api_slot()
         log.exception('Mode3 image edit request failed before response: model=%s size=%s reference_count=%s base_url=%s error=%s', model, size, len(files), base_url, exc)
         raise
     if response.status_code >= 400:
+        report_key_failure(api_key)
+        release_api_slot()
         log.warning(
             'Mode3 image edit response error: model=%s size=%s reference_count=%s base_url=%s status=%s body=%s',
             model,
@@ -833,13 +875,17 @@ def call_mode3_image_edit(client: OpenAI, prompt: str, image_payloads, image_siz
     try:
         payload = response.json()
     except ValueError as exc:
+        report_key_failure(api_key)
+        release_api_slot()
         log.warning('Mode3 image edit response json parse failed: model=%s size=%s reference_count=%s base_url=%s body=%s', model, size, len(files), base_url, response.text[:500])
         raise ValueError('mode3 图生图接口返回了无效 JSON') from exc
+    report_key_success(api_key)
+    release_api_slot()
     return pick_generated_image_item(payload), model
 
 
-def call_mode3_text2image(client: OpenAI, prompt: str):
-    generated_item, model = call_mode3_image_generation(client, prompt, '')
+def call_mode3_text2image(api_key: str, prompt: str):
+    generated_item, model = call_mode3_image_generation(api_key, prompt, '')
     return generated_item, model
 
 
@@ -1038,10 +1084,11 @@ def call_mode2_images_parallel_with_partial_retry(prompt: str, image_payloads, m
 
 
 def call_mode3_single_image(prompt: str, image_payloads, image_size_ratio: str = '', text_type: str = '', country: str = '', product_json=None, image_type: str = '', plan_item=None, all_plan_types=None):
+    api_key = get_mode3_api_key()
     if image_payloads:
-        generated_item, _model = call_mode3_image_edit(get_mode3_client(), prompt, image_payloads, image_size_ratio)
+        generated_item, _model = call_mode3_image_edit(api_key, prompt, image_payloads, image_size_ratio)
     else:
-        generated_item, _model = call_mode3_image_generation(get_mode3_client(), prompt, image_size_ratio)
+        generated_item, _model = call_mode3_image_generation(api_key, prompt, image_size_ratio)
     return generated_item
 
 
@@ -1164,7 +1211,17 @@ def call_image_generation(client: OpenAI, prompt: str, image_payloads, image_siz
     request_payload['extra_body'] = extra_body
     log.warning('ARK image request extra_body: %s', json.dumps(extra_body, ensure_ascii=False))
 
-    response = client.images.generate(**request_payload)
+    api_key = client.api_key
+    if not acquire_api_slot(timeout=300):
+        raise RuntimeError('call_image_generation 获取并发槽位超时')
+    try:
+        response = client.images.generate(**request_payload)
+    except Exception:
+        report_key_failure(api_key)
+        release_api_slot()
+        raise
+    report_key_success(api_key)
+    release_api_slot()
     return collect_generated_images(response)
 
 

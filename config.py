@@ -290,3 +290,212 @@ def normalize_app_mode(value: str | None) -> str:
 
 def get_app_mode() -> str:
     return normalize_app_mode(get_supabase_setting('APP_MODE', 'mode1'))
+
+
+class DynamicSemaphore:
+
+    def __init__(self, value: int = 0):
+        self._cond = threading.Condition()
+        self._value = value
+
+    def acquire(self, timeout: float = None) -> bool:
+        with self._cond:
+            if timeout is not None and timeout > 0:
+                deadline = time.time() + timeout
+                while self._value <= 0:
+                    remaining = deadline - time.time()
+                    if remaining <= 0:
+                        return False
+                    self._cond.wait(remaining)
+                self._value -= 1
+                return True
+            while self._value <= 0:
+                self._cond.wait()
+            self._value -= 1
+            return True
+
+    def release(self):
+        with self._cond:
+            self._value += 1
+            self._cond.notify()
+
+    def adjust(self, delta: int):
+        with self._cond:
+            self._value += delta
+            if delta > 0:
+                self._cond.notify_all()
+
+    def get_value(self) -> int:
+        with self._cond:
+            return self._value
+
+
+_round_robin_indices: dict[str, int] = {}
+_round_robin_locks: dict[str, threading.Lock] = {}
+_key_failure_counts: dict[str, int] = {}
+_key_circuit_breaker_until: dict[str, float] = {}
+
+_global_api_semaphore: DynamicSemaphore | None = None
+_semaphore_init_lock = threading.Lock()
+_semaphore_initialized = False
+
+
+def _parse_api_keys(raw_keys: str) -> list[str]:
+    if not raw_keys or not raw_keys.strip():
+        return []
+    return [k.strip() for k in raw_keys.split(',') if k.strip()]
+
+
+def _get_api_concurrency_limit() -> int:
+    return max(get_supabase_setting_int(
+        'API_KEY_CONCURRENCY_LIMIT',
+        get_optional_int_env('API_KEY_CONCURRENCY_LIMIT', 10),
+    ), 1)
+
+
+def _get_api_failure_threshold() -> int:
+    return max(get_supabase_setting_int(
+        'API_KEY_FAILURE_THRESHOLD',
+        get_optional_int_env('API_KEY_FAILURE_THRESHOLD', 3),
+    ), 1)
+
+
+def _get_api_failure_cooldown() -> float:
+    raw = get_supabase_setting(
+        'API_KEY_FAILURE_COOLDOWN_SECONDS',
+        get_optional_env('API_KEY_FAILURE_COOLDOWN_SECONDS', '60'),
+    )
+    try:
+        return max(float(raw), 1.0)
+    except ValueError:
+        return 60.0
+
+
+def _get_mode_keys(mode: str) -> list[str]:
+    mode_num = mode[-1]
+    key_name = f'MODE{mode_num}_IMAGE_API_KEY'
+    raw = get_supabase_setting(key_name, get_optional_env(key_name, ''))
+    if not raw:
+        if mode_num == '1':
+            raw = get_supabase_setting('ARK_API_KEY', get_optional_env('ARK_API_KEY', ''))
+        elif mode_num == '3':
+            raw = get_supabase_setting('OPENAI_API_KEY', get_optional_env('OPENAI_API_KEY', ''))
+        if not raw:
+            raw = get_supabase_setting('IMAGE_API_KEY', get_optional_env('IMAGE_API_KEY', ''))
+    return _parse_api_keys(raw)
+
+
+def _is_circuit_broken(key: str) -> bool:
+    until = _key_circuit_breaker_until.get(key, 0)
+    return until > time.time()
+
+
+def _count_healthy_keys_for_mode(mode: str) -> int:
+    keys = _get_mode_keys(mode)
+    return sum(1 for k in keys if not _is_circuit_broken(k))
+
+
+def _calculate_semaphore_capacity() -> int:
+    limit = _get_api_concurrency_limit()
+    total = 0
+    for mode in ('mode1', 'mode2', 'mode3'):
+        total += _count_healthy_keys_for_mode(mode) * limit
+    return max(total, limit)
+
+
+def _init_semaphore():
+    global _global_api_semaphore, _semaphore_initialized
+    with _semaphore_init_lock:
+        if _semaphore_initialized:
+            return
+        capacity = _calculate_semaphore_capacity()
+        _global_api_semaphore = DynamicSemaphore(capacity)
+        _semaphore_initialized = True
+
+
+def _adjust_semaphore_for_key_change():
+    if _global_api_semaphore is None:
+        return
+    new_capacity = _calculate_semaphore_capacity()
+    current = _global_api_semaphore.get_value()
+    delta = new_capacity - current
+    if delta != 0:
+        _global_api_semaphore.adjust(delta)
+
+
+def _sweep_recovered_keys():
+    now = time.time()
+    recovered = False
+    for key, until in list(_key_circuit_breaker_until.items()):
+        if until <= now:
+            _key_circuit_breaker_until.pop(key, None)
+            _key_failure_counts.pop(key, None)
+            recovered = True
+    if recovered:
+        _adjust_semaphore_for_key_change()
+
+
+def get_round_robin_api_key(mode: str) -> str:
+    keys = _get_mode_keys(mode)
+    if not keys:
+        raise ValueError(
+            f'{mode} 没有可用的 API Key，请配置 MODE{mode[-1]}_IMAGE_API_KEY'
+        )
+    _sweep_recovered_keys()
+    lock = _round_robin_locks.get(mode)
+    if lock is None:
+        lock = threading.Lock()
+        _round_robin_locks[mode] = lock
+    now = time.time()
+    with lock:
+        idx = _round_robin_indices.get(mode, -1)
+        for _ in range(len(keys)):
+            idx = (idx + 1) % len(keys)
+            key = keys[idx]
+            if not _is_circuit_broken(key):
+                _round_robin_indices[mode] = idx
+                return key
+        idx = (_round_robin_indices.get(mode, -1) + 1) % len(keys)
+        key = keys[idx]
+        _round_robin_indices[mode] = idx
+        return key
+
+
+def acquire_api_slot(timeout: float = 300) -> bool:
+    _init_semaphore()
+    return _global_api_semaphore.acquire(timeout)
+
+
+def release_api_slot():
+    if _global_api_semaphore is not None:
+        _global_api_semaphore.release()
+
+
+def report_key_success(key: str):
+    cleared = _key_failure_counts.pop(key, None)
+    if cleared is not None:
+        pass
+    until = _key_circuit_breaker_until.pop(key, None)
+    if until is not None:
+        _adjust_semaphore_for_key_change()
+
+
+def report_key_failure(key: str):
+    count = _key_failure_counts.get(key, 0) + 1
+    _key_failure_counts[key] = count
+    threshold = _get_api_failure_threshold()
+    if count >= threshold and not _is_circuit_broken(key):
+        cooldown = _get_api_failure_cooldown()
+        _key_circuit_breaker_until[key] = time.time() + cooldown
+        _adjust_semaphore_for_key_change()
+
+
+def get_semaphore_stats() -> dict:
+    if _global_api_semaphore is None:
+        return {'initialized': False, 'value': 0}
+    return {
+        'initialized': True,
+        'value': _global_api_semaphore.get_value(),
+        'circuit_broken': dict(_key_circuit_breaker_until),
+        'failure_counts': dict(_key_failure_counts),
+    }
