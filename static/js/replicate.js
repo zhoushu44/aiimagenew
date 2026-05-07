@@ -48,6 +48,7 @@
     previewImage: null,
     previewCloseBtn: null,
     previewDownloadBtn: null,
+    previewBackdrop: null,
     sizeSelect: null,
     countSelect: null,
     singleUploadArea: null,
@@ -158,7 +159,7 @@
 
   function updateRegenerateButton() {
     if (elements.regenerateBtn) {
-      elements.regenerateBtn.disabled = state.isGenerating || !state.generatedImageUrl;
+      elements.regenerateBtn.disabled = state.isGenerating || !(state.generatedImages && state.generatedImages.length > 0);
     }
   }
 
@@ -214,7 +215,7 @@
       };
 
       elements.referencePreview.innerHTML = `
-        <img src="${e.target.result}" alt="参考设计图">
+        <img src="${e.target.result}" alt="参考图">
         <button class="reference-delete-btn" type="button" title="删除">×</button>
       `;
       elements.referencePreview.classList.add('has-image');
@@ -234,10 +235,9 @@
 
   function deleteReferenceImage() {
     state.referenceImage = null;
-    
     elements.referencePreview.innerHTML = `
       <div class="preview-placeholder">
-        <div class="placeholder-icon">◈</div>
+        <div class="placeholder-icon">◆</div>
         <div class="placeholder-text">上传参考图</div>
         <div class="placeholder-hint">上传具有明确风格的参考图</div>
       </div>
@@ -259,14 +259,13 @@
     item.className = 'product-item';
     item.innerHTML = `
       <img src="${imageData.dataUrl}" alt="产品图 ${index + 1}">
-      <div class="product-item-number">${index + 1}</div>
-      <button class="product-item-delete" type="button" data-index="${index}">×</button>
+      <button class="product-delete-btn" type="button" data-index="${index}">×</button>
     `;
 
-    const deleteBtn = item.querySelector('.product-item-delete');
+    const deleteBtn = item.querySelector('.product-delete-btn');
     deleteBtn.addEventListener('click', (e) => {
       e.stopPropagation();
-      deleteProductImage(index);
+      deleteProduct(index);
     });
 
     return item;
@@ -276,7 +275,6 @@
     if (!elements.productGrid) return;
 
     elements.productGrid.innerHTML = '';
-
     state.productImages.forEach((imageData, index) => {
       const item = createProductItem(imageData, index);
       elements.productGrid.appendChild(item);
@@ -305,18 +303,16 @@
       };
       reader.readAsDataURL(file);
     });
-
-    event.target.value = '';
   }
 
-  function deleteProductImage(index) {
+  function deleteProduct(index) {
     if (index < 0 || index >= state.productImages.length) return;
 
     state.productImages.splice(index, 1);
     renderProductGrid();
   }
 
-  function handleProductUploadBtnClick() {
+  function handleProductUploadClick() {
     if (state.productImages.length >= MAX_PRODUCTS) {
       alert(`最多只能上传 ${MAX_PRODUCTS} 张产品图`);
       return;
@@ -325,60 +321,32 @@
   }
 
   function showIntroView() {
-    if (elements.introView) {
-      elements.introView.classList.add('active');
-    }
-    if (elements.resultView) {
-      elements.resultView.classList.remove('active');
-    }
+    elements.introView?.classList.add('active');
+    elements.resultView?.classList.remove('active');
   }
 
   function showResultView() {
-    if (elements.introView) {
-      elements.introView.classList.remove('active');
-    }
-    if (elements.resultView) {
-      elements.resultView.classList.add('active');
-    }
+    elements.introView?.classList.remove('active');
+    elements.resultView?.classList.add('active');
   }
 
-  function getGenerationWorkUnits() {
-    const outputCount = Math.max(1, Number.parseInt(state.selectedCount, 10) || 1);
-    if (state.currentTab === 'batch') {
-      return Math.max(1, state.batchImages.length) * outputCount;
-    }
-    if (state.currentTab === 'sku') {
-      return Math.max(1, state.skuProducts.length);
-    }
-    return outputCount;
-  }
+  function setGenerationProgress(progress, text) {
+    if (!elements.generationProgressBar) return;
 
-  function getEstimatedGenerationMs() {
-    const settings = PROGRESS_SETTINGS[state.currentTab] || PROGRESS_SETTINGS.single;
-    return settings.baseMs + getGenerationWorkUnits() * settings.itemMs;
-  }
+    const fill = elements.generationProgressBar.querySelector('.progress-bar-fill');
+    const textEl = elements.generationProgressBar.querySelector('.progress-bar-text');
+    const percentEl = elements.generationProgressBar.querySelector('.progress-bar-percent');
 
-  function getProgressStatusText(progress) {
-    if (progress < 12) return '正在上传素材并创建生成任务...';
-    if (progress < 28) return '正在解析参考图文案和版式...';
-    if (progress < 55) return '正在复刻主图结构并锁定产品主体...';
-    if (progress < 78) return '正在生成高清电商图...';
-    if (progress < 93) return '正在保存结果，请稍候...';
-    return '即将完成...';
-  }
+    state.generationProgress = Math.max(0, Math.min(100, Number(progress) || 0));
 
-  function setGenerationProgress(progress, message) {
-    const nextProgress = Math.max(0, Math.min(100, progress));
-    state.generationProgress = nextProgress;
-
-    const fill = elements.generationProgressBar?.querySelector('.progress-bar-fill');
     if (fill) {
-      fill.style.width = `${nextProgress}%`;
+      fill.style.width = `${state.generationProgress}%`;
     }
-
-    if (elements.resultStatusMessage) {
-      elements.resultStatusMessage.textContent = message || getProgressStatusText(nextProgress);
-      elements.resultStatusMessage.className = 'result-status-message';
+    if (textEl && text) {
+      textEl.textContent = text;
+    }
+    if (percentEl) {
+      percentEl.textContent = `${Math.round(state.generationProgress)}%`;
     }
   }
 
@@ -391,11 +359,13 @@
 
   function startGenerationProgress() {
     stopGenerationProgress();
-
+    const settings = PROGRESS_SETTINGS[state.currentTab] || PROGRESS_SETTINGS.single;
+    const itemCount = state.currentTab === 'batch'
+      ? Math.max(1, state.batchImages.length)
+      : (state.currentTab === 'sku' ? Math.max(1, state.skuProducts.length) : Math.max(1, Number(state.selectedCount) || 1));
     state.generationStartedAt = Date.now();
-    state.generationEstimatedMs = getEstimatedGenerationMs();
-    setGenerationProgress(3, '正在上传素材并创建生成任务...');
-
+    state.generationEstimatedMs = settings.baseMs + itemCount * settings.itemMs;
+    setGenerationProgress(3, '正在生成...');
     state.generationProgressTimer = window.setInterval(() => {
       if (!state.isGenerating) {
         stopGenerationProgress();
@@ -695,7 +665,7 @@
   }
 
   function handleRegenerate() {
-    if (!state.generatedImageUrl && (!state.generatedImages || state.generatedImages.length === 0)) {
+    if (!state.generatedImages || state.generatedImages.length === 0) {
       alert('请先生成结果');
       return;
     }
@@ -876,84 +846,43 @@
       </div>
     `;
     elements.skuPreview.classList.remove('has-image');
-    
     updateGenerateButton();
   }
 
-  function handleSkuPreviewClick() {
-    if (state.skuImage) {
-      return;
-    }
-    elements.skuInput?.click();
-  }
-
-  function updateSkuProductCount() {
-    const count = state.skuProducts.length;
-    if (elements.skuProductCount) {
-      elements.skuProductCount.textContent = `${count}/${MAX_SKU_PRODUCTS} 张`;
-    }
-    if (elements.skuProductListCount) {
-      elements.skuProductListCount.textContent = `${count}/${MAX_SKU_PRODUCTS} 张`;
-    }
-  }
-
-  function toggleSkuProductViews() {
-    if (state.skuProducts.length === 0) {
-      elements.skuProductUploadArea?.removeAttribute('hidden');
-      elements.skuProductListArea?.setAttribute('hidden', '');
-    } else {
-      elements.skuProductUploadArea?.setAttribute('hidden', '');
-      elements.skuProductListArea?.removeAttribute('hidden');
-    }
-  }
-
-  function createSkuProductCard(product, index) {
-    const card = document.createElement('div');
-    card.className = 'sku-product-card';
-    card.innerHTML = `
-      <img src="${product.dataUrl}" alt="SKU ${index + 1}">
-      <div class="sku-product-card-number">${index + 1}</div>
-      <div class="sku-product-card-info">
-        <span class="sku-product-card-label">${product.info || '特殊需求'}</span>
-        <button class="sku-product-card-edit" type="button" data-index="${index}" title="编辑">✎</button>
+  function createSkuProductItem(product, index) {
+    const item = document.createElement('div');
+    item.className = 'sku-product-item';
+    item.innerHTML = `
+      <img src="${product.dataUrl}" alt="SKU产品 ${index + 1}">
+      <div class="sku-product-actions">
+        <button class="sku-product-edit" type="button" data-index="${index}">编辑信息</button>
+        <button class="sku-product-delete" type="button" data-index="${index}">删除</button>
       </div>
+      <div class="sku-product-info">${product.info || '未填写SKU信息'}</div>
     `;
 
-    const editBtn = card.querySelector('.sku-product-card-edit');
-    editBtn.addEventListener('click', (e) => {
-      e.stopPropagation();
-      openSkuEditModal(index);
-    });
-
-    return card;
+    item.querySelector('.sku-product-edit')?.addEventListener('click', () => openSkuEditModal(index));
+    item.querySelector('.sku-product-delete')?.addEventListener('click', () => deleteSkuProduct(index));
+    return item;
   }
 
   function renderSkuProductGrid() {
     if (!elements.skuProductGrid) return;
 
     elements.skuProductGrid.innerHTML = '';
-
     state.skuProducts.forEach((product, index) => {
-      const card = createSkuProductCard(product, index);
-      elements.skuProductGrid.appendChild(card);
+      const item = createSkuProductItem(product, index);
+      elements.skuProductGrid.appendChild(item);
     });
 
-    if (state.skuProducts.length < MAX_SKU_PRODUCTS) {
-      const addCard = document.createElement('div');
-      addCard.className = 'sku-product-add-card';
-      addCard.innerHTML = `
-        <div class="sku-product-add-icon">+</div>
-        <div class="sku-product-add-text">添加</div>
-      `;
-      addCard.addEventListener('click', () => {
-        elements.skuProductInput?.click();
-      });
-      elements.skuProductGrid.appendChild(addCard);
+    if (elements.skuProductCount) {
+      elements.skuProductCount.textContent = `${state.skuProducts.length}/${MAX_SKU_PRODUCTS}`;
     }
-
-    updateSkuProductCount();
-    toggleSkuProductViews();
+    if (elements.skuProductListCount) {
+      elements.skuProductListCount.textContent = String(state.skuProducts.length);
+    }
     updateGenerateButton();
+    updateRegenerateButton();
   }
 
   function handleSkuProductUpload(files) {
@@ -977,149 +906,84 @@
     });
   }
 
-  function handleSkuProductDropzoneClick() {
-    if (state.skuProducts.length >= MAX_SKU_PRODUCTS) {
-      alert(`最多只能上传 ${MAX_SKU_PRODUCTS} 张SKU图片`);
-      return;
-    }
-    elements.skuProductInput?.click();
-  }
-
-  function handleSkuProductInputChange(event) {
-    handleSkuProductUpload(event.target.files || []);
-    event.target.value = '';
-  }
-
-  function handleSkuProductDragover(event) {
-    event.preventDefault();
-    event.stopPropagation();
-    elements.skuProductDropzone?.classList.add('dragover');
-  }
-
-  function handleSkuProductDragleave(event) {
-    event.preventDefault();
-    event.stopPropagation();
-    elements.skuProductDropzone?.classList.remove('dragover');
-  }
-
-  function handleSkuProductDrop(event) {
-    event.preventDefault();
-    event.stopPropagation();
-    elements.skuProductDropzone?.classList.remove('dragover');
-
-    const files = event.dataTransfer?.files;
-    if (files && files.length > 0) {
-      handleSkuProductUpload(files);
-    }
+  function deleteSkuProduct(index) {
+    if (index < 0 || index >= state.skuProducts.length) return;
+    state.skuProducts.splice(index, 1);
+    renderSkuProductGrid();
   }
 
   function openSkuEditModal(index) {
-    if (index < 0 || index >= state.skuProducts.length) return;
+    const product = state.skuProducts[index];
+    if (!product || !elements.skuEditModal || !elements.skuEditTextarea) return;
 
     state.editingSkuIndex = index;
-    const product = state.skuProducts[index];
-
-    if (elements.skuEditTitle) {
-      elements.skuEditTitle.textContent = `SKU ${index + 1} 产品信息`;
-    }
-    if (elements.skuEditTextarea) {
-      elements.skuEditTextarea.value = product.info || '';
-    }
-
-    elements.skuEditModal?.removeAttribute('hidden');
+    elements.skuEditTextarea.value = product.info || '';
+    elements.skuEditModal.hidden = false;
     document.body.style.overflow = 'hidden';
   }
 
   function closeSkuEditModal() {
-    elements.skuEditModal?.setAttribute('hidden', '');
+    if (!elements.skuEditModal) return;
+    elements.skuEditModal.hidden = true;
     document.body.style.overflow = '';
     state.editingSkuIndex = null;
   }
 
-  function handleSkuEditConfirm() {
+  function confirmSkuEdit() {
     if (state.editingSkuIndex === null) return;
+    const product = state.skuProducts[state.editingSkuIndex];
+    if (!product || !elements.skuEditTextarea) return;
 
-    const info = elements.skuEditTextarea?.value || '';
-    state.skuProducts[state.editingSkuIndex].info = info;
-
+    product.info = elements.skuEditTextarea.value.trim();
     renderSkuProductGrid();
     closeSkuEditModal();
   }
 
   function bindEvents() {
-    elements.tabs.forEach(tab => {
-      tab.addEventListener('click', handleTabClick);
-    });
-
+    elements.tabs?.forEach(tab => tab.addEventListener('click', handleTabClick));
     elements.referencePreview?.addEventListener('click', handleReferencePreviewClick);
     elements.referenceInput?.addEventListener('change', handleReferenceUpload);
-
-    elements.productUploadBtn?.addEventListener('click', handleProductUploadBtnClick);
+    elements.productUploadBtn?.addEventListener('click', handleProductUploadClick);
     elements.productInput?.addEventListener('change', handleProductUpload);
-
     elements.generateBtn?.addEventListener('click', handleGenerate);
     elements.regenerateBtn?.addEventListener('click', handleRegenerate);
     elements.downloadResultBtn?.addEventListener('click', handleDownloadResult);
-
-    elements.previewCloseBtn?.addEventListener('click', closePreviewModal);
-    elements.previewBackdrop?.addEventListener('click', closePreviewModal);
-    elements.previewDownloadBtn?.addEventListener('click', handleDownloadResult);
-
     elements.sizeSelect?.addEventListener('change', handleModelSelect);
     elements.countSelect?.addEventListener('change', handleSizeSelect);
-
     elements.batchDropzone?.addEventListener('click', handleBatchDropzoneClick);
     elements.batchInput?.addEventListener('change', handleBatchInputChange);
     elements.batchDropzone?.addEventListener('dragover', handleBatchDropzoneDragover);
     elements.batchDropzone?.addEventListener('dragleave', handleBatchDropzoneDragleave);
     elements.batchDropzone?.addEventListener('drop', handleBatchDropzoneDrop);
-
-    elements.skuPreview?.addEventListener('click', handleSkuPreviewClick);
     elements.skuInput?.addEventListener('change', handleSkuUpload);
-
-    elements.skuProductDropzone?.addEventListener('click', handleSkuProductDropzoneClick);
-    elements.skuProductInput?.addEventListener('change', handleSkuProductInputChange);
-    elements.skuProductDropzone?.addEventListener('dragover', handleSkuProductDragover);
-    elements.skuProductDropzone?.addEventListener('dragleave', handleSkuProductDragleave);
-    elements.skuProductDropzone?.addEventListener('drop', handleSkuProductDrop);
-
+    elements.skuProductDropzone?.addEventListener('click', () => elements.skuProductInput?.click());
+    elements.skuProductInput?.addEventListener('change', (event) => {
+      handleSkuProductUpload(event.target.files || []);
+      event.target.value = '';
+    });
     elements.skuEditCloseBtn?.addEventListener('click', closeSkuEditModal);
     elements.skuEditCancelBtn?.addEventListener('click', closeSkuEditModal);
-    elements.skuEditBackdrop?.addEventListener('click', closeSkuEditModal);
-    elements.skuEditConfirmBtn?.addEventListener('click', handleSkuEditConfirm);
-
-    document.addEventListener('keydown', (event) => {
-      if (event.key === 'Escape' && elements.previewModal && !elements.previewModal.hidden) {
-        closePreviewModal();
-      }
+    elements.skuEditConfirmBtn?.addEventListener('click', confirmSkuEdit);
+    elements.previewCloseBtn?.addEventListener('click', closePreviewModal);
+    elements.previewBackdrop?.addEventListener('click', closePreviewModal);
+    elements.previewDownloadBtn?.addEventListener('click', () => {
+      if (!elements.previewImage?.src) return;
+      const link = document.createElement('a');
+      link.href = elements.previewImage.src;
+      link.download = `replicate-preview-${Date.now()}.png`;
+      link.click();
     });
   }
 
   function init() {
     initElements();
     bindEvents();
-    updateProductCount();
     updateGenerateButton();
     updateRegenerateButton();
-    updateBatchUploadCount();
-    updateSkuProductCount();
-    toggleSkuProductViews();
-
-    console.log('Replicate page initialized');
+    renderProductGrid();
+    renderBatchPreviewGrid();
+    renderSkuProductGrid();
   }
 
-  if (document.readyState === 'loading') {
-    document.addEventListener('DOMContentLoaded', init, { once: true });
-  } else {
-    init();
-  }
+  document.addEventListener('DOMContentLoaded', init);
 })();
-
-const style = document.createElement('style');
-style.textContent = `
-  @keyframes spin {
-    from { transform: rotate(0deg); }
-    to { transform: rotate(360deg); }
-  }
-`;
-document.head.appendChild(style);

@@ -30,7 +30,7 @@ from openai import APIError, APIStatusError, OpenAI
 from PIL import Image
 from requests.adapters import HTTPAdapter
 from urllib3.util.retry import Retry
-from werkzeug.exceptions import RequestEntityTooLarge
+from werkzeug.exceptions import BadRequest, RequestEntityTooLarge
 from cos_utils import upload_to_cos, generate_cos_key, is_cos_enabled, get_cos_url_prefix
 
 from supabase_client import (
@@ -166,6 +166,44 @@ limiter = Limiter(
 _SESSION_CACHE: dict[str, tuple[float, dict]] = {}
 _SESSION_CACHE_LOCK = threading.Lock()
 _SESSION_CACHE_TTL = 300
+_BAD_REQUEST_LOG_SAMPLE_RATE = max(1, get_optional_int_env('BAD_REQUEST_LOG_SAMPLE_RATE', 20))
+
+
+def _log_bad_request_sample(exc: Exception) -> None:
+    try:
+        path = request.path or '/'
+        fingerprint_source = '|'.join([
+            request.method or '',
+            path,
+            request.host or '',
+            request.headers.get('User-Agent', ''),
+            request.headers.get('Referer', ''),
+            request.headers.get('X-Forwarded-For', ''),
+            request.headers.get('X-Forwarded-Proto', ''),
+            request.headers.get('CF-Connecting-IP', ''),
+        ])
+        digest = hashlib.sha1(fingerprint_source.encode('utf-8', errors='ignore')).hexdigest()
+        if int(digest[:8], 16) % _BAD_REQUEST_LOG_SAMPLE_RATE != 0:
+            return
+        logger.warning(
+            '400_sample path=%s method=%s host=%s remote=%s forwarded_for=%s forwarded_proto=%s cf_ip=%s ua=%s referer=%s query_keys=%s content_type=%s content_length=%s exc=%s',
+            path,
+            request.method,
+            request.host,
+            request.remote_addr,
+            request.headers.get('X-Forwarded-For', ''),
+            request.headers.get('X-Forwarded-Proto', ''),
+            request.headers.get('CF-Connecting-IP', ''),
+            request.headers.get('User-Agent', '')[:240],
+            request.headers.get('Referer', '')[:240],
+            sorted(list(request.args.keys()))[:20],
+            request.content_type or '',
+            request.content_length,
+            str(exc)[:240],
+        )
+    except Exception as log_exc:
+        logger.debug('Failed to log 400 sample: %s', log_exc)
+
 
 @app.after_request
 def set_static_file_cache(response):
@@ -183,6 +221,12 @@ def handle_request_entity_too_large(exc):
     else:
         message = '上传内容过大，请压缩图片后重试'
     return jsonify({'success': False, 'error': message}), 413
+
+
+@app.errorhandler(BadRequest)
+def handle_bad_request(exc):
+    _log_bad_request_sample(exc)
+    return exc
 
 
 def ensure_user_points_balance(user_id: str) -> dict | None:

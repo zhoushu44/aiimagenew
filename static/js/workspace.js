@@ -56,6 +56,79 @@ document.addEventListener('DOMContentLoaded', () => {
       socket.send(JSON.stringify({ type: 'subscribe_task', task_id: taskId }));
     }
   };
+
+  const createScrollRelayController = (primary, getSecondary) => {
+    let boundSecondary = null;
+
+    const getSecondaryContainer = () => {
+      if (typeof getSecondary === 'function') {
+        return getSecondary();
+      }
+      return getSecondary || null;
+    };
+
+    const getMaxScrollTop = (element) => Math.max(0, element.scrollHeight - element.clientHeight);
+
+    const canScroll = (element) => {
+      if (!element) return false;
+      return element.scrollHeight > element.clientHeight + 1;
+    };
+
+    const applyDelta = (element, deltaY) => {
+      if (!element || !deltaY || !canScroll(element)) return deltaY;
+      const start = element.scrollTop;
+      const max = getMaxScrollTop(element);
+      const target = Math.min(max, Math.max(0, start + deltaY));
+      element.scrollTop = target;
+      return deltaY - (target - start);
+    };
+
+    const getHoveredContainer = (event, secondary) => {
+      const hoveredNode = document.elementFromPoint(event.clientX, event.clientY);
+      if (!hoveredNode) return null;
+      if (secondary && secondary.contains(hoveredNode)) return secondary;
+      if (primary.contains(hoveredNode)) return primary;
+      return null;
+    };
+
+    const onWheel = (event) => {
+      if (event.defaultPrevented) return;
+      const secondary = getSecondaryContainer();
+      const preferred = getHoveredContainer(event, secondary) || primary;
+      const fallback = preferred === primary ? secondary : primary;
+      if (!canScroll(preferred) && !canScroll(fallback)) return;
+      let remainingDelta = event.deltaY;
+      const startPreferredTop = preferred ? preferred.scrollTop : 0;
+      const startFallbackTop = fallback ? fallback.scrollTop : 0;
+      remainingDelta = applyDelta(preferred, remainingDelta);
+      if (remainingDelta) {
+        remainingDelta = applyDelta(fallback, remainingDelta);
+      }
+      const preferredChanged = !!preferred && preferred.scrollTop !== startPreferredTop;
+      const fallbackChanged = !!fallback && fallback.scrollTop !== startFallbackTop;
+      if (preferredChanged || fallbackChanged) {
+        event.preventDefault();
+      }
+    };
+
+    const bind = (element) => {
+      if (!element || element.dataset.scrollRelayBound === '1') return;
+      element.addEventListener('wheel', onWheel, { passive: false });
+      element.dataset.scrollRelayBound = '1';
+    };
+
+    const refreshBindings = () => {
+      bind(primary);
+      const secondary = getSecondaryContainer();
+      if (secondary && secondary !== boundSecondary) {
+        bind(secondary);
+        boundSecondary = secondary;
+      }
+    };
+
+    refreshBindings();
+    return { refreshBindings };
+  };
   
   const unsubscribeTask = (taskId) => {
     if (socket && socket.readyState === WebSocket.OPEN) {
@@ -85,6 +158,12 @@ document.addEventListener('DOMContentLoaded', () => {
     const previewModal = document.getElementById('previewModal');
     const controlRail = document.querySelector('.control-rail');
     const workspaceMain = document.querySelector('.workspace-main');
+    const getActiveResultScrollContainer = () => {
+      if (resultView?.classList.contains('active')) {
+        return resultView.querySelector('.result-console') || resultView;
+      }
+      return null;
+    };
     const previewBackdrop = document.getElementById('previewBackdrop');
     const previewCloseBtn = document.getElementById('previewCloseBtn');
     const previewDownloadBtn = document.getElementById('previewDownloadBtn');
@@ -119,6 +198,7 @@ document.addEventListener('DOMContentLoaded', () => {
     const aplusModulesSection = document.getElementById('aplusModulesSection');
     const aplusModulesGrid = document.getElementById('aplusModulesGrid');
     const aplusModulesHint = document.getElementById('aplusModulesHint');
+    const scrollRelayController = controlRail ? createScrollRelayController(controlRail, getActiveResultScrollContainer) : null;
     const heroEyebrow = document.getElementById('heroEyebrow');
     const heroTitle = document.getElementById('heroTitle');
     const heroDescription = document.getElementById('heroDescription');
@@ -135,6 +215,7 @@ document.addEventListener('DOMContentLoaded', () => {
       <div class="thumb">${label} 2</div>
       <div class="thumb">${label} 3</div>
     `;
+    const getProductUploadLimit = () => 3;
 
     const emptyThumbsMarkup = buildEmptyThumbsMarkup();
     const emptyReferenceThumbsMarkup = buildEmptyThumbsMarkup('待上传参考图');
@@ -719,6 +800,7 @@ document.addEventListener('DOMContentLoaded', () => {
       const showResult = Boolean(viewState.resultActive);
       introView.classList.toggle('active', !showResult);
       resultView.classList.toggle('active', showResult);
+      scrollRelayController?.refreshBindings();
     };
 
     const getTitleSuggestionsState = () => ({
@@ -1319,7 +1401,7 @@ document.addEventListener('DOMContentLoaded', () => {
       if (Array.isArray(selectedStyle?.colors) && selectedStyle.colors.length) {
         formData.append('selected_style_colors', JSON.stringify(selectedStyle.colors));
       }
-      appendFilesToFormData(formData, 'images', getProductFiles(), isFashionPage ? 5 : 3);
+      appendFilesToFormData(formData, 'images', getProductFiles(), getProductUploadLimit());
       appendFilesToFormData(formData, 'reference_images', getReferenceFiles());
       return { formData, selectedStyle };
     };
@@ -1328,7 +1410,7 @@ document.addEventListener('DOMContentLoaded', () => {
       const formData = new FormData();
       formData.append('mode', 'fashion');
       formData.append('image_size_ratio', getImageSizeRatio());
-      appendFilesToFormData(formData, 'images', getProductFiles(), 5);
+      appendFilesToFormData(formData, 'images', getProductFiles(), getProductUploadLimit());
       return formData;
     };
 
@@ -1605,8 +1687,7 @@ document.addEventListener('DOMContentLoaded', () => {
       }
       stopPendingGenerationPolling();
       pendingGenerationTask = null;
-      applyFashionGenerateButtonState();
-      updateGenerateButtonLabel();
+      applyGenerateButtonReadyState({ mode: result.mode, fashionStep: result.mode === 'fashion' ? 'result' : undefined });
       saveStateToLocalStorage();
       return true;
     };
@@ -1620,6 +1701,20 @@ document.addEventListener('DOMContentLoaded', () => {
 
     const resetPendingGenerationPollState = () => {
       pendingGenerationPollFailureCount = 0;
+    };
+
+    const applyGenerateButtonReadyState = ({ mode = currentMode, label, fashionStep } = {}) => {
+      if (mode === 'fashion') {
+        if (fashionStep) {
+          syncFashionState({ fashionFlowStep: fashionStep });
+        }
+        applyFashionGenerateButtonState();
+        return;
+      }
+      if (generateBtn) {
+        generateBtn.disabled = false;
+        updateGenerateButtonLabel(label || getCurrentModeConfig().generateBtnLabel);
+      }
     };
 
     const cancelPendingGenerationTask = async () => {
@@ -1652,13 +1747,7 @@ document.addEventListener('DOMContentLoaded', () => {
       stopGenerationProgress();
       resetResultState();
       setResultStatus(`生成已取消${refundInfo}，可重新发起生成。`, '');
-      if (task?.mode === 'fashion') {
-        syncFashionState({ fashionFlowStep: 'scene' });
-        applyFashionGenerateButtonState();
-      } else if (generateBtn) {
-        generateBtn.disabled = false;
-        updateGenerateButtonLabel();
-      }
+      applyGenerateButtonReadyState({ mode: task?.mode, fashionStep: task?.mode === 'fashion' ? 'scene' : undefined });
       saveStateToLocalStorage();
     };
 
@@ -1683,13 +1772,7 @@ document.addEventListener('DOMContentLoaded', () => {
         resetPendingGenerationPollState();
         stopGenerationProgress();
         setResultStatus('生成任务等待超时，请重新发起生成；如已扣分但没有结果，请联系客服核查。', 'error');
-        if (staleTask?.mode === 'fashion') {
-          syncFashionState({ fashionFlowStep: 'scene' });
-          applyFashionGenerateButtonState();
-        } else if (generateBtn) {
-          generateBtn.disabled = false;
-          updateGenerateButtonLabel();
-        }
+        applyGenerateButtonReadyState({ mode: staleTask?.mode, fashionStep: staleTask?.mode === 'fashion' ? 'scene' : undefined });
         saveStateToLocalStorage();
         return;
       }
@@ -1721,13 +1804,7 @@ document.addEventListener('DOMContentLoaded', () => {
           pendingGenerationTask = null;
           resetPendingGenerationPollState();
           resetResultState();
-          if (task.mode === 'fashion') {
-            syncFashionState({ fashionFlowStep: 'scene' });
-            applyFashionGenerateButtonState();
-          } else if (generateBtn) {
-            generateBtn.disabled = false;
-            updateGenerateButtonLabel();
-          }
+          applyGenerateButtonReadyState({ mode: task.mode, fashionStep: task.mode === 'fashion' ? 'scene' : undefined });
           setResultStatus(refunded ? `${task.error || '生成失败'}；本次扣减积分已自动返还。` : `${task.error || '生成失败'}${task.refund_error ? `；${task.refund_error}` : ''}`, 'error');
           saveStateToLocalStorage();
           return;
@@ -1744,10 +1821,7 @@ document.addEventListener('DOMContentLoaded', () => {
           pendingGenerationTask = null;
           resetPendingGenerationPollState();
           stopGenerationProgress();
-          if (generateBtn && currentMode !== 'fashion') {
-            generateBtn.disabled = false;
-            updateGenerateButtonLabel();
-          }
+          applyGenerateButtonReadyState({ mode: currentMode, fashionStep: currentMode === 'fashion' ? 'scene' : undefined });
           saveStateToLocalStorage();
           return;
         }
@@ -2196,7 +2270,7 @@ document.addEventListener('DOMContentLoaded', () => {
     let currentReferenceFiles = [];
     let currentProductJson = null;
 
-    const getProductFiles = () => currentFiles.slice(0, isFashionPage ? 5 : 3);
+    const getProductFiles = () => currentFiles.slice(0, getProductUploadLimit());
     const getReferenceFiles = () => currentReferenceFiles.slice(0, 3);
 
     const renderThumbList = (container, files, emptyMarkup, labelPrefix, uploadButton, uploadHint, isFashionUpload = false) => {
@@ -2204,17 +2278,16 @@ document.addEventListener('DOMContentLoaded', () => {
         return;
       }
       container.innerHTML = '';
-      const maxFiles = isFashionUpload ? 5 : 3;
+      const maxFiles = getProductUploadLimit();
       if (!files.length) {
-        // 初始状态显示上传按钮
         container.style.display = 'none';
         if (uploadButton) uploadButton.style.display = '';
         if (uploadHint) uploadHint.style.display = '';
         return;
       }
       container.style.display = 'grid';
-      if (uploadButton) uploadButton.style.display = 'none';
-      if (uploadHint) uploadHint.style.display = 'none';
+      if (uploadButton) uploadButton.style.display = '';
+      if (uploadHint) uploadHint.style.display = '';
       files.forEach((file, index) => {
         const reader = new FileReader();
         reader.onload = (e) => {
@@ -2232,9 +2305,7 @@ document.addEventListener('DOMContentLoaded', () => {
         };
         reader.readAsDataURL(file);
       });
-      
-      // 如果是fashion页面且未达到最大数量，显示+号按钮
-      if (isFashionUpload && files.length < maxFiles) {
+      if (files.length < maxFiles) {
         const addButton = document.createElement('button');
         addButton.className = 'upload-btn';
         addButton.type = 'button';
@@ -2267,7 +2338,7 @@ document.addEventListener('DOMContentLoaded', () => {
           return;
         }
 
-        const maxFiles = isFashionUpload ? 5 : 3;
+        const maxFiles = getProductUploadLimit();
         const availableSlots = maxFiles - filesArray.length;
         const newFiles = rawFiles.slice(0, availableSlots);
         filesArray.push(...newFiles);
@@ -3425,7 +3496,7 @@ document.addEventListener('DOMContentLoaded', () => {
 
     if (generateBtn) {
       generateBtn.addEventListener('click', async () => {
-        if (generateBtn.disabled || pendingGenerationTask?.taskId) {
+        if (pendingGenerationTask?.taskId) {
           return;
         }
         const productFiles = getProductFiles();

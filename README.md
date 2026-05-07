@@ -14,6 +14,8 @@
 - 服饰穿搭（Fashion）：AI 模特生成、场景规划、成图质检
 - 批量任务（Batch）：批量创建图片生成任务，支持商品套图/A+详情页/服饰穿戴
 - 生成任务持久化：支持刷新恢复、状态轮询、失败自动返还积分
+- 工作台交互稳定性增强：生成成功/失败/取消后可直接重新发起生成，无需刷新页面
+- 工作台商品图上传：Suite / A+ / Fashion 页面均支持逐张追加上传，商品图上限统一为 3 张
 - 任务链路耗时打点：后端生成、图片存储、前端轮询、渲染和图片加载均可拆分排查
 - LLM Chat 双模式：Ark 直连为主，自动 fallback 到备选接口
 - ZPay 支付：创建订单、异步回调验签、一次性/订阅购买
@@ -124,7 +126,22 @@ python app.py
 gunicorn -w 4 -b 0.0.0.0:5078 --timeout 300 --access-logfile - app:app
 ```
 
-### 4. 验证 Redis 配置
+### 4. 工作台交互验证
+
+启动后可直接在以下页面做前端回归：
+
+- `http://127.0.0.1:5078/suite`
+- `http://127.0.0.1:5078/aplus`
+- `http://127.0.0.1:5078/fashion`
+
+建议重点验证：
+
+- 商品图区先上传 1 张后，仍可继续追加到 3 张
+- 删除任意 1 张后，可以继续补传
+- 生成成功后可再次点击生成
+- 生成失败、取消或等待超时后，无需刷新即可重新发起生成
+
+### 5. 验证 Redis 配置
 
 可直接启动应用后观察日志，或使用 `redis-cli`/容器日志确认 Redis 连接是否正常。
 
@@ -174,8 +191,8 @@ redis-cli -h <host> -p <port> -a <password> info memory
 
 | 触发条件                | 标签                |
 | ------------------- | ----------------- |
-| 推送到 `main` 分支       | `11.5` + `latest` |
-| GitHub Actions 手动触发 | `11.5` + `latest` |
+| 推送到 `main` 分支       | `11.6` + `latest` |
+| GitHub Actions 手动触发 | `11.6` + `latest` |
 
 - 构建平台：`linux/amd64` + `linux/arm64`
 - 镜像内使用 Gunicorn 运行 Flask 应用：`gunicorn -w 4 -b 0.0.0.0:5078 --timeout 300 --access-logfile - app:app`
@@ -515,7 +532,7 @@ POST {MODE3_OPENAI_BASE_URL}/images/edits
 - **新增配置项**：`API_KEY_CONCURRENCY_LIMIT`（默认 10）、`API_KEY_FAILURE_THRESHOLD`（默认 3）、`API_KEY_FAILURE_COOLDOWN_SECONDS`（默认 60）
 - **Bug 修复**：修复 `call_mode3_image_edit` / `call_mode3_image_generation` 内层重复获取 Key 导致健康上报不一致；修复 `call_mode3_single_image` 中 client 未被使用的问题
 - **真实测试**：3 Key × 10 并发 → 30 并发，串行 3 张（\~96s 总计，3 个不同 Key）、并发 3 张（\~36s 总计，3 个不同 Key）全部通过
-- **Docker 镜像 11.5 + latest**
+- **Docker 镜像 11.6 + latest**
 
 ### 2026-05-05 · v10.9
 

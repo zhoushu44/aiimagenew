@@ -46,6 +46,10 @@ CHAT_COMPLETION_FALLBACK_ERROR_TOKENS = (
     'model_not_found', 'No available channel', 'new_api_error',
     'Expecting value', 'JSONDecodeError',
 )
+CHAT_COMPLETION_FALLBACK_TIMEOUT_TOKENS = (
+    'timed out', 'timeout', 'read timeout', 'read timed out',
+    'connect timeout', 'connection timed out',
+)
 
 
 def _format_error_brief(error_text: str) -> str:
@@ -177,7 +181,11 @@ def call_chat_completion(system_prompt: str, user_content, temperature: float = 
         model = primary_model
     except Exception as exc:
         error_text = str(exc)
-        should_fallback_to_ark = should_enable_chat_fallback_to_ark() and any(token in error_text for token in CHAT_COMPLETION_FALLBACK_ERROR_TOKENS)
+        error_lower = error_text.lower()
+        should_fallback_to_ark = should_enable_chat_fallback_to_ark() and (
+            any(token in error_text for token in CHAT_COMPLETION_FALLBACK_ERROR_TOKENS)
+            or any(token in error_lower for token in CHAT_COMPLETION_FALLBACK_TIMEOUT_TOKENS)
+        )
         if not should_fallback_to_ark:
             raise
 

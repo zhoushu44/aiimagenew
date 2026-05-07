@@ -467,6 +467,43 @@ def is_retryable_mode3_error(exc: Exception) -> bool:
     return status_code in {408, 409, 425, 429, 500, 502, 503, 504, 524}
 
 
+def classify_mode3_error(exc: Exception) -> str:
+    message = str(exc or '').lower()
+    status_code = getattr(exc, 'status_code', None)
+    if status_code == 524 or ' 524' in message or 'status=524' in message or 'cloudflare' in message:
+        return 'UPSTREAM_TIMEOUT_524'
+    if 'timed out' in message or 'timeout' in message:
+        return 'TIMEOUT_ERROR'
+    if 'unexpected eof' in message or ('ssl' in message and 'eof' in message):
+        return 'SSL_EOF_ERROR'
+    if 'ssl' in message or 'sslerror' in message:
+        return 'SSL_ERROR'
+    if 'connection aborted' in message:
+        return 'CONNECTION_ABORTED'
+    if 'connection reset' in message:
+        return 'CONNECTION_RESET'
+    if 'max retries exceeded' in message or 'connectionpool' in message or 'protocolerror' in message:
+        return 'NETWORK_RETRY_EXHAUSTED'
+    if status_code in {500, 502, 503, 504}:
+        return f'HTTP_{status_code}'
+    if status_code == 429:
+        return 'RATE_LIMITED'
+    return format_error_brief(exc)
+
+
+def should_log_mode3_traceback(exc: Exception) -> bool:
+    error_kind = classify_mode3_error(exc)
+    return error_kind not in {
+        'TIMEOUT_ERROR',
+        'UPSTREAM_TIMEOUT_524',
+        'SSL_EOF_ERROR',
+        'SSL_ERROR',
+        'NETWORK_RETRY_EXHAUSTED',
+        'CONNECTION_ABORTED',
+        'CONNECTION_RESET',
+    }
+
+
 def is_server_error(exc: Exception) -> bool:
     status_code = getattr(exc, 'status_code', None)
     if status_code in {500, 502, 503, 504, 524}:
@@ -476,6 +513,11 @@ def is_server_error(exc: Exception) -> bool:
 
 
 def compute_retry_delay(base_delay: float, attempt: int, exc: Exception) -> float:
+    error_kind = classify_mode3_error(exc)
+    if error_kind == 'UPSTREAM_TIMEOUT_524':
+        return min(base_delay * (attempt + 1), 12.0)
+    if error_kind in {'TIMEOUT_ERROR', 'SSL_EOF_ERROR', 'SSL_ERROR', 'NETWORK_RETRY_EXHAUSTED', 'CONNECTION_ABORTED', 'CONNECTION_RESET'}:
+        return min(base_delay * (attempt + 1), 8.0)
     if is_server_error(exc):
         return min(base_delay * (2 ** attempt), 30.0)
     if is_ssl_or_network_error(exc):
@@ -857,21 +899,29 @@ def call_mode3_image_edit(api_key: str, prompt: str, image_payloads, image_size_
     except Exception as exc:
         report_key_failure(api_key)
         release_api_slot()
-        log.exception('Mode3 image edit request failed before response: model=%s size=%s reference_count=%s base_url=%s error=%s', model, size, len(files), base_url, exc)
-        raise
+        error_kind = classify_mode3_error(exc)
+        if should_log_mode3_traceback(exc):
+            log.exception('Mode3 image edit request failed before response: model=%s size=%s reference_count=%s base_url=%s error_kind=%s error=%s', model, size, len(files), base_url, error_kind, exc)
+        else:
+            log.warning('Mode3 image edit request failed before response: model=%s size=%s reference_count=%s base_url=%s error_kind=%s error=%s', model, size, len(files), base_url, error_kind, format_error_brief(exc))
+        raise RuntimeError(f'mode3 图生图请求失败：{error_kind}') from exc
     if response.status_code >= 400:
         report_key_failure(api_key)
         release_api_slot()
+        status_error = RuntimeError(f'mode3 图生图接口错误：HTTP_{response.status_code}')
+        setattr(status_error, 'status_code', response.status_code)
+        error_kind = classify_mode3_error(status_error)
         log.warning(
-            'Mode3 image edit response error: model=%s size=%s reference_count=%s base_url=%s status=%s body=%s',
+            'Mode3 image edit response error: model=%s size=%s reference_count=%s base_url=%s error_kind=%s status=%s body=%s',
             model,
             size,
             len(files),
             base_url,
+            error_kind,
             response.status_code,
-            response.text[:500],
+            response.text[:240],
         )
-        raise ValueError(f'mode3 图生图接口错误 {response.status_code}：{response.text[:500]}')
+        raise RuntimeError(f'mode3 图生图接口错误：{error_kind}')
     try:
         payload = response.json()
     except ValueError as exc:
@@ -1102,36 +1152,40 @@ def call_mode3_single_image_with_retry(prompt: str, image_payloads, image_size_r
             return call_mode3_single_image(prompt, image_payloads, image_size_ratio, text_type, country, product_json, image_type, plan_item, all_plan_types)
         except Exception as exc:
             last_exc = exc
+            error_kind = classify_mode3_error(exc)
             should_retry = attempt < retry_attempts and is_retryable_mode3_error(exc)
             if not should_retry:
                 log.warning(
-                    'Mode3 single image failed without retry: attempt=%s/%s image_type=%s reference_count=%s plan_type=%s error=%s',
+                    'Mode3 single image failed without retry: attempt=%s/%s image_type=%s reference_count=%s plan_type=%s error_kind=%s error=%s',
                     attempt + 1,
                     retry_attempts + 1,
                     image_type or '',
                     len(image_payloads or []),
                     str((plan_item or {}).get('type') or ''),
-                    exc,
+                    error_kind,
+                    format_error_brief(exc),
                 )
-                raise
+                raise RuntimeError(f'mode3 单图生成失败：{error_kind}') from exc
             wait_seconds = compute_retry_delay(retry_delay_seconds, attempt, exc)
             log.warning(
-                'Mode3 single image failed, retrying in %.2fs (%s/%s): image_type=%s error=%s',
+                'Mode3 single image failed, retrying in %.2fs (%s/%s): image_type=%s error_kind=%s',
                 wait_seconds,
                 attempt + 1,
                 retry_attempts,
                 image_type or '',
-                format_error_brief(exc),
+                error_kind,
             )
             time.sleep(wait_seconds)
-    log.exception(
-        'Mode3 single image failed after retries: retry_attempts=%s image_type=%s reference_count=%s plan_type=%s',
+    log.warning(
+        'Mode3 single image failed after retries: retry_attempts=%s image_type=%s reference_count=%s plan_type=%s error_kind=%s error=%s',
         retry_attempts,
         image_type or '',
         len(image_payloads or []),
         str((plan_item or {}).get('type') or ''),
+        classify_mode3_error(last_exc or RuntimeError('unknown')),
+        format_error_brief(last_exc or RuntimeError('unknown')),
     )
-    raise last_exc
+    raise RuntimeError(f'mode3 单图生成失败：{classify_mode3_error(last_exc or RuntimeError("unknown"))}') from last_exc
 
 
 def call_mode3_images_parallel_with_partial_retry(prompt: str, image_payloads, max_images: int, image_size_ratio: str = '', text_type: str = '', country: str = '', product_json=None, image_type: str = '', plan_item=None, all_plan_types=None, _logger: logging.Logger | None = None):
@@ -1172,11 +1226,13 @@ def call_mode3_images_parallel_with_partial_retry(prompt: str, image_payloads, m
                     failures.append(exc)
         missing_count = target_count - len(generated_items)
         if missing_count > 0 and attempt_index < partial_retry_attempts:
-            log.warning('Mode3 partial generation missing %s/%s images, retrying failed parts in %.2fs (%s/%s): %s', missing_count, target_count, retry_delay_seconds * (attempt_index + 1), attempt_index + 1, partial_retry_attempts, '; '.join(str(exc) for exc in failures[:3]))
-            time.sleep(retry_delay_seconds * (attempt_index + 1))
+            failure_kinds = [classify_mode3_error(exc) for exc in failures[:3]]
+            wait_seconds = min(retry_delay_seconds * (attempt_index + 1), 8.0)
+            log.warning('Mode3 partial generation missing %s/%s images, retrying failed parts in %.2fs (%s/%s): %s', missing_count, target_count, wait_seconds, attempt_index + 1, partial_retry_attempts, '; '.join(failure_kinds))
+            time.sleep(wait_seconds)
 
     if len(generated_items) < target_count:
-        error_text = '; '.join(str(exc) for exc in failures[:3]) or '部分图片生成失败'
+        error_text = '; '.join(classify_mode3_error(exc) for exc in failures[:3]) or '部分图片生成失败'
         raise ValueError(f'mode3 部分图片生成失败，已成功 {len(generated_items)}/{target_count}：{error_text}')
     return generated_items[:target_count]
 
