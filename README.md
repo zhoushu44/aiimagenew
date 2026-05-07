@@ -191,8 +191,8 @@ redis-cli -h <host> -p <port> -a <password> info memory
 
 | 触发条件                | 标签                |
 | ------------------- | ----------------- |
-| 推送到 `main` 分支       | `11.6` + `latest` |
-| GitHub Actions 手动触发 | `11.6` + `latest` |
+| 推送到 `main` 分支       | `11.7` + `latest` |
+| GitHub Actions 手动触发 | `11.7` + `latest` |
 
 - 构建平台：`linux/amd64` + `linux/arm64`
 - 镜像内使用 Gunicorn 运行 Flask 应用：`gunicorn -w 4 -b 0.0.0.0:5078 --timeout 300 --access-logfile - app:app`

@@ -465,7 +465,7 @@ document.addEventListener('DOMContentLoaded', () => {
     const STORAGE_KEY = `aiDesignState:${PAGE_MODE}`;
     const PENDING_GENERATION_POLL_INTERVAL_MIN = 2000;
     const PENDING_GENERATION_POLL_INTERVAL_MAX = 6000;
-    const PENDING_GENERATION_TIMEOUT = 12 * 60 * 1000;
+    const PENDING_GENERATION_TIMEOUT = 11 * 60 * 1000;
     const PENDING_GENERATION_MAX_STATUS_FAILURES = 3;
 
     const getDynamicPollInterval = (elapsedMs) => {
@@ -1054,6 +1054,15 @@ document.addEventListener('DOMContentLoaded', () => {
       });
     };
 
+    const appendImageUrlsToFormData = (formData, fieldName, items, limit = 3) => {
+      Array.from(items || []).slice(0, limit).forEach((item) => {
+        const imageUrl = typeof item?.imageUrl === 'string' ? item.imageUrl.trim() : '';
+        if (imageUrl) {
+          formData.append(fieldName, imageUrl);
+        }
+      });
+    };
+
     const getFashionWorkspaceApi = () => {
       const api = window.fashionWorkspace;
       return api && typeof api.getState === 'function' ? api : null;
@@ -1224,15 +1233,10 @@ document.addEventListener('DOMContentLoaded', () => {
       formData.append('fashion_selected_model_summary', selectedModel.summary || '');
       formData.append('fashion_selected_model_detail_text', selectedModel.detailText || '');
       const modelImageUrl = (selectedModel.imageUrl || selectedModel.previewUrl || '').trim();
-      if (modelImageUrl) {
-        formData.append('fashion_selected_model_image_url', modelImageUrl);
-      }
-      const selectedFashionModelFile = await resolveFashionSelectedModelFile(selectedFashionModel.model);
-      if (selectedFashionModelFile) {
-        formData.append('fashion_selected_model_image', selectedFashionModelFile);
-      } else if (!modelImageUrl) {
+      if (!modelImageUrl) {
         throw new Error(missingImageMessage);
       }
+      formData.append('fashion_selected_model_image_url', modelImageUrl);
       return selectedFashionModel;
     };
 
@@ -1358,6 +1362,7 @@ document.addEventListener('DOMContentLoaded', () => {
         return { endpoint: '/api/generate-aplus', isMode2: false };
       }
       if (currentMode === 'mode2') {
+        const productAssets = getUploadedProductAssets();
         const productFiles = getProductFiles();
         const prompt = buildMode2Prompt();
         if (!prompt) {
@@ -1372,7 +1377,7 @@ document.addEventListener('DOMContentLoaded', () => {
         formData.delete('output_count');
         formData.append('prompt', prompt);
         return {
-          endpoint: productFiles.length ? '/api/generate-mode2-image-edit' : '/api/generate-mode2-text2image',
+          endpoint: productAssets.length || productFiles.length ? '/api/generate-mode2-image-edit' : '/api/generate-mode2-text2image',
           isMode2: true,
         };
       }
@@ -1401,8 +1406,18 @@ document.addEventListener('DOMContentLoaded', () => {
       if (Array.isArray(selectedStyle?.colors) && selectedStyle.colors.length) {
         formData.append('selected_style_colors', JSON.stringify(selectedStyle.colors));
       }
-      appendFilesToFormData(formData, 'images', getProductFiles(), getProductUploadLimit());
-      appendFilesToFormData(formData, 'reference_images', getReferenceFiles());
+      const productAssets = getUploadedProductAssets();
+      if (productAssets.length) {
+        appendImageUrlsToFormData(formData, 'image_urls', productAssets, getProductUploadLimit());
+      } else {
+        appendFilesToFormData(formData, 'images', getProductFiles(), getProductUploadLimit());
+      }
+      const referenceAssets = getUploadedReferenceAssets();
+      if (referenceAssets.length) {
+        appendImageUrlsToFormData(formData, 'reference_image_urls', referenceAssets, 3);
+      } else {
+        appendFilesToFormData(formData, 'reference_images', getReferenceFiles());
+      }
       return { formData, selectedStyle };
     };
 
@@ -1410,7 +1425,12 @@ document.addEventListener('DOMContentLoaded', () => {
       const formData = new FormData();
       formData.append('mode', 'fashion');
       formData.append('image_size_ratio', getImageSizeRatio());
-      appendFilesToFormData(formData, 'images', getProductFiles(), getProductUploadLimit());
+      const uploadedAssets = getUploadedProductAssets();
+      if (uploadedAssets.length) {
+        appendImageUrlsToFormData(formData, 'image_urls', uploadedAssets, getProductUploadLimit());
+      } else {
+        appendFilesToFormData(formData, 'images', getProductFiles(), getProductUploadLimit());
+      }
       return formData;
     };
 
@@ -2269,9 +2289,13 @@ document.addEventListener('DOMContentLoaded', () => {
     let currentFiles = [];
     let currentReferenceFiles = [];
     let currentProductJson = null;
+    let uploadedProductAssets = [];
+    let uploadedReferenceAssets = [];
 
     const getProductFiles = () => currentFiles.slice(0, getProductUploadLimit());
     const getReferenceFiles = () => currentReferenceFiles.slice(0, 3);
+    const getUploadedProductAssets = () => uploadedProductAssets.slice(0, getProductUploadLimit());
+    const getUploadedReferenceAssets = () => uploadedReferenceAssets.slice(0, 3);
 
     const renderThumbList = (container, files, emptyMarkup, labelPrefix, uploadButton, uploadHint, isFashionUpload = false) => {
       if (!container) {
@@ -2314,6 +2338,55 @@ document.addEventListener('DOMContentLoaded', () => {
       }
     };
 
+    const uploadReferenceAssets = async (rawFiles, { storageGroup = 'temp', maxFiles = 3, existingCount = 0, label = '参考图' } = {}) => {
+      const files = Array.from(rawFiles || []).filter((file) => file && String(file.type || '').startsWith('image/'));
+      if (!files.length) {
+        return { uploadedAssets: [], errorMessage: '' };
+      }
+      const availableSlots = maxFiles - existingCount;
+      const selectedFiles = files.slice(0, availableSlots);
+      let firstError = files.length > availableSlots ? `当前最多支持上传 ${maxFiles} 张${label}` : '';
+      const uploadedAssets = [];
+
+      for (const file of selectedFiles) {
+        const formData = new FormData();
+        formData.append('file', file);
+        formData.append('storage_group', storageGroup);
+        formData.append('storage_subdir', 'uploads');
+        try {
+          const response = await fetch('/api/reference-images/upload', {
+            method: 'POST',
+            body: formData,
+            credentials: 'include',
+          });
+          const result = await response.json().catch(() => ({}));
+          if (!response.ok || !result || result.success === false || !result.image_url) {
+            throw new Error((result && result.error) || `${label}上传失败，请稍后重试`);
+          }
+          uploadedAssets.push({
+            imageUrl: String(result.image_url || ''),
+            imagePath: String(result.image_path || ''),
+            downloadName: String(result.download_name || file.name || ''),
+            mimeType: String(result.mime_type || file.type || ''),
+            storageGroup: String(result.storage_group || storageGroup || ''),
+          });
+        } catch (error) {
+          firstError = firstError || (error instanceof Error ? error.message : `${label}上传失败，请稍后重试`);
+        }
+      }
+
+      return { uploadedAssets, errorMessage: firstError };
+    };
+
+    const uploadFashionProductFiles = async (rawFiles) => {
+      return uploadReferenceAssets(rawFiles, {
+        storageGroup: 'products',
+        maxFiles: getProductUploadLimit(),
+        existingCount: uploadedProductAssets.length,
+        label: '商品图',
+      });
+    };
+
     const bindUploadInput = ({ button, input, thumbsContainer, emptyMarkup, labelPrefix, overLimitMessage, filesArray, isFashionUpload = false }) => {
       if (!button || !input || !thumbsContainer) {
         return;
@@ -2329,12 +2402,49 @@ document.addEventListener('DOMContentLoaded', () => {
       });
       
       // 绑定文件输入框变化事件
-      input.addEventListener('change', (event) => {
+      input.addEventListener('change', async (event) => {
         const rawFiles = Array.from(event.target.files || []);
         const invalidFile = rawFiles.find((file) => file && !file.type.startsWith('image/'));
         if (invalidFile) {
           event.target.value = '';
           setResultStatus(`仅支持上传图片文件：${invalidFile.name || '未命名文件'}`, 'error');
+          return;
+        }
+
+        if (filesArray === currentFiles) {
+          const { uploadedAssets, errorMessage } = await uploadFashionProductFiles(rawFiles);
+          if (uploadedAssets.length) {
+            const maxFiles = getProductUploadLimit();
+            uploadedProductAssets = uploadedProductAssets.concat(uploadedAssets).slice(0, maxFiles);
+            currentFiles.push(...rawFiles.slice(0, uploadedAssets.length));
+            currentProductJson = null;
+          }
+          if (errorMessage) {
+            setResultStatus(errorMessage, 'error');
+          }
+          renderThumbList(thumbsContainer, filesArray, emptyMarkup, labelPrefix, button, uploadHint, isFashionUpload);
+          persistState();
+          event.target.value = '';
+          return;
+        }
+
+        if (filesArray === currentReferenceFiles) {
+          const { uploadedAssets, errorMessage } = await uploadReferenceAssets(rawFiles, {
+            storageGroup: 'temp',
+            maxFiles: 3,
+            existingCount: uploadedReferenceAssets.length,
+            label: '参考图',
+          });
+          if (uploadedAssets.length) {
+            uploadedReferenceAssets = uploadedReferenceAssets.concat(uploadedAssets).slice(0, 3);
+            currentReferenceFiles.push(...rawFiles.slice(0, uploadedAssets.length));
+          }
+          if (errorMessage) {
+            setResultStatus(errorMessage, 'error');
+          }
+          renderThumbList(thumbsContainer, filesArray, emptyMarkup, labelPrefix, button, uploadHint, isFashionUpload);
+          persistState();
+          event.target.value = '';
           return;
         }
 
@@ -2360,7 +2470,11 @@ document.addEventListener('DOMContentLoaded', () => {
           if (!isNaN(index)) {
             filesArray.splice(index, 1);
             if (filesArray === currentFiles) {
+              uploadedProductAssets.splice(index, 1);
               currentProductJson = null;
+            }
+            if (filesArray === currentReferenceFiles) {
+              uploadedReferenceAssets.splice(index, 1);
             }
             input.value = '';
             renderThumbList(thumbsContainer, filesArray, emptyMarkup, labelPrefix, button, uploadHint, isFashionUpload);

@@ -111,9 +111,11 @@ def delete_from_cos(file_key: str):
         raise
 
 
-def generate_cos_key(task_id: str, filename: str) -> str:
+def generate_cos_key(task_id: str, filename: str, storage_group: str = 'generated') -> str:
     date_str = datetime.now().strftime('%Y%m')
-    return f"generated/{date_str}/{task_id}/{filename}"
+    safe_group = str(storage_group or 'generated').strip().strip('/').replace('..', '') or 'generated'
+    safe_filename = str(filename or '').lstrip('/').replace('..', '')
+    return f"{safe_group}/{date_str}/{task_id}/{safe_filename}"
 
 
 def is_cos_enabled() -> bool:

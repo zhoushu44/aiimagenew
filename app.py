@@ -116,7 +116,7 @@ from utils import (
 )
 from image_utils import (
     guess_extension, sanitize_filename_part, sniff_image_mime_type, validate_image_file,
-    cleanup_generated_suites, file_to_data_url, create_image_payload,
+    cleanup_generated_suites, file_to_data_url, create_image_payload, LazyImagePayload,
     build_multimodal_content, is_private_ip_address, validate_mode2_remote_image_url,
     build_remote_image_payload, _fetch_url_to_image_payload, _download_image_url_with_retry,
     decode_generated_image, save_generated_image, save_reference_image,
@@ -827,6 +827,46 @@ def get_generation_task(task_id: str, prefer_cache: bool = False) -> dict | None
     with GENERATION_TASKS_LOCK:
         task = GENERATION_TASKS.get(normalized_task_id)
         return dict(task) if task else None
+
+
+def maybe_fail_stale_generation_task(task: dict | None) -> dict | None:
+    if not isinstance(task, dict):
+        return task
+    status = str(task.get('status') or '').strip().lower()
+    if status not in {'pending', 'running'}:
+        return task
+    now_ts = time.time()
+    created_ts = float(task.get('created_at_ts') or task.get('updated_at_ts') or now_ts)
+    elapsed_seconds = max(now_ts - created_ts, 0)
+    queue_timeout_seconds = max(int(os.getenv('GENERATION_TASK_QUEUE_TIMEOUT_SECONDS') or 180), 180)
+    running_timeout_seconds = max(int(os.getenv('GENERATION_TASK_RUNNING_TIMEOUT_SECONDS') or 600), 300)
+    timeout_seconds = queue_timeout_seconds if status == 'pending' else running_timeout_seconds
+    if elapsed_seconds < timeout_seconds:
+        return task
+    error = '生成任务排队超时，请重新发起生成；如已扣分，系统已自动发起退回。' if status == 'pending' else '生成任务执行超时，请重新发起生成；如已扣分，系统已自动发起退回。'
+    details = 'task queue timeout before worker start' if status == 'pending' else 'task running timeout watchdog'
+    stage = 'task_queue_timeout' if status == 'pending' else 'task_running_timeout_watchdog'
+    failed_at = now_ts
+    updated_task = update_generation_task(
+        task.get('task_id'),
+        status='failed',
+        error=error,
+        details=details,
+        completed_at=_iso_utc_from_ts(failed_at),
+        completed_at_ts=failed_at,
+    )
+    updated_task = update_generation_task(
+        task.get('task_id'),
+        **_build_task_trace_patch(
+            updated_task,
+            stage,
+            now_ts=failed_at,
+            extra={'elapsed_ms': int(elapsed_seconds * 1000), 'timeout_seconds': timeout_seconds},
+        ),
+    )
+    refund_task_points(str(task.get('task_id') or ''))
+    logger.warning('Generation task %s stale timeout: status=%s elapsed=%ss timeout=%ss', task.get('task_id'), status, int(elapsed_seconds), timeout_seconds)
+    return updated_task or get_generation_task(str(task.get('task_id') or ''), prefer_cache=True)
 
 
 def serialize_generation_task(task: dict | None) -> dict:
@@ -1759,14 +1799,40 @@ def require_auth_session() -> dict | None:
 
 
 
-def get_image_payloads_from_request(field_name: str = 'images', limit: int = MAX_IMAGE_UPLOADS):
-    image_files = request.files.getlist(field_name)
-    if len(image_files) > limit:
-        raise ValueError(f'最多仅支持上传 {limit} 张图片')
+def build_local_or_remote_image_payload(image_url: str):
+    normalized_url = str(image_url or '').strip()
+    if normalized_url.startswith('/generated/'):
+        relative_path = normalized_url[len('/generated/'):].lstrip('/').replace('\\', '/')
+        candidate_path = (GENERATED_SUITES_DIR / relative_path).resolve()
+        generated_root = GENERATED_SUITES_DIR.resolve()
+        if generated_root not in candidate_path.parents and candidate_path != generated_root:
+            raise ValueError('参考图片路径无效')
+        if not candidate_path.exists() or not candidate_path.is_file():
+            raise ValueError('参考图片文件不存在')
+        content = candidate_path.read_bytes()
+        mime_type = sniff_image_mime_type(content)
+        if not mime_type:
+            raise ValueError('参考图片不是有效的图片文件')
+        if len(content) > UPLOAD_MAX_FILE_BYTES:
+            raise ValueError(f'参考图片超过单张大小限制（{UPLOAD_MAX_FILE_BYTES // (1024 * 1024)}MB）')
+        filename = candidate_path.name or 'reference-image'
+        return LazyImagePayload(filename=filename, mime_type=mime_type, content=content)
+    return build_remote_image_payload(normalized_url)
 
+
+def get_image_payloads_from_request(field_name: str = 'images', limit: int = MAX_IMAGE_UPLOADS, url_field_name: str | None = None):
+    image_files = request.files.getlist(field_name)
+    image_urls = []
+    if url_field_name:
+        image_urls = [str(item or '').strip() for item in request.form.getlist(url_field_name) if str(item or '').strip()]
+    total_count = len(image_files) + len(image_urls)
+    if total_count > limit:
+        raise ValueError(f'最多仅支持上传 {limit} 张图片')
     payloads = []
     for image_file in image_files:
         payloads.append(create_image_payload(image_file))
+    for image_url in image_urls:
+        payloads.append(build_local_or_remote_image_payload(image_url))
     return payloads
 
 
@@ -1784,6 +1850,10 @@ FASHION_SCENE_PLAN_MODEL_TIMEOUT_SECONDS = 120
 
 def parse_fashion_selected_model_payload(form):
     selected_payloads = get_image_payloads_from_request('fashion_selected_model_image', limit=1)
+    if not selected_payloads:
+        model_image_url = str(form.get('fashion_selected_model_image_url') or '').strip()
+        if model_image_url:
+            selected_payloads = [build_local_or_remote_image_payload(model_image_url)]
     return parse_fashion_selected_model_payload_from_data(form, selected_payloads)
 
 
@@ -1825,6 +1895,12 @@ def guard_authentication():
         g.admin_session = get_admin_session()
         return None
 
+    if path in {'/api/generate-mode2-image-edit-test', '/api/fashion-models/upload', '/api/fashion-products/upload', '/api/reference-images/upload'} and request.method == 'POST':
+        g.supabase_session = get_supabase_session()
+        g.supabase_user = (g.supabase_session or {}).get('user') if g.supabase_session else None
+        g.admin_session = get_admin_session()
+        return None
+
     if any(path.startswith(prefix) for prefix in PUBLIC_API_PREFIXES):
         g.supabase_session = get_supabase_session()
         g.supabase_user = (g.supabase_session or {}).get('user') if g.supabase_session else None
@@ -1846,6 +1922,12 @@ def guard_authentication():
             g.supabase_session = None
             g.supabase_user = None
             return None
+
+    if path in {'/api/generate-mode2-image-edit-test', '/api/fashion-models/upload', '/api/fashion-products/upload', '/api/reference-images/upload'} and request.method == 'POST':
+        g.supabase_session = get_supabase_session()
+        g.supabase_user = (g.supabase_session or {}).get('user') if g.supabase_session else None
+        g.admin_session = get_admin_session()
+        return None
 
     if path in PROTECTED_PAGE_PATHS or path.startswith('/generated') or path.startswith('/api/'):
         session_data = get_supabase_session()
@@ -3224,6 +3306,175 @@ def style_analysis():
         return jsonify({'success': False, 'error': f'服务端异常：{exc}'}), 500
 
 
+@app.post('/api/reference-images/upload')
+def upload_reference_image_asset():
+    try:
+        image_file = request.files.get('file')
+        if image_file is None:
+            return jsonify({'success': False, 'error': '请上传参考图片文件'}), 400
+
+        storage_group = str(request.form.get('storage_group') or 'temp').strip().strip('/').replace('..', '') or 'temp'
+        if storage_group not in {'products', 'temp', 'fashion-models'}:
+            storage_group = 'temp'
+        storage_subdir = str(request.form.get('storage_subdir') or 'uploads').strip().strip('/').replace('..', '') or 'uploads'
+
+        content = image_file.read()
+        detected_mime_type = validate_image_file(image_file, content)
+        safe_stem = sanitize_filename_part(Path(image_file.filename or 'reference-image').stem, 'reference-image')
+        extension = guess_extension(detected_mime_type)
+        filename = f'{safe_stem}{extension}'
+        task_id = uuid.uuid4().hex
+
+        if is_cos_enabled():
+            try:
+                image_key = generate_cos_key(task_id, filename, storage_group=storage_group)
+                image_url = upload_to_cos(content, image_key, detected_mime_type)
+                return jsonify({
+                    'success': True,
+                    'image_url': image_url,
+                    'image_path': image_key,
+                    'download_name': filename,
+                    'mime_type': detected_mime_type,
+                    'storage_backend': 'cos',
+                    'storage_group': storage_group,
+                })
+            except Exception as exc:
+                logger.warning('Reference image COS upload failed, falling back to local: %s', exc)
+
+        download_name, relative_path, image_url = save_reference_image(
+            task_id,
+            1,
+            filename,
+            content,
+            detected_mime_type,
+            storage_group=storage_group,
+            storage_subdir=storage_subdir,
+        )
+        return jsonify({
+            'success': True,
+            'image_url': image_url,
+            'image_path': relative_path,
+            'download_name': download_name,
+            'mime_type': detected_mime_type,
+            'storage_backend': 'local',
+            'storage_group': storage_group,
+        })
+    except ValueError as exc:
+        return jsonify({'success': False, 'error': str(exc)}), 400
+    except RequestEntityTooLarge as exc:
+        return handle_request_entity_too_large(exc)
+    except Exception as exc:
+        return jsonify({'success': False, 'error': f'服务端异常：{exc}'}), 500
+
+
+@app.post('/api/fashion-products/upload')
+def upload_fashion_product_image():
+    try:
+        image_file = request.files.get('file')
+        if image_file is None:
+            return jsonify({'success': False, 'error': '请上传商品图片文件'}), 400
+
+        content = image_file.read()
+        detected_mime_type = validate_image_file(image_file, content)
+        safe_stem = sanitize_filename_part(Path(image_file.filename or 'fashion-product').stem, 'fashion-product')
+        extension = guess_extension(detected_mime_type)
+        filename = f'{safe_stem}{extension}'
+        task_id = uuid.uuid4().hex
+
+        if is_cos_enabled():
+            try:
+                image_key = generate_cos_key(task_id, filename, storage_group='products')
+                image_url = upload_to_cos(content, image_key, detected_mime_type)
+                return jsonify({
+                    'success': True,
+                    'image_url': image_url,
+                    'image_path': image_key,
+                    'download_name': filename,
+                    'mime_type': detected_mime_type,
+                    'storage_backend': 'cos',
+                })
+            except Exception as exc:
+                logger.warning('Fashion product COS upload failed, falling back to local: %s', exc)
+
+        download_name, relative_path, image_url = save_reference_image(
+            task_id,
+            1,
+            filename,
+            content,
+            detected_mime_type,
+            storage_group='products',
+            storage_subdir='uploads',
+        )
+        return jsonify({
+            'success': True,
+            'image_url': image_url,
+            'image_path': relative_path,
+            'download_name': download_name,
+            'mime_type': detected_mime_type,
+            'storage_backend': 'local',
+        })
+    except ValueError as exc:
+        return jsonify({'success': False, 'error': str(exc)}), 400
+    except RequestEntityTooLarge as exc:
+        return handle_request_entity_too_large(exc)
+    except Exception as exc:
+        return jsonify({'success': False, 'error': f'服务端异常：{exc}'}), 500
+
+
+@app.post('/api/fashion-models/upload')
+def upload_fashion_model_image():
+    try:
+        image_file = request.files.get('file')
+        if image_file is None:
+            return jsonify({'success': False, 'error': '请上传模特图片文件'}), 400
+
+        content = image_file.read()
+        detected_mime_type = validate_image_file(image_file, content)
+        safe_stem = sanitize_filename_part(Path(image_file.filename or 'fashion-model').stem, 'fashion-model')
+        extension = guess_extension(detected_mime_type)
+        filename = f'{safe_stem}{extension}'
+        task_id = uuid.uuid4().hex
+
+        if is_cos_enabled():
+            try:
+                image_key = generate_cos_key(task_id, filename, storage_group='fashion-models')
+                image_url = upload_to_cos(content, image_key, detected_mime_type)
+                return jsonify({
+                    'success': True,
+                    'image_url': image_url,
+                    'image_path': image_key,
+                    'download_name': filename,
+                    'mime_type': detected_mime_type,
+                    'storage_backend': 'cos',
+                })
+            except Exception as exc:
+                logger.warning('Fashion model COS upload failed, falling back to local: %s', exc)
+
+        download_name, relative_path, image_url = save_reference_image(
+            task_id,
+            1,
+            filename,
+            content,
+            detected_mime_type,
+            storage_group='fashion-models',
+            storage_subdir='uploads',
+        )
+        return jsonify({
+            'success': True,
+            'image_url': image_url,
+            'image_path': relative_path,
+            'download_name': download_name,
+            'mime_type': detected_mime_type,
+            'storage_backend': 'local',
+        })
+    except ValueError as exc:
+        return jsonify({'success': False, 'error': str(exc)}), 400
+    except RequestEntityTooLarge as exc:
+        return handle_request_entity_too_large(exc)
+    except Exception as exc:
+        return jsonify({'success': False, 'error': f'服务端异常：{exc}'}), 500
+
+
 @app.post('/api/generate-fashion-model')
 def generate_fashion_model():
     try:
@@ -3253,7 +3504,7 @@ def generate_fashion_model():
                 max_images=1,
             )[0]
             image_bytes, mime_type = decode_generated_image(generated_item)
-            download_name, relative_path, image_url, storage_trace = save_generated_image(task_id, 1, 'fashion-model', image_bytes, mime_type)
+            download_name, relative_path, image_url, storage_trace = save_generated_image(task_id, 1, 'fashion-model', image_bytes, mime_type, storage_group='fashion-models')
             model_id = f'ai-{task_id}'
             model = build_fashion_model_response(
                 task_id,
@@ -3325,7 +3576,7 @@ def generate_mode1_image_edit():
 
         prompt = get_request_value(payload, request.form, 'prompt', '')
         image_url = get_request_value(payload, request.form, 'image_url', '')
-        uploaded_payloads = get_image_payloads_from_request('images')
+        uploaded_payloads = get_image_payloads_from_request('images', url_field_name='image_urls')
         run_async = str(get_request_value(payload, request.form, 'async_task', '') or '').strip().lower() in {'1', 'true', 'yes'}
 
         if not prompt:
@@ -3335,7 +3586,7 @@ def generate_mode1_image_edit():
         if uploaded_payloads:
             image_payloads = uploaded_payloads
         elif image_url:
-            image_payloads = [build_remote_image_payload(image_url)]
+            image_payloads = [build_local_or_remote_image_payload(image_url)]
         else:
             return jsonify({'success': False, 'error': '请上传 1 张或多张参考图片，或提供 image_url'}), 400
 
@@ -3434,7 +3685,7 @@ def generate_mode2_image_edit():
         resolution = get_request_value(payload, request.form, 'resolution', '')
         sample_strength = get_request_value(payload, request.form, 'sample_strength', '')
         image_url = get_request_value(payload, request.form, 'image_url', '')
-        uploaded_payloads = get_image_payloads_from_request('images')
+        uploaded_payloads = get_image_payloads_from_request('images', url_field_name='image_urls')
         run_async = str(get_request_value(payload, request.form, 'async_task', '') or '').strip().lower() in {'1', 'true', 'yes'}
 
         if not prompt:
@@ -3444,7 +3695,7 @@ def generate_mode2_image_edit():
         if uploaded_payloads:
             image_payloads = uploaded_payloads
         elif image_url:
-            image_payloads = [build_remote_image_payload(image_url)]
+            image_payloads = [build_local_or_remote_image_payload(image_url)]
         else:
             return jsonify({'success': False, 'error': '请上传 1 张或多张参考图片，或提供 image_url'}), 400
 
@@ -3478,6 +3729,64 @@ def generate_mode2_image_edit():
 
         task_id = uuid.uuid4().hex
         return jsonify(build_mode2_image_edit_result(task_id))
+    except RequestEntityTooLarge as exc:
+        return handle_request_entity_too_large(exc)
+    except ValueError as exc:
+        return jsonify({'success': False, 'error': str(exc)}), 400
+    except RuntimeError as exc:
+        payload, status_code = parse_runtime_error(exc)
+        return jsonify(payload), status_code
+    except (APIError, APIStatusError) as exc:
+        payload, status_code = parse_ark_exception(exc)
+        return jsonify(payload), status_code
+    except requests.Timeout:
+        return jsonify({'success': False, 'error': '请求超时，请稍后重试'}), 504
+    except requests.RequestException as exc:
+        return jsonify({'success': False, 'error': f'请求失败：{exc}'}), 502
+    except Exception as exc:
+        return jsonify({'success': False, 'error': f'服务端异常：{exc}'}), 500
+
+
+@app.post('/api/generate-mode2-image-edit-test')
+def generate_mode2_image_edit_test():
+    try:
+        if get_app_mode() != 'mode2':
+            return jsonify({'success': False, 'error': '当前模式未开启 mode2'}), 404
+
+        payload = request.get_json(silent=True) if request.is_json else {}
+        if not isinstance(payload, dict):
+            payload = {}
+
+        prompt = get_request_value(payload, request.form, 'prompt', '')
+        ratio = get_request_value(payload, request.form, 'image_size_ratio', '') or get_request_value(payload, request.form, 'ratio', '')
+        resolution = get_request_value(payload, request.form, 'resolution', '')
+        sample_strength = get_request_value(payload, request.form, 'sample_strength', '')
+        image_url = get_request_value(payload, request.form, 'image_url', '')
+        uploaded_payloads = get_image_payloads_from_request('images', url_field_name='image_urls')
+
+        if not prompt:
+            return jsonify({'success': False, 'error': 'prompt 不能为空'}), 400
+        if uploaded_payloads and image_url:
+            return jsonify({'success': False, 'error': '上传图片与 image_url 二选一'}), 400
+        if uploaded_payloads:
+            image_payloads = uploaded_payloads
+        elif image_url:
+            image_payloads = [build_local_or_remote_image_payload(image_url)]
+        else:
+            return jsonify({'success': False, 'error': '请上传 1 张或多张参考图片，或提供 image_url'}), 400
+
+        task_id = uuid.uuid4().hex
+        generated_item, model = call_mode2_image_edit(
+            get_mode2_client(),
+            prompt,
+            image_payloads,
+            ratio,
+            resolution,
+            sample_strength,
+        )
+        response = build_mode2_success_response(task_id, 'mode2-image-edit-test', prompt, model, generated_item)
+        response['mode'] = 'mode2-image-edit-test'
+        return jsonify(response)
     except RequestEntityTooLarge as exc:
         return handle_request_entity_too_large(exc)
     except ValueError as exc:
@@ -3572,7 +3881,7 @@ def generate_mode3_image_edit():
 
         prompt = get_request_value(payload, request.form, 'prompt', '')
         image_url = get_request_value(payload, request.form, 'image_url', '')
-        uploaded_payloads = get_image_payloads_from_request('images')
+        uploaded_payloads = get_image_payloads_from_request('images', url_field_name='image_urls')
         run_async = str(get_request_value(payload, request.form, 'async_task', '') or '').strip().lower() in {'1', 'true', 'yes'}
 
         if not prompt:
@@ -3582,7 +3891,7 @@ def generate_mode3_image_edit():
         if uploaded_payloads:
             image_payloads = uploaded_payloads
         elif image_url:
-            image_payloads = [build_remote_image_payload(image_url)]
+            image_payloads = [build_local_or_remote_image_payload(image_url)]
         else:
             return jsonify({'success': False, 'error': '请上传 1 张或多张参考图片，或提供 image_url'}), 400
 
@@ -3698,7 +4007,7 @@ def build_generation_result_from_payload(form_payload: dict, file_payloads: dict
         if not selected_model_payloads:
             model_image_url = str(form.get('fashion_selected_model_image_url') or '').strip()
             if model_image_url:
-                selected_model_payloads = [_fetch_url_to_image_payload(model_image_url)]
+                selected_model_payloads = [build_local_or_remote_image_payload(model_image_url)]
         if fashion_action == 'scene_plan':
             selected_model = parse_fashion_selected_model_payload_from_data(form, selected_model_payloads)
             planning_payloads = image_payloads + [selected_model['payload']]
@@ -3988,8 +4297,8 @@ def generate_suite():
     try:
         form_payload = {key: request.form.get(key, '') for key in request.form.keys()}
         file_payloads = {
-            'images': get_image_payloads_from_request('images'),
-            'reference_images': get_image_payloads_from_request('reference_images'),
+            'images': get_image_payloads_from_request('images', url_field_name='image_urls'),
+            'reference_images': get_image_payloads_from_request('reference_images', url_field_name='reference_image_urls'),
             'fashion_selected_model_image': get_image_payloads_from_request('fashion_selected_model_image', limit=1),
         }
         run_async = str(form_payload.get('async_task') or '').strip().lower() in {'1', 'true', 'yes'}
@@ -4838,6 +5147,7 @@ def generation_task_status(task_id):
         return jsonify({'success': False, 'error': '生成任务不存在或已过期'}), 404
     if str(task.get('user_id') or '') != str(user_id):
         return jsonify({'success': False, 'error': '无权访问该生成任务'}), 403
+    task = maybe_fail_stale_generation_task(task)
     serialized_task = serialize_generation_task(task)
     return jsonify({'success': True, 'task': serialized_task})
 

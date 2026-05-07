@@ -58,7 +58,11 @@ body::after {
 a { color: inherit; text-decoration: none; }
 button, select, textarea, input { font: inherit; }
 button { color: inherit; }
-img { max-width: 100%; display: block; }
+img {
+  display: block;
+  max-width: 100%;
+  height: auto;
+}
 [hidden] { display: none !important; }
 
 .app-shell {
@@ -977,10 +981,12 @@ body.fashion-page .fashion-upload-model-card {
 }
 body.fashion-page .fashion-model-card {
   display: grid;
+  grid-template-rows: auto minmax(0, auto);
   gap: 10px;
   padding: 12px;
   text-align: left;
   cursor: pointer;
+  overflow: hidden;
   transition: border-color 0.2s ease, box-shadow 0.2s ease, transform 0.2s ease;
 }
 body.fashion-page .fashion-model-card:hover {
@@ -1031,7 +1037,9 @@ body.fashion-page .fashion-model-delete:hover {
   border-color: #ef4444;
 }
 body.fashion-page .fashion-model-preview {
+  width: 100%;
   min-height: 100px;
+  aspect-ratio: 3 / 4;
   border-radius: 14px;
   overflow: hidden;
   display: grid;
@@ -1039,11 +1047,44 @@ body.fashion-page .fashion-model-preview {
   background: linear-gradient(135deg, rgba(226, 232, 240, 0.92), rgba(241, 245, 249, 0.96));
 }
 body.fashion-page .fashion-model-preview img {
+  display: block;
   width: 100%;
   height: 100%;
-  object-fit: contain;
-  object-position: center center;
+  max-width: 100%;
+  object-fit: cover;
+  object-position: center top;
+}
+body.fashion-page #customModelList .fashion-model-card-custom {
+  overflow: hidden;
+}
+body.fashion-page #customModelList .fashion-model-card-custom .fashion-model-preview {
+  position: relative;
+  width: 100%;
+  min-width: 0;
+  min-height: 0;
+  height: auto;
+  max-height: none;
+  overflow: hidden;
+  border-radius: 14px;
+  contain: layout paint;
+}
+body.fashion-page #customModelList .fashion-model-card-custom .fashion-model-preview::before {
+  content: '';
   display: block;
+  width: 100%;
+  padding-top: 133.3333%;
+}
+body.fashion-page #customModelList .fashion-model-card-custom .fashion-model-preview img {
+  position: absolute;
+  inset: 0;
+  display: block;
+  width: 100%;
+  height: 100%;
+  max-width: none;
+  min-width: 100%;
+  min-height: 100%;
+  object-fit: cover;
+  object-position: center top;
 }
 body.fashion-page .fashion-model-card-placeholder {
   width: 100%;
@@ -1059,17 +1100,25 @@ body.fashion-page .fashion-model-card-placeholder {
 body.fashion-page .fashion-model-info {
   display: grid;
   gap: 4px;
+  min-width: 0;
+  overflow: hidden;
 }
 body.fashion-page .fashion-model-name {
   font-size: 14px;
   font-weight: 600;
   color: var(--text);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 body.fashion-page .fashion-model-summary,
 body.fashion-page .fashion-model-detail {
   font-size: 12px;
   line-height: 1.45;
   color: var(--muted);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 body.fashion-page .generate-btn.fashion-generate-btn-disabled {
   background: rgba(226, 232, 240, 0.9);

@@ -4,7 +4,7 @@
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
   <title>AI服饰穿戴</title>
-  <link rel="stylesheet" href="/static/css/workspace.css?v=topbar-record-20260504">
+  <link rel="stylesheet" href="/static/css/workspace.css?v=fashion-custom-model-crop-20260507">
   <script src="/static/js/shared-topbar.js?v=topbar-record-20260504" defer></script>
 </head>
 <body data-page-mode="fashion" class="fashion-page">
@@ -1153,50 +1153,57 @@
         renderFashionModelState();
       };
 
-      const appendCustomModels = (files) => {
+      const appendCustomModels = async (files) => {
         const nextFiles = Array.from(files || []).filter((file) => file && String(file.type || '').startsWith('image/'));
         if (!nextFiles.length) {
           return;
         }
         const state = getFashionState();
-        let remaining = nextFiles.length;
         const newModels = [];
-        nextFiles.forEach((file, index) => {
-          const reader = new FileReader();
-          reader.onload = () => {
+        let firstError = '';
+
+        for (const [index, file] of nextFiles.entries()) {
+          const localPreviewUrl = URL.createObjectURL(file);
+          try {
+            const formData = new FormData();
+            formData.append('file', file);
+            const response = await fetch('/api/fashion-models/upload', {
+              method: 'POST',
+              body: formData,
+              credentials: 'include',
+            });
+            const result = await response.json().catch(() => ({}));
+            if (!response.ok || !result || result.success === false || !result.image_url) {
+              throw new Error((result && result.error) || '模特上传失败，请稍后重试');
+            }
             newModels.push({
               id: `custom-${Date.now()}-${index}-${Math.random().toString(36).slice(2, 7)}`,
               name: (file.name || '我的模特').replace(/\.[^.]+$/, ''),
-              previewUrl: typeof reader.result === 'string' ? reader.result : '',
-              imageUrl: typeof reader.result === 'string' ? reader.result : '',
-              imagePath: '',
-              downloadName: file.name || '',
+              previewUrl: String(result.image_url || ''),
+              imageUrl: String(result.image_url || ''),
+              imagePath: String(result.image_path || ''),
+              downloadName: String(result.download_name || file.name || ''),
+              localPreviewUrl,
             });
-            remaining -= 1;
-            if (remaining === 0) {
-              const mergedModels = [...state.fashionCustomModels, ...newModels.filter((item) => item.previewUrl)];
-              const selectedModel = newModels.find((item) => item.previewUrl) || mergedModels[0] || null;
-              patchWorkspaceState({
-                fashionCustomModels: mergedModels,
-                fashionModelType: 'custom',
-                fashionSelectedModelSource: selectedModel ? 'custom' : '',
-                fashionSelectedModelId: selectedModel ? selectedModel.id : '',
-              });
-              if (modelFileInput) {
-                modelFileInput.value = '';
-              }
-              renderFashionModelState();
-            }
-          };
-          reader.onerror = () => {
-            remaining -= 1;
-            if (remaining === 0) {
-              patchWorkspaceState({ fashionCustomModels: [...state.fashionCustomModels, ...newModels.filter((item) => item.previewUrl)] });
-              renderFashionModelState();
-            }
-          };
-          reader.readAsDataURL(file);
+          } catch (error) {
+            URL.revokeObjectURL(localPreviewUrl);
+            firstError = firstError || (error instanceof Error ? error.message : '模特上传失败，请稍后重试');
+          }
+        }
+
+        const mergedModels = [...state.fashionCustomModels, ...newModels.filter((item) => item.imageUrl)];
+        const selectedModel = newModels.find((item) => item.imageUrl) || mergedModels[0] || null;
+        patchWorkspaceState({
+          fashionCustomModels: mergedModels,
+          fashionModelType: 'custom',
+          fashionSelectedModelSource: selectedModel ? 'custom' : '',
+          fashionSelectedModelId: selectedModel ? selectedModel.id : '',
+          fashionSceneError: firstError || state.fashionSceneError || '',
         });
+        if (modelFileInput) {
+          modelFileInput.value = '';
+        }
+        renderFashionModelState();
       };
 
       const restoreFashionState = () => {

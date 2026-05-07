@@ -408,15 +408,17 @@ def _build_trace_payload(events) -> dict:
     }
 
 
-def save_generated_image(task_id: str, sort: int, image_type: str, image_bytes: bytes, mime_type: str):
+def save_generated_image(task_id: str, sort: int, image_type: str, image_bytes: bytes, mime_type: str, storage_group: str = 'generated'):
     cleanup_generated_suites(active_task_id=task_id)
     extension = guess_extension(mime_type)
     filename = f'{sort:02d}-{sanitize_filename_part(image_type, "image")}{extension}'
     storage_started_at = time.time()
+    storage_group_name = str(storage_group or 'generated').strip().strip('/') or 'generated'
     base_extra = {
         'sort': sort,
         'image_type': image_type,
         'storage_target': 'generated_image',
+        'storage_group': storage_group_name,
         'bytes': len(image_bytes or b''),
         'mime_type': mime_type,
         'filename': filename,
@@ -425,7 +427,7 @@ def save_generated_image(task_id: str, sort: int, image_type: str, image_bytes: 
 
     if is_cos_enabled():
         try:
-            cos_key = generate_cos_key(task_id, filename)
+            cos_key = generate_cos_key(task_id, filename, storage_group=storage_group_name)
             cos_started_at = time.time()
             trace_events.append(_build_trace_event('image_cos_upload_started', cos_started_at, {**base_extra, 'file_key': cos_key}))
             image_url = upload_to_cos(image_bytes, cos_key, mime_type)
@@ -453,7 +455,7 @@ def save_generated_image(task_id: str, sort: int, image_type: str, image_bytes: 
             }))
             logger.warning('COS upload failed, falling back to local: %s', exc)
 
-    output_dir = GENERATED_SUITES_DIR / task_id
+    output_dir = GENERATED_SUITES_DIR / storage_group_name / task_id
     output_dir.mkdir(parents=True, exist_ok=True)
     output_path = output_dir / filename
     local_write_started_at = time.time()
@@ -479,22 +481,24 @@ def save_generated_image(task_id: str, sort: int, image_type: str, image_bytes: 
     return filename, relative_path, image_url, _build_trace_payload(trace_events)
 
 
-def save_reference_image(task_id: str, sort: int, filename: str, image_bytes: bytes, mime_type: str):
+def save_reference_image(task_id: str, sort: int, filename: str, image_bytes: bytes, mime_type: str, storage_group: str = 'generated', storage_subdir: str = 'references'):
     cleanup_generated_suites(active_task_id=task_id)
     extension = guess_extension(mime_type)
     source_stem = Path(filename or 'reference').stem
     safe_stem = sanitize_filename_part(source_stem, f'reference-{sort:02d}')
     output_name = f'{sort:02d}-{safe_stem}{extension}'
+    storage_group_name = str(storage_group or 'generated').strip().strip('/') or 'generated'
+    subdir = str(storage_subdir or 'references').strip().strip('/') or 'references'
 
     if is_cos_enabled():
         try:
-            cos_key = generate_cos_key(task_id, f'references/{output_name}')
+            cos_key = generate_cos_key(task_id, f'{subdir}/{output_name}', storage_group=storage_group_name)
             image_url = upload_to_cos(image_bytes, cos_key, mime_type)
             return output_name, cos_key, image_url
         except Exception as exc:
             logger.warning('COS upload failed, falling back to local: %s', exc)
 
-    output_dir = GENERATED_SUITES_DIR / task_id / 'references'
+    output_dir = GENERATED_SUITES_DIR / storage_group_name / task_id / subdir
     output_dir.mkdir(parents=True, exist_ok=True)
     output_path = output_dir / output_name
     output_path.write_bytes(image_bytes)
@@ -510,9 +514,9 @@ def save_reference_image(task_id: str, sort: int, filename: str, image_bytes: by
 def build_reference_images(task_id: str, image_payloads, source: str = 'product', start_sort: int = 1):
     reference_images = []
     source_meta = {
-        'product': {'type': '商品原图', 'type_tag': 'Prod', 'reference_source': 'product'},
-        'reference': {'type': '参考图', 'type_tag': 'Ref', 'reference_source': 'reference'},
-        'fashion_reference': {'type': '穿搭参考图', 'type_tag': 'Look', 'reference_source': 'fashion_reference'},
+        'product': {'type': '商品原图', 'type_tag': 'Prod', 'reference_source': 'product', 'storage_group': 'products', 'storage_subdir': 'references'},
+        'reference': {'type': '参考图', 'type_tag': 'Ref', 'reference_source': 'reference', 'storage_group': 'temp', 'storage_subdir': 'references'},
+        'fashion_reference': {'type': '穿搭参考图', 'type_tag': 'Look', 'reference_source': 'fashion_reference', 'storage_group': 'temp', 'storage_subdir': 'references'},
     }
     meta = source_meta.get(source, source_meta['product'])
 
@@ -524,6 +528,8 @@ def build_reference_images(task_id: str, image_payloads, source: str = 'product'
             payload.get('filename', ''),
             payload.get('bytes', b''),
             payload.get('mime_type', 'image/png'),
+            storage_group=meta['storage_group'],
+            storage_subdir=meta['storage_subdir'],
         )
         original_name = Path(payload.get('filename') or f'{meta["type"]} {sort}').stem.strip()
         title = original_name or f'{meta["type"]} {sort}'

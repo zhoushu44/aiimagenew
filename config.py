@@ -10,6 +10,8 @@ import time
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
+from urllib.parse import urlparse
+
 import requests
 from dotenv import load_dotenv
 
@@ -66,7 +68,7 @@ SUPABASE_SESSION_COOKIE = 'aiimagenew_supabase_session'
 SUPABASE_SESSION_SYNC_COOKIE = 'aiimagenew_supabase_session_sync'
 ADMIN_SESSION_COOKIE = 'aiimagenew_admin_session'
 PROTECTED_PAGE_PATHS = {'/suite', '/aplus', '/fashion', '/settings', '/generation-record'}
-PUBLIC_API_PREFIXES = ('/api/auth/', '/api/admin/', '/api/app-mode', '/api/points/rules', '/api/points/quote', '/api/pay/notify')
+PUBLIC_API_PREFIXES = ('/api/auth/', '/api/admin/', '/api/app-mode', '/api/points/rules', '/api/points/quote', '/api/pay/notify', '/api/generate-mode2-image-edit-test', '/api/generate-mode2-image-edit-test/', '/api/fashion-models/upload', '/api/fashion-products/upload', '/api/reference-images/upload')
 PUBLIC_PATH_PREFIXES = ('/static/', '/generated/')
 PUBLIC_PATHS = {'/', '/logout'}
 SUPABASE_URL = (os.getenv('SUPABASE_URL') or os.getenv('SUPABASE_PROJECT_URL') or '').strip()
@@ -222,11 +224,21 @@ def get_mode2_allowed_image_hosts() -> set[str]:
     raw_value = get_supabase_setting('MODE2_ALLOWED_IMAGE_HOSTS', '')
     if not raw_value:
         raw_value = os.getenv('MODE2_ALLOWED_IMAGE_HOSTS', '').strip()
-    return {
+    allowed_hosts = {
         host.strip().lower()
         for host in raw_value.split(',')
         if host.strip()
     }
+    cos_cdn_domain = os.getenv('COS_CDN_DOMAIN', '').strip()
+    if cos_cdn_domain:
+        parsed_domain = urlparse(cos_cdn_domain if '://' in cos_cdn_domain else f'https://{cos_cdn_domain}')
+        if parsed_domain.hostname:
+            allowed_hosts.add(parsed_domain.hostname.lower())
+    cos_bucket = os.getenv('COS_BUCKET', '').strip()
+    cos_region = os.getenv('COS_REGION', 'ap-guangzhou').strip() or 'ap-guangzhou'
+    if cos_bucket:
+        allowed_hosts.add(f'{cos_bucket}.cos.{cos_region}.myqcloud.com'.lower())
+    return allowed_hosts
 
 
 def get_settings_allowed_emails() -> set[str]:

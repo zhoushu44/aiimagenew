@@ -1,5 +1,45 @@
 # 版本说明 (Changelog)
 
+## v11.7 (2026-05-07)
+
+### Docker
+
+- 镜像标签 11.6 → 11.7
+- GitHub Action 自动打 `11.7` + `latest` 双标签
+- 推送仍由 GitHub Action 自动完成，本地不执行 Docker 推送操作
+- `.dockerignore` 继续排除 `.env` 和 `.env.*`
+
+### COS 轻引用上传与请求体优化
+
+- 商品图、参考图、服饰模特图支持先上传到 COS/本地存储，生成请求只提交 `image_urls`、`reference_image_urls`、`fashion_selected_model_image_url` 等轻量 URL 引用
+- 新增 `/api/reference-images/upload` 统一上传入口，按 `products`、`temp`、`fashion-models` 分组存储
+- 后端新增本地 `/generated/...` 与远程 `http/https` 图片统一解析逻辑，生成时再规范化为图片 payload
+- COS CDN 域名与默认 bucket 域名自动加入远程参考图白名单，避免 COS 上传成功后生成阶段被域名拦截
+- 减少 multipart 请求体积，避免小图因 dataURL/File 重传导致总请求体超过 15MB
+
+### 生成任务超时兜底
+
+- 新增后端任务状态兜底：轮询任务状态时自动识别长时间 `pending` / `running` 的异常任务
+- 排队超过 `GENERATION_TASK_QUEUE_TIMEOUT_SECONDS`（默认 180 秒）自动标记失败并退分
+- 执行超过 `GENERATION_TASK_RUNNING_TIMEOUT_SECONDS`（默认 600 秒）自动标记失败并退分
+- 前端生成任务最长等待调整为 11 分钟，确保后端 10 分钟兜底先返回明确失败原因
+- 超时任务写入 trace，便于排查排队卡住、外部生图接口卡住或线程池拥堵问题
+
+### 服饰工作台体验修复
+
+- 自定义模特卡片图片预览改为 3:4 内框裁切，图片使用 `cover` 填充，超出部分隐藏
+- 修复自定义模特卡片内框被图片原始高度撑开的问题，改为固定裁切窗口 + 图片绝对定位
+- 模特卡片文字增加单行省略，避免长文件名撑出卡片
+- 更新 CSS 版本号，避免浏览器缓存继续使用旧样式
+
+### 全局轻引用适配
+
+- Suite / A+ / Fashion 工作台统一支持轻引用提交，上传 1-3 张商品图后生成阶段不再重复重传文件
+- mode1 / mode2 / mode3 图生图入口支持本地引用与远程 URL 统一解析
+- Fashion 场景规划分支同步支持自定义模特轻引用，避免 `/generated/...` 被当作远程 URL 时报 Invalid URL
+
+***
+
 ## v11.5 (2026-05-07)
 
 ### Docker
