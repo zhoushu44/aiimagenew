@@ -648,13 +648,23 @@ document.addEventListener('DOMContentLoaded', () => {
             ? 'ai'
             : '';
         const selectedId = typeof rawState.fashionSelectedModelId === 'string' ? rawState.fashionSelectedModelId : '';
+        const customModels = Array.isArray(rawState.fashionCustomModels) ? rawState.fashionCustomModels : [];
+        const generatedModel = rawState.fashionGeneratedModel && typeof rawState.fashionGeneratedModel === 'object'
+          ? rawState.fashionGeneratedModel
+          : null;
         const generationDone = rawState.fashionModelGenerationState === 'done'
-          && rawState.fashionGeneratedModel
-          && rawState.fashionGeneratedModel.id === selectedId;
+          && generatedModel
+          && generatedModel.id === selectedId;
         const customSelected = selectedSource === 'custom'
-          && Array.isArray(rawState.fashionCustomModels)
-          && rawState.fashionCustomModels.some((item) => item && item.id === selectedId);
+          && customModels.some((item) => item && item.id === selectedId);
         const hasSelectedModel = selectedSource === 'ai' ? Boolean(generationDone) : Boolean(customSelected);
+        const selectedModel = selectedSource === 'ai'
+          ? (generationDone ? generatedModel : null)
+          : customModels.find((item) => item && item.id === selectedId);
+        const hasSelectedModelImage = Boolean(
+          selectedModel
+          && (selectedModel.imageUrl || selectedModel.previewUrl || selectedModel.imagePath || selectedModel.downloadName),
+        );
         const isSceneCapableStep = rawState.fashionFlowStep === 'scene' || rawState.fashionFlowStep === 'result';
         const currentStep = rawState.fashionFlowStep === 'result' ? 'result' : isSceneCapableStep ? 'scene' : 'model';
         const sceneGenerationState = rawState.fashionSceneGenerationState;
@@ -676,13 +686,13 @@ document.addEventListener('DOMContentLoaded', () => {
             action: 'select_model',
           };
         }
-        if (!isSceneCapableStep) {
+        if (!hasSelectedModelImage) {
           return {
             hasSelectedModel: true,
-            disabled: false,
-            label: '生成推荐场景',
-            step: 'model',
-            action: 'scene_plan',
+            disabled: true,
+            label: '模特图片缺失',
+            step: currentStep,
+            action: 'select_model',
           };
         }
         if (sceneGenerationState === 'loading') {
@@ -694,20 +704,11 @@ document.addEventListener('DOMContentLoaded', () => {
             action: 'loading',
           };
         }
-        if (sceneGenerationState === 'error') {
-          return {
-            hasSelectedModel: true,
-            disabled: false,
-            label: '重新生成推荐场景',
-            step: currentStep,
-            action: 'scene_plan',
-          };
-        }
         if (sceneGenerationState !== 'done' || !hasSceneGroups) {
           return {
             hasSelectedModel: true,
             disabled: false,
-            label: '生成推荐场景',
+            label: sceneGenerationState === 'error' ? '重新生成推荐场景' : '生成推荐场景',
             step: currentStep,
             action: 'scene_plan',
           };
@@ -1188,6 +1189,19 @@ document.addEventListener('DOMContentLoaded', () => {
       return null;
     };
 
+    const clearFashionSceneStatePatch = () => ({
+      fashionFlowStep: 'model',
+      fashionSceneGenerationState: 'idle',
+      fashionSceneGroups: [],
+      fashionSelectedSceneGroupIds: [],
+      fashionSelectedPoseIds: [],
+      fashionPoseCameraSettings: {},
+      fashionScenePrompt: '',
+      fashionSceneError: '',
+      fashionScenePlanRaw: null,
+      fashionSceneStateVersion: 2,
+    });
+
     const resetStaleFashionLoadingState = () => {
       if (!isFashionPage) {
         return;
@@ -1196,12 +1210,16 @@ document.addEventListener('DOMContentLoaded', () => {
         const rawState = JSON.parse(localStorage.getItem(STORAGE_KEY) || '{}');
         const patch = {};
 
+        if (rawState.fashionSceneStateVersion !== 2) {
+          Object.assign(patch, clearFashionSceneStatePatch());
+        }
+
         if (rawState.fashionModelGenerationState === 'loading') {
           patch.fashionModelGenerationState = 'idle';
         }
         if (rawState.fashionSceneGenerationState === 'loading') {
-          patch.fashionSceneGenerationState = 'error';
-          patch.fashionSceneError = '上一次推荐场景生成未完成，请重新生成。';
+          patch.fashionSceneGenerationState = 'idle';
+          patch.fashionSceneError = '';
         }
 
         if (Object.keys(patch).length) {
@@ -1801,12 +1819,15 @@ document.addEventListener('DOMContentLoaded', () => {
     const completePendingGenerationTask = (task) => {
       stopGenerationProgress();
       resetPendingGenerationPollState();
-      const result = task?.result;
+      const normalizedTask = task && typeof task === 'object' ? task : {};
+      const result = normalizedTask.result && typeof normalizedTask.result === 'object'
+        ? normalizedTask.result
+        : (Array.isArray(normalizedTask.images) ? normalizedTask : null);
       if (!result || !Array.isArray(result.images)) {
         return false;
       }
       const renderStartedAt = Date.now();
-      markTaskTraceEvent(task, 'frontend_result_render_start', {
+      markTaskTraceEvent(normalizedTask, 'frontend_result_render_start', {
         imageCount: Array.isArray(result.images) ? result.images.length : 0,
       });
       currentResult = result;
@@ -1814,14 +1835,14 @@ document.addEventListener('DOMContentLoaded', () => {
       selectedResultKeys = new Set();
       updateTaskSummary(result);
       renderResultCards(currentResultItems);
-      markTaskTraceEvent(task, 'frontend_result_render_done', {
+      markTaskTraceEvent(normalizedTask, 'frontend_result_render_done', {
         imageCount: currentResultItems.length,
         renderElapsedMs: Math.max(Date.now() - renderStartedAt, 0),
       });
-      attachResultImageTrace(task, resultGrid);
-      const summary = summarizeTaskTrace(task);
+      attachResultImageTrace(normalizedTask, resultGrid);
+      const summary = summarizeTaskTrace(normalizedTask);
       debugGenerationTrace('render_done_summary', {
-        taskId: task?.task_id || pendingGenerationTask?.taskId || '',
+        taskId: normalizedTask?.task_id || pendingGenerationTask?.taskId || '',
         taskCreatedAt: summary.taskCreatedAt,
         taskSucceededAt: summary.taskSucceededAt,
         frontendPollAt: summary.frontendPollAt,
@@ -1857,7 +1878,24 @@ document.addEventListener('DOMContentLoaded', () => {
       pendingGenerationPollFailureCount = 0;
     };
 
+    const applyGenerateButtonPendingState = (label = getCurrentModeConfig().imageLoadingLabel) => {
+      if (!generateBtn) {
+        return;
+      }
+      generateBtn.disabled = false;
+      generateBtn.dataset.pendingAction = 'cancel';
+      updateGenerateButtonLabel(label);
+    };
+
+    const clearGenerateButtonPendingState = () => {
+      if (!generateBtn) {
+        return;
+      }
+      delete generateBtn.dataset.pendingAction;
+    };
+
     const applyGenerateButtonReadyState = ({ mode = currentMode, label, fashionStep } = {}) => {
+      clearGenerateButtonPendingState();
       if (mode === 'fashion') {
         if (fashionStep) {
           syncFashionState({ fashionFlowStep: fashionStep });
@@ -2009,6 +2047,7 @@ document.addEventListener('DOMContentLoaded', () => {
         spendRecord: spendRecords.find(Boolean) || null,
         startedAt: Date.now(),
       };
+      applyGenerateButtonPendingState(getCurrentModeConfig().imageLoadingLabel);
       saveStateToLocalStorage();
       pollPendingGenerationTask({ immediate: true });
     };
@@ -2224,14 +2263,9 @@ document.addEventListener('DOMContentLoaded', () => {
 
       setFashionFlowStepState('scene');
       syncFashionState({
+        ...clearFashionSceneStatePatch(),
+        fashionFlowStep: 'scene',
         fashionSceneGenerationState: 'loading',
-        fashionSceneGroups: [],
-        fashionSelectedSceneGroupIds: [],
-        fashionSelectedPoseIds: [],
-        fashionPoseCameraSettings: {},
-        fashionScenePrompt: '',
-        fashionSceneError: '',
-        fashionScenePlanRaw: null,
       });
       showIntroView();
       setResultStatus('正在生成推荐场景...', '');
@@ -2264,19 +2298,15 @@ document.addEventListener('DOMContentLoaded', () => {
           fashionSelectedPoseIds: [],
           fashionSceneError: '',
           fashionScenePlanRaw: scenePlan,
+          fashionSceneStateVersion: 2,
         });
         stopGenerationProgress();
         setResultStatus(scenePlan.summary || '推荐场景已生成，请继续选择姿态、景别与视角。', 'success');
       } catch (error) {
         syncFashionState({
+          ...clearFashionSceneStatePatch(),
           fashionFlowStep: 'scene',
           fashionSceneGenerationState: 'error',
-          fashionSceneGroups: [],
-          fashionSelectedSceneGroupIds: [],
-          fashionSelectedPoseIds: [],
-          fashionPoseCameraSettings: {},
-          fashionScenePrompt: '',
-          fashionScenePlanRaw: null,
           fashionSceneError: error.message || '推荐场景生成失败，请稍后重试',
         });
         stopGenerationProgress();
@@ -3427,8 +3457,7 @@ document.addEventListener('DOMContentLoaded', () => {
           if (pendingGenerationTask.mode === 'fashion') {
             syncFashionState({ fashionFlowStep: 'result' });
           } else if (generateBtn) {
-            generateBtn.disabled = true;
-            updateGenerateButtonLabel(getCurrentModeConfig().imageLoadingLabel);
+            applyGenerateButtonPendingState(getCurrentModeConfig().imageLoadingLabel);
           }
           pollPendingGenerationTask({ immediate: true });
         }
@@ -3820,6 +3849,7 @@ document.addEventListener('DOMContentLoaded', () => {
     if (generateBtn) {
       generateBtn.addEventListener('click', async () => {
         if (pendingGenerationTask?.taskId) {
+          await cancelPendingGenerationTask();
           return;
         }
         const productFiles = getProductFiles();
@@ -3834,8 +3864,12 @@ document.addEventListener('DOMContentLoaded', () => {
             setResultStatus('请先选择模特后再继续。', 'error');
             return;
           }
-          if (fashionState.action === 'scene_plan' || fashionState.step !== 'scene') {
+          if (fashionState.action === 'scene_plan') {
             await requestFashionScenePlan();
+            return;
+          }
+          if (fashionState.action !== 'generate') {
+            setResultStatus(fashionState.label || '请先完成服饰穿搭前置步骤。', 'error');
             return;
           }
           await submitFashionGenerate();

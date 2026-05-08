@@ -272,16 +272,33 @@
         }
       };
 
+      const clearFashionSceneStatePatch = () => ({
+        fashionFlowStep: 'model',
+        fashionSceneGenerationState: 'idle',
+        fashionSceneGroups: [],
+        fashionSelectedSceneGroupIds: [],
+        fashionSelectedPoseIds: [],
+        fashionPoseCameraSettings: {},
+        fashionScenePrompt: '',
+        fashionSceneError: '',
+        fashionScenePlanRaw: null,
+        fashionSceneStateVersion: 2,
+      });
+
       const resetStaleFashionLoadingState = () => {
         const state = readWorkspaceState();
         const patch = {};
+
+        if (state.fashionSceneStateVersion !== 2) {
+          Object.assign(patch, clearFashionSceneStatePatch());
+        }
 
         if (state.fashionModelGenerationState === 'loading') {
           patch.fashionModelGenerationState = 'idle';
         }
         if (state.fashionSceneGenerationState === 'loading') {
-          patch.fashionSceneGenerationState = 'error';
-          patch.fashionSceneError = '上一次推荐场景生成未完成，请重新生成。';
+          patch.fashionSceneGenerationState = 'idle';
+          patch.fashionSceneError = '';
         }
 
         if (Object.keys(patch).length) {
@@ -564,6 +581,7 @@
         const hasSelectedModel = isModelAvailable(state, state.fashionSelectedModelSource, state.fashionSelectedModelId);
         const selectedEntries = getSelectedSceneEntries(state);
         const isSceneCapableStep = state.fashionFlowStep === 'scene' || state.fashionFlowStep === 'result';
+        const scenePlanReady = state.fashionSceneGenerationState === 'done' && state.fashionSceneGroups.length;
         if (!hasSelectedModel) {
           return {
             hasSelectedModel: false,
@@ -572,16 +590,6 @@
             step: state.fashionFlowStep,
             selectedSceneCount: 0,
             action: 'select_model',
-          };
-        }
-        if (!isSceneCapableStep) {
-          return {
-            hasSelectedModel: true,
-            disabled: false,
-            label: '生成推荐场景',
-            step: 'model',
-            selectedSceneCount: 0,
-            action: 'scene_plan',
           };
         }
         if (state.fashionSceneGenerationState === 'loading') {
@@ -594,22 +602,12 @@
             action: 'loading',
           };
         }
-        if (state.fashionSceneGenerationState === 'error') {
+        if (!isSceneCapableStep || !scenePlanReady) {
           return {
             hasSelectedModel: true,
             disabled: false,
-            label: '重新生成推荐场景',
-            step: state.fashionFlowStep,
-            selectedSceneCount: 0,
-            action: 'scene_plan',
-          };
-        }
-        if (state.fashionSceneGenerationState !== 'done' || !state.fashionSceneGroups.length) {
-          return {
-            hasSelectedModel: true,
-            disabled: false,
-            label: '生成推荐场景',
-            step: state.fashionFlowStep,
+            label: state.fashionSceneGenerationState === 'error' ? '重新生成推荐场景' : '生成推荐场景',
+            step: isSceneCapableStep ? state.fashionFlowStep : 'model',
             selectedSceneCount: 0,
             action: 'scene_plan',
           };

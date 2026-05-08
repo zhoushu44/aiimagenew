@@ -191,8 +191,8 @@ redis-cli -h <host> -p <port> -a <password> info memory
 
 | 触发条件                | 标签                |
 | ------------------- | ----------------- |
-| 推送到 `main` 分支       | `11.7` + `latest` |
-| GitHub Actions 手动触发 | `11.7` + `latest` |
+| 推送到 `main` 分支       | `11.8` + `latest` |
+| GitHub Actions 手动触发 | `11.8` + `latest` |
 
 - 构建平台：`linux/amd64` + `linux/arm64`
 - 镜像内使用 Gunicorn 运行 Flask 应用：`gunicorn -w 4 -b 0.0.0.0:5078 --timeout 300 --access-logfile - app:app`
@@ -523,6 +523,14 @@ POST {MODE3_OPENAI_BASE_URL}/images/edits
 ***
 
 ## 近期更新
+
+### 2026-05-08 · v11.8
+
+- **Docker 镜像标签更新**：GitHub Action 自动构建同一个镜像并同时推送 `11.8` + `latest` 双标签，本地不执行 Docker 推送操作
+- **.dockerignore 安全保持**：继续排除 `.env` 和 `.env.*`，避免本地环境变量进入镜像构建上下文
+- **生成结果渲染修复**：兼容任务结果 `task.result.images` 与扁平 `task.images` 两种结构，减少生成成功后前端仍停留骨架屏的问题
+- **服饰穿搭流程修复**：清理旧推荐场景本地状态，恢复“上传产品图 → 选择/生成模特 → 生成推荐场景 → 选择场景 → 生成服饰穿戴图”的步骤流转
+- **任务链路稳定性**：生成结果 ready 后历史同步失败不再覆盖成功结果，保留 trace 便于定位上游限流、超时和前端渲染延迟
 
 ### 2026-05-07 · v11.5
 

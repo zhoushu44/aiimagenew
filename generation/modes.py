@@ -338,6 +338,12 @@ def get_mode3_timeout_seconds() -> int:
     return max(get_supabase_setting_int('MODE3_TIMEOUT_SECONDS', get_optional_int_env('MODE3_TIMEOUT_SECONDS', _common_timeout_seconds())), 30)
 
 
+def get_mode3_request_timeout() -> tuple[int, int]:
+    total_timeout = get_mode3_timeout_seconds()
+    connect_timeout = max(min(get_supabase_setting_int('MODE3_CONNECT_TIMEOUT_SECONDS', get_optional_int_env('MODE3_CONNECT_TIMEOUT_SECONDS', 15)), total_timeout), 3)
+    return (connect_timeout, total_timeout)
+
+
 def should_mode3_use_sequential_generation(target_count: int, image_payloads) -> bool:
     mode = str(get_supabase_setting('MODE3_SEQUENTIAL_GENERATION', get_optional_env('MODE3_SEQUENTIAL_GENERATION', 'auto')) or 'auto').strip().lower()
     if mode in {'on', 'true', '1', 'yes'}:
@@ -811,7 +817,8 @@ def call_mode3_image_generation(api_key: str, prompt: str, image_size_ratio: str
         data['quality'] = quality
     if watermark:
         data['watermark'] = 'true'
-    log.warning('Mode3 image generation request model=%s size=%s base_url=%s', model, size, base_url)
+    request_timeout = get_mode3_request_timeout()
+    log.warning('Mode3 image generation request model=%s size=%s base_url=%s timeout=%s', model, size, base_url, request_timeout)
     if not acquire_api_slot(timeout=300):
         raise RuntimeError('mode3 文生图获取并发槽位超时')
     try:
@@ -819,7 +826,7 @@ def call_mode3_image_generation(api_key: str, prompt: str, image_size_ratio: str
             request_url,
             headers={'Authorization': f'Bearer {api_key}'},
             json=data,
-            timeout=get_mode3_timeout_seconds(),
+            timeout=request_timeout,
         )
     except Exception as exc:
         report_key_failure(api_key)
@@ -879,12 +886,14 @@ def call_mode3_image_edit(api_key: str, prompt: str, image_payloads, image_size_
         if not isinstance(image_bytes, (bytes, bytearray)) or not image_bytes:
             raise ValueError(f'mode3 图生图参考图 {filename} 内容为空')
         files.append(('image', (filename, bytes(image_bytes), mime_type)))
+    request_timeout = get_mode3_request_timeout()
     log.warning(
-        'Mode3 image edit request via images/edits multipart model=%s size=%s reference_count=%s base_url=%s template=mode1_reference_anchor',
+        'Mode3 image edit request via images/edits multipart model=%s size=%s reference_count=%s base_url=%s timeout=%s template=mode1_reference_anchor',
         model,
         size,
         len(files),
         base_url,
+        request_timeout,
     )
     if not acquire_api_slot(timeout=300):
         raise RuntimeError('mode3 图生图获取并发槽位超时')
@@ -894,7 +903,7 @@ def call_mode3_image_edit(api_key: str, prompt: str, image_payloads, image_size_
             headers={'Authorization': f'Bearer {api_key}'},
             data=data,
             files=files,
-            timeout=get_mode3_timeout_seconds(),
+            timeout=request_timeout,
         )
     except Exception as exc:
         report_key_failure(api_key)
@@ -1133,13 +1142,32 @@ def call_mode2_images_parallel_with_partial_retry(prompt: str, image_payloads, m
     return generated_items[:target_count]
 
 
-def call_mode3_single_image(prompt: str, image_payloads, image_size_ratio: str = '', text_type: str = '', country: str = '', product_json=None, image_type: str = '', plan_item=None, all_plan_types=None):
+def call_mode3_single_image(prompt: str, image_payloads, image_size_ratio: str = '', text_type: str = '', country: str = '', product_json=None, image_type: str = '', plan_item=None, all_plan_types=None, _logger: logging.Logger | None = None):
+    log = _logger or logger
     api_key = get_mode3_api_key()
-    if image_payloads:
-        generated_item, _model = call_mode3_image_edit(api_key, prompt, image_payloads, image_size_ratio)
-    else:
-        generated_item, _model = call_mode3_image_generation(api_key, prompt, image_size_ratio)
-    return generated_item
+    started_at = time.time()
+    try:
+        if image_payloads:
+            generated_item, _model = call_mode3_image_edit(api_key, prompt, image_payloads, image_size_ratio, _logger=log)
+        else:
+            generated_item, _model = call_mode3_image_generation(api_key, prompt, image_size_ratio, _logger=log)
+        log.warning(
+            'Mode3 single image completed: image_type=%s plan_type=%s elapsed=%.2fs',
+            image_type or '',
+            str((plan_item or {}).get('type') or ''),
+            time.time() - started_at,
+        )
+        return generated_item
+    except Exception as exc:
+        log.warning(
+            'Mode3 single image raised: image_type=%s plan_type=%s elapsed=%.2fs error_kind=%s error=%s',
+            image_type or '',
+            str((plan_item or {}).get('type') or ''),
+            time.time() - started_at,
+            classify_mode3_error(exc),
+            format_error_brief(exc),
+        )
+        raise
 
 
 def call_mode3_single_image_with_retry(prompt: str, image_payloads, image_size_ratio: str = '', text_type: str = '', country: str = '', product_json=None, image_type: str = '', plan_item=None, all_plan_types=None, _logger: logging.Logger | None = None):
@@ -1149,11 +1177,12 @@ def call_mode3_single_image_with_retry(prompt: str, image_payloads, image_size_r
     last_exc = None
     for attempt in range(retry_attempts + 1):
         try:
-            return call_mode3_single_image(prompt, image_payloads, image_size_ratio, text_type, country, product_json, image_type, plan_item, all_plan_types)
+            return call_mode3_single_image(prompt, image_payloads, image_size_ratio, text_type, country, product_json, image_type, plan_item, all_plan_types, _logger=log)
         except Exception as exc:
             last_exc = exc
             error_kind = classify_mode3_error(exc)
-            should_retry = attempt < retry_attempts and is_retryable_mode3_error(exc)
+            retry_exc = exc if is_retryable_mode3_error(exc) else RuntimeError(error_kind)
+            should_retry = attempt < retry_attempts and is_retryable_mode3_error(retry_exc)
             if not should_retry:
                 log.warning(
                     'Mode3 single image failed without retry: attempt=%s/%s image_type=%s reference_count=%s plan_type=%s error_kind=%s error=%s',
@@ -1166,7 +1195,7 @@ def call_mode3_single_image_with_retry(prompt: str, image_payloads, image_size_r
                     format_error_brief(exc),
                 )
                 raise RuntimeError(f'mode3 单图生成失败：{error_kind}') from exc
-            wait_seconds = compute_retry_delay(retry_delay_seconds, attempt, exc)
+            wait_seconds = compute_retry_delay(retry_delay_seconds, attempt, retry_exc)
             log.warning(
                 'Mode3 single image failed, retrying in %.2fs (%s/%s): image_type=%s error_kind=%s',
                 wait_seconds,

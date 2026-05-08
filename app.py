@@ -1173,9 +1173,20 @@ def run_background_generation_task(task_id: str, builder, timeout: int = 600, ti
             completed_at_ts=finished_at,
         )
         task = update_generation_task(task_id, **_build_task_trace_patch(task, 'task_succeeded', now_ts=finished_at, extra={'elapsed_ms': int(max((finished_at - started_at) * 1000, 0))}))
+        log_generation_task_trace_summary(task, 'task_result_ready')
+        logger.info('Generation task %s result ready: mode=%s image_count=%s elapsed=%sms', task_id, (task or {}).get('mode') or '', len(serialize_generation_history_items(task)), int(max((finished_at - started_at) * 1000, 0)))
         history_items = serialize_generation_history_items(task)
         if history_items:
-            upsert_generation_history_images(history_items, logger)
+            update_generation_task(task_id, **_build_task_trace_patch(task, 'history_sync_start', extra={'history_item_count': len(history_items)}))
+            try:
+                upsert_generation_history_images(history_items, logger)
+            except Exception as exc:
+                logger.warning('Generation task %s history sync failed but generation result is ready: %s', task_id, exc)
+                task = get_generation_task(task_id)
+                update_generation_task(task_id, history_sync_error=str(exc), **_build_task_trace_patch(task, 'history_sync_failed', extra={'history_item_count': len(history_items), 'error': str(exc)}))
+            else:
+                task = get_generation_task(task_id)
+                update_generation_task(task_id, **_build_task_trace_patch(task, 'history_sync_done', extra={'history_item_count': len(history_items)}))
         log_generation_task_trace_summary(task, 'succeeded')
         logger.info('Generation task %s succeeded: mode=%s elapsed=%sms', task_id, (task or {}).get('mode') or '', int(max((finished_at - started_at) * 1000, 0)))
     except TimeoutError:
@@ -1219,7 +1230,7 @@ def update_generation_task_partial_result(task_id: str, result_patch: dict | Non
 def run_generation_task(task_id: str, form_payload: dict, file_payloads: dict):
     run_background_generation_task(
         task_id,
-        lambda: build_generation_result_from_payload(form_payload, file_payloads),
+        lambda: build_generation_result_from_payload(form_payload, file_payloads, task_id),
         timeout=600,
         timeout_error='生成任务执行超时（10分钟），请稍后重试',
     )
@@ -3975,7 +3986,7 @@ def generate_mode3_text2image():
         return jsonify({'success': False, 'error': f'服务端异常：{exc}'}), 500
 
 
-def build_generation_result_from_payload(form_payload: dict, file_payloads: dict):
+def build_generation_result_from_payload(form_payload: dict, file_payloads: dict, task_id: str | None = None):
     form = form_payload if isinstance(form_payload, dict) else {}
     payloads = file_payloads if isinstance(file_payloads, dict) else {}
     selling_text = str(form.get('selling_text') or '').strip()
@@ -4248,7 +4259,7 @@ def build_generation_result_from_payload(form_payload: dict, file_payloads: dict
             output_count = 1
     else:
         output_count, _ = get_suite_type_rules(form.get('output_count', '8'))
-    task_id = uuid.uuid4().hex
+    task_id = str(task_id or '').strip() or uuid.uuid4().hex
     task_name = build_task_name(platform, 'main_image' if is_main_image_task else 'suite', output_count)
     generated_at = build_generated_at()
     reference_images = build_reference_images(task_id, image_payloads, source='product')
@@ -4263,10 +4274,13 @@ def build_generation_result_from_payload(form_payload: dict, file_payloads: dict
         )
     planning_payloads = image_payloads + reference_payloads
     if product_json is None and planning_payloads:
-        logger.warning('Suite generation extracting product_json from uploaded reference images: mode=%s image_count=%s', mode, len(planning_payloads))
+        update_generation_task_partial_result(task_id, stage='product_json_extracting', extra={'image_count': len(planning_payloads), 'mode': mode})
+        logger.warning('Suite generation extracting product_json from uploaded reference images: task_id=%s mode=%s image_count=%s', task_id, mode, len(planning_payloads))
         product_json = extract_product_json_from_image_payloads(selling_text, planning_payloads)
+        update_generation_task_partial_result(task_id, stage='product_json_ready', extra={'mode': mode, 'has_product_json': bool(product_json)})
     logger.warning(
-        'Suite generation upload payloads: mode=%s task_type=%s product_count=%s reference_count=%s total_generation_count=%s product_json_ready=%s',
+        'Suite generation upload payloads: task_id=%s mode=%s task_type=%s product_count=%s reference_count=%s total_generation_count=%s product_json_ready=%s',
+        task_id,
         mode,
         generation_task_type or 'detail_image',
         len(image_payloads),
@@ -4275,6 +4289,7 @@ def build_generation_result_from_payload(form_payload: dict, file_payloads: dict
         bool(product_json),
     )
     if is_main_image_task:
+        update_generation_task_partial_result(task_id, stage='plan_building', extra={'task_type': 'main_image', 'output_count': output_count})
         plan = build_main_image_cover_plan(
             platform,
             selling_text,
@@ -4286,7 +4301,9 @@ def build_generation_result_from_payload(form_payload: dict, file_payloads: dict
             product_json,
         )
         generation_text_type = '无文字'
+        update_generation_task_partial_result(task_id, stage='plan_ready', extra={'task_type': 'main_image', 'plan_items': len(plan.get('items') or [])})
     else:
+        update_generation_task_partial_result(task_id, stage='plan_building', extra={'task_type': 'detail_image', 'output_count': output_count})
         plan = build_suite_plan(
             platform,
             selling_text,
@@ -4300,6 +4317,8 @@ def build_generation_result_from_payload(form_payload: dict, file_payloads: dict
             product_json,
         )
         generation_text_type = text_type
+        update_generation_task_partial_result(task_id, stage='plan_ready', extra={'task_type': 'detail_image', 'plan_items': len(plan.get('items') or [])})
+    update_generation_task_partial_result(task_id, stage='image_generation_starting', extra={'plan_items': len(plan.get('items') or []), 'app_mode': get_app_mode()})
     images = generate_suite_images(plan, planning_payloads, task_id, image_size_ratio, generation_text_type, country, product_json)
 
     return {
