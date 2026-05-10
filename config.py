@@ -830,3 +830,181 @@ def get_semaphore_stats() -> dict:
         'key_state': state_snapshot,
         'api_slots': api_slot_snapshot,
     }
+
+
+PLATFORM_TEXT_RULES = {
+    '亚马逊': {
+        'allow_text': False,
+        'reason': '平台规则禁止主图文案',
+        'fallback': '纯净主图,无任何文字'
+    },
+    '独立站': {
+        'allow_text': True,
+        'priority': 'low',
+        'style': 'brand_focused',
+        'max_text_lines': 1,
+        'suggestion': '品牌名或简短Slogan'
+    },
+    '淘宝天猫1688': {
+        'allow_text': True,
+        'priority': 'high',
+        'style': 'selling_point',
+        'max_text_lines': 2,
+        'suggestion': '核心卖点 + 促销信息'
+    },
+    '拼多多抖音电商': {
+        'allow_text': True,
+        'priority': 'high',
+        'style': 'promotional',
+        'max_text_lines': 2,
+        'suggestion': '价格优势 + 限时优惠'
+    },
+    'Temu': {
+        'allow_text': True,
+        'priority': 'medium',
+        'style': 'concise_english',
+        'max_text_lines': 1,
+        'suggestion': 'Short benefit in English'
+    },
+    'TikTok Shop': {
+        'allow_text': True,
+        'priority': 'low',
+        'style': 'minimal',
+        'max_text_lines': 1,
+        'suggestion': 'Minimal text, visual first'
+    },
+    'Shopee': {
+        'allow_text': True,
+        'priority': 'medium',
+        'style': 'local_language',
+        'max_text_lines': 2,
+        'suggestion': '卖点用当地语言'
+    },
+    'OZON': {
+        'allow_text': True,
+        'priority': 'medium',
+        'style': 'russian',
+        'max_text_lines': 2,
+        'suggestion': '俄语卖点'
+    },
+    '阿里国际站': {
+        'allow_text': True,
+        'priority': 'low',
+        'style': 'professional',
+        'max_text_lines': 1,
+        'suggestion': 'Specs or features'
+    },
+    '速卖通': {
+        'allow_text': True,
+        'priority': 'medium',
+        'style': 'english_benefit',
+        'max_text_lines': 2,
+        'suggestion': 'English selling points'
+    },
+    'SHEIN': {
+        'allow_text': True,
+        'priority': 'low',
+        'style': 'fashion_minimal',
+        'max_text_lines': 1,
+        'suggestion': 'Brand or minimal style'
+    },
+    '京东': {
+        'allow_text': True,
+        'priority': 'high',
+        'style': 'selling_point',
+        'max_text_lines': 2,
+        'suggestion': '核心卖点 + 品质保证'
+    }
+}
+
+PRODUCT_CATEGORY_TEXT_RULES = {
+    'high_priority': {
+        '美妆护肤': {
+            'keywords': ['护肤', '彩妆', '香水', '面膜', '精华', '乳液', '面霜', '口红'],
+            'text_focus': ['功效', '成分', '使用感受', '适用肤质'],
+            'max_text_length': 8,
+            'example': ['深层滋养', '72h保湿', '烟酰胺精华', '敏感肌适用']
+        },
+        '个护清洁': {
+            'keywords': ['洗发', '护发', '沐浴', '牙膏', '牙刷', '洗衣液', '洗洁精'],
+            'text_focus': ['功效', '成分', '使用场景', '适用人群'],
+            'max_text_length': 8,
+            'example': ['去屑止痒', '温和不刺激', '深层清洁', '全家适用']
+        },
+        '食品饮料': {
+            'keywords': ['零食', '饮料', '茶叶', '咖啡', '保健品', '营养品'],
+            'text_focus': ['口味', '功效', '成分', '产地'],
+            'max_text_length': 6,
+            'example': ['0糖0卡', '高蛋白', '原味', '进口']
+        },
+        '母婴用品': {
+            'keywords': ['奶粉', '纸尿裤', '奶瓶', '辅食', '玩具', '童装'],
+            'text_focus': ['安全', '材质', '年龄段', '功效'],
+            'max_text_length': 8,
+            'example': ['食品级', '3岁+', 'BPA Free', '温和无刺激']
+        }
+    },
+    
+    'medium_priority': {
+        '数码配件': {
+            'keywords': ['手机壳', '充电器', '数据线', '耳机', '保护膜'],
+            'text_focus': ['参数', '功能', '兼容性', '材质'],
+            'max_text_length': 10,
+            'example': ['快充20W', '适用iPhone 15', '液态硅胶', 'MFi认证']
+        },
+        '小家电': {
+            'keywords': ['电饭煲', '空气炸锅', '榨汁机', '加湿器', '净化器'],
+            'text_focus': ['功能', '参数', '智能特性', '容量'],
+            'max_text_length': 8,
+            'example': ['智能控温', '静音设计', '5L大容量', 'APP控制']
+        },
+        '宠物用品': {
+            'keywords': ['猫粮', '狗粮', '宠物玩具', '猫砂', '宠物用品'],
+            'text_focus': ['安全', '材质', '适用对象', '功效'],
+            'max_text_length': 8,
+            'example': ['食品级', '猫咪适用', '去味除菌', '天然成分']
+        }
+    },
+    
+    'low_priority': {
+        '运动户外': {
+            'keywords': ['健身器材', '瑜伽垫', '运动服', '户外装备', '帐篷'],
+            'text_focus': ['功能', '材质', '适用场景'],
+            'max_text_length': 6,
+            'example': ['防水', '透气', '轻量化']
+        },
+        '家居用品': {
+            'keywords': ['收纳盒', '衣架', '厨具', '餐具', '装饰品'],
+            'text_focus': ['功能', '材质', '场景'],
+            'max_text_length': 6,
+            'example': ['省空间', '食品级', '北欧风']
+        }
+    },
+    
+    'no_text': {
+        '服饰鞋包': {
+            'keywords': ['连衣裙', 'T恤', '牛仔裤', '运动鞋', '包包', '外套'],
+            'reason': '服饰类主图以视觉展示为主,文案可能影响美感'
+        },
+        '珠宝首饰': {
+            'keywords': ['项链', '戒指', '耳环', '手镯', '手表'],
+            'reason': '珠宝首饰强调品牌调性和质感,文案会降低高端感'
+        },
+        '奢侈品': {
+            'keywords': ['奢侈品牌', '高端定制', '限量版'],
+            'reason': '奢侈品主图必须纯净,品牌价值优先'
+        }
+    }
+}
+
+SELLING_POINT_PRIORITY = {
+    '美妆护肤': ['功效', '成分', '适用肤质', '使用感受', '安全认证'],
+    '个护清洁': ['功效', '成分', '适用人群', '使用场景', '安全认证'],
+    '食品饮料': ['口味', '功效', '成分', '产地', '安全认证'],
+    '母婴用品': ['安全', '材质', '年龄段', '功效', '认证'],
+    '数码配件': ['参数', '功能', '兼容性', '材质', '认证'],
+    '小家电': ['功能', '参数', '智能特性', '容量', '安全认证'],
+    '宠物用品': ['安全', '材质', '适用对象', '功效', '天然成分'],
+    '运动户外': ['功能', '材质', '适用场景', '耐用性'],
+    '家居用品': ['功能', '材质', '场景', '容量', '风格']
+}

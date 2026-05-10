@@ -14,6 +14,35 @@ __pycache__/
 *.pyd
 .venv/
 venv/
+env/
+*.egg-info/
+dist/
+build/
+*.egg
+
+# Testing and coverage
+.pytest_cache/
+.coverage
+htmlcov/
+coverage.xml
+*.cover
+.hypothesis/
+
+# Code quality
+.mypy_cache/
+.dmypy.json
+dmypy.json
+.pytype/
+.ruff_cache/
+
+# IDE and editors
+.vscode/
+.idea/
+*.sublime-project
+*.sublime-workspace
+*.swp
+*.swo
+*~
 
 # Generated outputs
 generated-suites/
@@ -33,5 +62,27 @@ fashion_browser_debug.png
 .DS_Store
 Thumbs.db
 *.tmp
+
+# Jupyter Notebooks
+.ipynb_checkpoints
+
+# Database
+*.db
+*.sqlite3
+
+# Celery
+celerybeat-schedule
+celerybeat.pid
+
+# Redis dump
+dump.rdb
+
+# Logs
+logs/
+*.log.*
+
+# Temporary files
+tmp/
+temp/
+*.bak
 *.swp
-*.swo

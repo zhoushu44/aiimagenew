@@ -1,0 +1,71 @@
+[flake8]
+max-line-length = 100
+max-complexity = 10
+extend-ignore =
+    # Line length handled by black
+    E501,
+    # Whitespace before ':' (conflicts with black)
+    W503,
+    E203,
+    # Missing docstrings
+    D100,
+    D101,
+    D102,
+    D103,
+    D104,
+    D105,
+    D106,
+    D107,
+    # Missing type annotation
+    ANN101,
+    ANN102,
+    ANN201,
+    ANN202,
+    ANN204,
+    ANN205,
+    ANN206,
+    # Missing function docstring
+    D200,
+    D205,
+    D400,
+    D401,
+
+exclude =
+    .git,
+    __pycache__,
+    .tox,
+    .eggs,
+    *.egg,
+    build,
+    dist,
+    migrations,
+    .venv,
+    venv,
+    env,
+    node_modules,
+    static,
+    pages,
+
+per-file-ignores =
+    # Allow unused imports in __init__.py
+    __init__.py: F401
+    # Allow assert in tests
+    tests/*: S101
+    # Allow print in scripts
+    scripts/*: T001
+
+# McCabe complexity
+max-cognitive-complexity = 15
+
+# Import order
+import-order-style = google
+application-import-names = generation,config,utils,app
+
+# Docstring style
+docstring-convention = google
+
+# Allow specific exceptions
+accept-encodings = utf-8
+
+# Security checks
+hardcoded-tmp-directory = /tmp

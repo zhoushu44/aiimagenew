@@ -523,13 +523,38 @@ def build_main_image_cover_plan(platform: str, selling_text: str, output_count: 
     selected_types = MAIN_IMAGE_COVER_TYPES[:normalized_count]
     style_reference = build_style_reference_text(selected_style)
     product_json_text = build_product_json_prompt_text(product_json)
-    shared_prompt = (
+    
+    need_text, text_rules = should_main_image_have_text(
+        product_category=product_json.get('category') if product_json else '',
+        platform=platform,
+        text_type=text_type
+    )
+    
+    shared_prompt_base = (
         '生成一张电商商品封面主图。这张图必须适合作为商品第一张展示图使用。\n'
         '主图生成只做多版本商品封面主图，不做详情页、不做功能说明图、不做尺寸图、不做人群图、不做对比图、不做细节放大图。\n'
         '产品图用于锁定产品主体，必须保持产品外观、结构、颜色、材质、比例、细节一致。\n'
         '参考图只用于学习构图、光影、背景氛围、色调和视觉风格，不得替换产品主体。\n'
         '核心卖点只用于影响封面主图的氛围和视觉重点，不生成说明图、标签图或详情页风格图片。\n'
-        '禁止添加文字、水印、乱码、促销标签、参数标注、功能图标、尺寸说明、材质拆解和对比布局。\n'
+    )
+    
+    if need_text and text_type != '无文字':
+        text_prompt = build_main_image_text_prompt(
+            product_json=product_json,
+            platform=platform,
+            text_type=text_type,
+            country=country,
+            text_rules=text_rules
+        )
+        shared_prompt = f'{shared_prompt_base}\n\n文案要求：\n{text_prompt}'
+    else:
+        shared_prompt = (
+            f'{shared_prompt_base}'
+            '禁止添加文字、水印、乱码、促销标签、参数标注、功能图标、尺寸说明、材质拆解和对比布局。\n'
+        )
+    
+    shared_prompt = (
+        f'{shared_prompt}'
         '产品主体必须清晰、完整、突出，是画面绝对视觉中心。\n'
         f'平台：{platform or "亚马逊"}\n'
         f'国家市场：{country or "中国"}\n'
@@ -538,15 +563,51 @@ def build_main_image_cover_plan(platform: str, selling_text: str, output_count: 
         f'风格参考：\n{style_reference}\n'
         f'不可变商品特征：\n{product_json_text}'
     )
+    
+    if need_text and text_type != '无文字':
+        selling_points = extract_selling_points(selling_text)
+        text_distribution = distribute_text_content(
+            selling_points=selling_points,
+            output_count=normalized_count,
+            product_category=product_json.get('category') if product_json else ''
+        )
+        unified_style = get_unified_text_style(product_json, platform)
+    else:
+        text_distribution = None
+        unified_style = None
+    
     items = []
     for index, item in enumerate(selected_types, start=1):
+        base_prompt = f'{shared_prompt}\n\n本张方向：{item["title"]}。\n目标：{item["goal"]}\n执行方式：{item["direction"]}'
+        
+        if text_distribution and unified_style and index <= len(text_distribution):
+            text_config = text_distribution[index - 1]
+            
+            if text_config['need_text']:
+                text_prompt_detail = build_differentiated_text_prompt(
+                    text_config=text_config,
+                    unified_style=unified_style,
+                    index=index - 1
+                )
+                final_prompt = f'{base_prompt}\n\n文案要求：\n{text_prompt_detail}'
+                layout_style = '带文案封面主图'
+                font_style = '匹配产品风格'
+            else:
+                final_prompt = f'{base_prompt}\n\n禁止添加任何文字、水印、促销标签。'
+                layout_style = '无文字封面主图'
+                font_style = '无文字'
+        else:
+            final_prompt = base_prompt
+            layout_style = '无文字封面主图'
+            font_style = '无文字'
+        
         items.append(
             {
                 'sort': index,
                 'type': item['title'],
                 'title': item['title'],
                 'keywords': item['keywords'],
-                'prompt': f'{shared_prompt}\n\n本张方向：{item["title"]}。\n目标：{item["goal"]}\n执行方式：{item["direction"]}',
+                'prompt': final_prompt,
                 'type_tag': 'Cover',
                 'module': 'opening_narrative',
                 'story_role': '商品封面主图候选',
@@ -559,13 +620,14 @@ def build_main_image_cover_plan(platform: str, selling_text: str, output_count: 
                 'human_presence': 'none',
                 'action_type': '静态主图陈列',
                 'layout_anchor': '商品主体居中或黄金比例突出',
-                'layout_style': '无文字封面主图',
-                'font_style': '无文字',
+                'layout_style': layout_style,
+                'font_style': font_style,
                 'color_scheme': '匹配商品和参考图氛围的干净配色',
                 'decor_elements': [],
                 'must_differ_from': [],
             }
         )
+    
     return {
         'summary': f'已规划 {normalized_count} 张商品封面主图候选，全部仅用于主图生成，不包含详情页、尺寸、材质、人群、对比或细节说明图。',
         'output_count': normalized_count,
@@ -1570,5 +1632,250 @@ def normalize_chat_completion_image_response(response):
     if generated_item:
         return {'data': [generated_item]}
     return response
+
+
+def get_product_text_rule(product_category):
+    """根据产品类别获取文案规则"""
+    from config import PRODUCT_CATEGORY_TEXT_RULES
+    
+    if not product_category:
+        return {
+            'need_text': True,
+            'priority': 'low',
+            'text_focus': ['功能', '特点'],
+            'max_text_length': 6
+        }
+    
+    for category, rule in PRODUCT_CATEGORY_TEXT_RULES['high_priority'].items():
+        if any(kw in product_category for kw in rule['keywords']):
+            return {
+                'need_text': True,
+                'priority': 'high',
+                'text_focus': rule['text_focus'],
+                'max_text_length': rule['max_text_length']
+            }
+    
+    for category, rule in PRODUCT_CATEGORY_TEXT_RULES['medium_priority'].items():
+        if any(kw in product_category for kw in rule['keywords']):
+            return {
+                'need_text': True,
+                'priority': 'medium',
+                'text_focus': rule['text_focus'],
+                'max_text_length': rule['max_text_length']
+            }
+    
+    for category, rule in PRODUCT_CATEGORY_TEXT_RULES['low_priority'].items():
+        if any(kw in product_category for kw in rule['keywords']):
+            return {
+                'need_text': True,
+                'priority': 'low',
+                'text_focus': rule['text_focus'],
+                'max_text_length': rule['max_text_length']
+            }
+    
+    for category, rule in PRODUCT_CATEGORY_TEXT_RULES['no_text'].items():
+        if any(kw in product_category for kw in rule['keywords']):
+            return {
+                'need_text': False,
+                'priority': 'none',
+                'reason': rule['reason']
+            }
+    
+    return {
+        'need_text': True,
+        'priority': 'low',
+        'text_focus': ['功能', '特点'],
+        'max_text_length': 6
+    }
+
+
+def should_main_image_have_text(product_category, platform, text_type):
+    """
+    判断主图是否需要添加文案
+    
+    Returns:
+        tuple: (need_text: bool, text_rules: dict)
+    """
+    from config import PLATFORM_TEXT_RULES
+    
+    if text_type == '无文字':
+        return False, {}
+    
+    platform_rule = PLATFORM_TEXT_RULES.get(platform, {})
+    if not platform_rule.get('allow_text', False):
+        return False, {}
+    
+    product_rule = get_product_text_rule(product_category)
+    
+    return product_rule['need_text'], product_rule
+
+
+def build_main_image_text_prompt(product_json, platform, text_type, country, text_rules):
+    """生成主图文案提示"""
+    from config import PLATFORM_TEXT_RULES
+    
+    platform_rule = PLATFORM_TEXT_RULES.get(platform, {})
+    
+    prompt_parts = [
+        f"文案数量: 1-2个核心卖点",
+        f"文案长度: 中文2-{text_rules['max_text_length']}字,英文2-4词",
+        f"文案重点: {', '.join(text_rules['text_focus'])}",
+        f"文案风格: {platform_rule.get('style', 'selling_point')}",
+        f"文案位置: 顶部或底部,不遮挡商品主体",
+        f"配色要求: 与商品主色调呼应,低饱和,清晰易读",
+        f"字体要求: 匹配产品风格,简洁大方",
+        "",
+        "禁止项:",
+        "- 虚假宣传、夸大效果",
+        "- 遮挡商品主体、模特面部、关键细节",
+        "- 过多文字堆砌(超过2行)",
+        "- 乱码、模糊、变形、高饱和刺眼配色"
+    ]
+    
+    return '\n'.join(prompt_parts)
+
+
+def extract_selling_points(selling_text):
+    """从卖点文本中提取卖点列表"""
+    if not selling_text:
+        return []
+    
+    points = [p.strip() for p in selling_text.replace('、', ',').replace(';', ',').replace('。', ',').split(',') if p.strip()]
+    return points[:10]
+
+
+def distribute_text_content(selling_points, output_count, product_category):
+    """
+    为多张主图分配文案内容
+    
+    Args:
+        selling_points: 产品卖点列表
+        output_count: 主图数量(6或10)
+        product_category: 产品类别
+    
+    Returns:
+        list: 每张主图的文案配置
+    """
+    from config import SELLING_POINT_PRIORITY
+    
+    priority_order = SELLING_POINT_PRIORITY.get(product_category, ['功能', '特点', '优势'])
+    
+    text_distribution = []
+    
+    for i in range(output_count):
+        if i == 0:
+            text_config = {
+                'position': '封面主图',
+                'text_strategy': '核心卖点',
+                'text_content': f"品牌名 · {selling_points[0] if selling_points else '核心卖点'}",
+                'text_position': 'top_center + bottom_center',
+                'need_text': True
+            }
+        elif i < output_count * 0.7:
+            sell_point_idx = i % len(selling_points) if selling_points else 0
+            text_config = {
+                'position': f'主图{i+1}',
+                'text_strategy': '差异化卖点',
+                'text_content': selling_points[sell_point_idx] if selling_points else f'卖点{i}',
+                'text_position': get_text_position_by_index(i),
+                'need_text': True
+            }
+        else:
+            text_config = {
+                'position': f'主图{i+1}',
+                'text_strategy': '可选文案',
+                'text_content': '品牌Logo' if i == output_count - 1 else '',
+                'text_position': 'left_top',
+                'need_text': False
+            }
+        
+        text_distribution.append(text_config)
+    
+    return text_distribution
+
+
+def get_text_position_by_index(index):
+    """根据主图序号返回文案位置,确保位置多样化"""
+    positions = ['bottom_center', 'right_top', 'left_top', 'bottom_center', 'right_top']
+    return positions[index % len(positions)]
+
+
+def get_unified_text_style(product_json, platform):
+    """
+    获取统一的文案风格配置
+    
+    Returns:
+        dict: 统一的文案风格配置
+    """
+    style_config = {
+        'font_family': get_font_by_product_style(product_json.get('style', '简约') if product_json else '简约'),
+        'color_scheme': get_color_scheme_by_product(product_json),
+        'font_size': {
+            'primary': '24px',
+            'secondary': '18px'
+        },
+        'font_weight': 'medium',
+        'text_align': 'center'
+    }
+    
+    return style_config
+
+
+def get_font_by_product_style(style):
+    """根据产品风格获取字体"""
+    style_lower = (style or '简约').lower()
+    
+    if any(kw in style_lower for kw in ['科技', '简约', '现代', '商务']):
+        return '无衬线字体(如Helvetica, PingFang SC, 思源黑体)'
+    elif any(kw in style_lower for kw in ['温柔', '软萌', '可爱', '少女']):
+        return '圆润字体(如圆体, 幼圆, 手写体)'
+    elif any(kw in style_lower for kw in ['高端', '质感', '奢华', '轻奢']):
+        return '纤细衬线(如Times New Roman, 宋体, 楷体)'
+    elif any(kw in style_lower for kw in ['促销', '活力', '运动', '年轻']):
+        return '粗黑体(如黑体, 微软雅黑 Bold)'
+    else:
+        return '无衬线字体(如Helvetica, PingFang SC, 思源黑体)'
+
+
+def get_color_scheme_by_product(product_json):
+    """根据产品获取配色方案"""
+    if not product_json:
+        return '浅底深字(白色背景 + 黑色文字)'
+    
+    return '与商品主色调呼应,低饱和,清晰易读'
+
+
+def build_differentiated_text_prompt(text_config, unified_style, index):
+    """
+    生成差异化的文案提示
+    
+    Args:
+        text_config: 文案配置
+        unified_style: 统一风格配置
+        index: 主图序号
+    
+    Returns:
+        str: 差异化文案提示
+    """
+    prompt_parts = [
+        f"文案策略: {text_config['text_strategy']}",
+        f"文案内容: {text_config['text_content']}",
+        f"文案位置: {text_config['text_position']}",
+        f"文案长度: 中文2-8字,英文2-4词",
+        "",
+        "统一风格要求:",
+        f"- 字体: {unified_style['font_family']}",
+        f"- 配色: {unified_style['color_scheme']}",
+        f"- 字号: 主标题{unified_style['font_size']['primary']}, 副标题{unified_style['font_size']['secondary']}",
+        f"- 字重: {unified_style['font_weight']}",
+        "",
+        "禁止项:",
+        "- 虚假宣传、夸大效果",
+        "- 遮挡商品主体、模特面部、关键细节",
+        "- 过多文字堆砌(超过2行)",
+        "- 乱码、模糊、变形、高饱和刺眼配色"
+    ]
+    
+    return '\n'.join(prompt_parts)
 
 

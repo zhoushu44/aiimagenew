@@ -1,0 +1,186 @@
+[build-system]
+requires = ["setuptools>=45", "wheel", "setuptools-scm[toml]>=6.2"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "aiimagenew"
+version = "1.0.0"
+description = "AI Image Generation Platform for E-commerce"
+readme = "README.md"
+requires-python = ">=3.10"
+license = {text = "MIT"}
+authors = [
+    {name = "AI Image Team", email = "team@aiimage.com"}
+]
+keywords = ["ai", "image-generation", "e-commerce", "flask", "celery"]
+classifiers = [
+    "Development Status :: 4 - Beta",
+    "Intended Audience :: Developers",
+    "License :: OSI Approved :: MIT License",
+    "Programming Language :: Python :: 3",
+    "Programming Language :: Python :: 3.10",
+    "Programming Language :: Python :: 3.11",
+    "Framework :: Flask",
+]
+
+dependencies = [
+    "flask>=2.3.0",
+    "celery>=5.3.0",
+    "requests>=2.31.0",
+    "openai>=1.0.0",
+    "supabase>=2.0.0",
+    "python-dotenv>=1.0.0",
+    "redis>=4.5.0",
+    "pillow>=10.0.0",
+    "gunicorn>=21.0.0",
+]
+
+[project.optional-dependencies]
+dev = [
+    "pytest>=7.4.0",
+    "pytest-cov>=4.1.0",
+    "pytest-asyncio>=0.21.0",
+    "black>=23.3.0",
+    "isort>=5.12.0",
+    "flake8>=6.0.0",
+    "mypy>=1.3.0",
+    "pylint>=2.17.0",
+    "pre-commit>=3.3.0",
+    "bandit>=1.7.0",
+    "safety>=2.3.0",
+]
+
+[project.urls]
+Homepage = "https://github.com/yourusername/aiimagenew"
+Documentation = "https://github.com/yourusername/aiimagenew/docs"
+Repository = "https://github.com/yourusername/aiimagenew"
+Changelog = "https://github.com/yourusername/aiimagenew/CHANGELOG.md"
+
+[tool.black]
+line-length = 100
+target-version = ['py310', 'py311']
+include = '\.pyi?$'
+extend-exclude = '''
+/(
+  \.eggs
+  | \.git
+  | \.hg
+  | \.mypy_cache
+  | \.tox
+  | \.venv
+  | _build
+  | buck-out
+  | build
+  | dist
+  | migrations
+)/
+'''
+
+[tool.isort]
+profile = "black"
+line_length = 100
+skip_gitignore = true
+known_first_party = ["generation", "config", "utils"]
+sections = ["FUTURE", "STDLIB", "THIRDPARTY", "FIRSTPARTY", "LOCALFOLDER"]
+
+[tool.pylint.messages_control]
+disable = [
+    "C0330",
+    "C0326",
+    "C0114",  # missing-module-docstring
+    "C0115",  # missing-class-docstring
+    "C0116",  # missing-function-docstring
+    "R0903",  # too-few-public-methods
+    "R0913",  # too-many-arguments
+]
+
+[tool.pylint.format]
+max-line-length = "100"
+
+[tool.pylint.basic]
+good-names = ["i", "j", "k", "ex", "_", "logger", "db"]
+
+[tool.pylint.design]
+max-args = 10
+max-locals = 20
+max-returns = 6
+max-branches = 15
+max-statements = 60
+
+[tool.mypy]
+python_version = "3.10"
+warn_return_any = true
+warn_unused_configs = true
+disallow_untyped_defs = false
+disallow_incomplete_defs = false
+check_untyped_defs = true
+disallow_untyped_decorators = false
+no_implicit_optional = true
+warn_redundant_casts = true
+warn_unused_ignores = false
+warn_no_return = true
+warn_unreachable = true
+strict_equality = true
+ignore_missing_imports = true
+
+[[tool.mypy.overrides]]
+module = "tests.*"
+disallow_untyped_defs = false
+
+[tool.pytest.ini_options]
+minversion = "6.0"
+addopts = [
+    "-ra",
+    "-q",
+    "--strict-markers",
+    "--cov=generation",
+    "--cov-report=term-missing",
+    "--cov-report=html:htmlcov",
+    "--cov-fail-under=60",
+]
+testpaths = ["tests"]
+python_files = ["test_*.py"]
+python_classes = ["Test*"]
+python_functions = ["test_*"]
+markers = [
+    "slow: marks tests as slow (deselect with '-m \"not slow\"')",
+    "integration: marks tests as integration tests",
+    "unit: marks tests as unit tests",
+]
+
+[tool.coverage.run]
+source = ["generation"]
+omit = [
+    "tests/*",
+    "*/migrations/*",
+    "*/__pycache__/*",
+    "*/site-packages/*",
+]
+
+[tool.coverage.report]
+precision = 2
+show_missing = true
+skip_covered = false
+exclude_lines = [
+    "pragma: no cover",
+    "def __repr__",
+    "raise AssertionError",
+    "raise NotImplementedError",
+    "if __name__ == .__main__.:",
+    "if TYPE_CHECKING:",
+    "class .*\\bProtocol\\):",
+    "@(abc\\.)?abstractmethod",
+]
+
+[tool.coverage.html]
+directory = "htmlcov"
+
+[tool.coverage.xml]
+output = "coverage.xml"
+
+[tool.bandit]
+targets = ["generation", "app.py", "celery_tasks.py"]
+exclude_dirs = ["tests", "migrations"]
+
+[tool.radon]
+cc_min = "B"
