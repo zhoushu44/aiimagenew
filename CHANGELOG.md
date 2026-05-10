@@ -1,3 +1,37 @@
+## v12.2 (2026-05-10)
+
+### Celery 模块导入错误修复
+
+- **修复 ModuleNotFoundError**：解决 Docker 容器中 Celery Worker 执行任务时 `No module named 'app'` 错误
+- **PYTHONPATH 环境变量**：Dockerfile 新增 `PYTHONPATH=/app` 环境变量，确保 Python 模块搜索路径正确
+- **验证通过**：8 个 Celery 任务函数全部可正确导入，AI 帮写、风格分析等功能恢复正常
+
+### 主图文案添加逻辑设计
+
+- **新增设计文档**：`docs/主图文案添加逻辑设计.md` 完整的主图文案智能添加方案
+- **三层判断机制**：文字类型参数 → 平台规则 → 产品类型特征
+- **平台规则配置**：12 个平台的文案策略详细配置
+- **产品类型分类**：15 个产品大类的文案需求矩阵
+- **文案生成规则**：内容、视觉、排版完整规则体系
+
+### Docker 镜像标签更新
+
+- 镜像标签 12.1 → 12.2
+- GitHub Action 自动打 `12.2` + `latest` 双标签
+- 推送仍由 GitHub Action 自动完成，本地不执行 Docker 推送操作
+- `.dockerignore` 继续排除 `.env` 和 `.env.*`
+
+### 文档更新
+
+- 新增 `docs/Celery模块导入错误修复说明.md`
+- 新增 `docs/问题修复完成报告.md`
+- 新增 `docs/GitHub_Action_Docker镜像自动构建说明.md`
+- 新增 `docs/GitHub_Action配置修改说明.md`
+- 新增 `test_celery_imports.py` 模块导入测试脚本
+- 新增 `deploy.sh` 自动部署脚本
+
+***
+
 ## v12.1 (2026-05-10)
 
 ### Celery Worker 启动修复

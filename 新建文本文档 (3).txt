@@ -1,0 +1,88 @@
+172.17.0.1 - - [10/May/2026:03:45:14 +0000] "GET /api/generation-tasks/a68fb1e530494c74bd8d6378e58f4455 HTTP/1.1" 200 849 "https://img.86969678.xyz/suite" "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/132.0.0.0 Safari/537.36 NetType/WIFI MicroMessenger/7.0.20.1781(0x6700143B) WindowsWechat(0x63090a13) UnifiedPCWindowsWechat(0xf254191e) XWEB/19769 Flue"
+[2026-05-10 03:45:18 +0000] [1] [INFO] Handling signal: term
+[2026-05-10 03:45:18 +0000] [10] [INFO] Worker exiting (pid: 10)
+[2026-05-10 03:45:18 +0000] [11] [INFO] Worker exiting (pid: 11)
+[2026-05-10 03:45:18 +0000] [9] [INFO] Worker exiting (pid: 9)
+[2026-05-10 03:45:29 +0000] [1] [INFO] Starting gunicorn 26.0.0
+[2026-05-10 03:45:29 +0000] [1] [INFO] Listening at: http://0.0.0.0:5078 (1)
+[2026-05-10 03:45:29 +0000] [1] [INFO] Using worker: sync
+[2026-05-10 03:45:29 +0000] [8] [INFO] Booting worker with pid: 8
+[2026-05-10 03:45:29 +0000] [9] [INFO] Booting worker with pid: 9
+[2026-05-10 03:45:29 +0000] [10] [INFO] Booting worker with pid: 10
+[2026-05-10 03:45:29 +0000] [11] [INFO] Booting worker with pid: 11
+[2026-05-10 03:45:30 +0000] [1] [INFO] Control socket listening at /root/.gunicorn/gunicorn.ctl
+/usr/local/lib/python3.11/site-packages/celery/platforms.py:841: SecurityWarning: You're running the worker with superuser privileges: this is
+absolutely not recommended!
+2026-05-10T03:45:30.416507643Z
+Please specify a different user using the --uid option.
+2026-05-10T03:45:30.416514323Z
+User information: uid=0 euid=0 gid=0 egid=0
+2026-05-10T03:45:30.416520443Z
+  warnings.warn(SecurityWarning(ROOT_DISCOURAGED.format(
+ -------------- celery@f02b42537d23 v5.6.3 (recovery)
+--- ***** -----
+-- ******* ---- Linux-6.6.117-45.oc9.x86_64-x86_64-with-glibc2.41 2026-05-10 03:45:30
+- *** --- * ---
+- ** ---------- [config]
+- ** ---------- .> app:         aiimagenew:0x7faf5e93bfd0
+- ** ---------- .> transport:   redis://:**@8.163.52.51:26739/3
+- ** ---------- .> results:     redis://:**@8.163.52.51:26739/3
+- *** --- * --- .> concurrency: 24 (prefork)
+-- ******* ---- .> task events: OFF (enable -E to monitor tasks in this worker)
+--- ***** -----
+ -------------- [queues]
+                .> generation_normal exchange=generation(direct) key=generation_normal
+                .> generation_priority exchange=generation(direct) key=generation_priority
+2026-05-10T03:45:30.561508728Z
+[tasks]
+  . generation.run_ai_write_task
+  . generation.run_aplus_task
+  . generation.run_fashion_model_task
+  . generation.run_generation_task
+  . generation.run_mode_image_task
+  . generation.run_replicate_generation_task
+  . generation.run_style_analysis_task
+  . generation.run_zip_task
+2026-05-10T03:45:30.561536416Z
+[2026-05-10 03:45:34,791: INFO/MainProcess] Connected to redis://:**@8.163.52.51:26739/3
+[2026-05-10 03:45:37,031: INFO/MainProcess] mingle: searching for neighbors
+[2026-05-10 03:45:40,467: INFO/MainProcess] mingle: all alone
+[2026-05-10 03:45:45,916: INFO/MainProcess] celery@f02b42537d23 ready.
+172.17.0.1 - - [10/May/2026:03:45:47 +0000] "POST /api/ai-write HTTP/1.1" 202 916 "https://img.86969678.xyz/suite" "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/132.0.0.0 Safari/537.36 NetType/WIFI MicroMessenger/7.0.20.1781(0x6700143B) WindowsWechat(0x63090a13) UnifiedPCWindowsWechat(0xf254191e) XWEB/19769 Flue"
+[2026-05-10 03:45:48,118: INFO/MainProcess] Task generation.run_ai_write_task[cd7ac7b5-a567-4ac6-97bb-ff55ea313472] received
+172.17.0.1 - - [10/May/2026:03:45:48 +0000] "GET /api/generation-tasks/6c826711fee945af96fedf4cc186e62b HTTP/1.1" 200 853 "https://img.86969678.xyz/suite" "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/132.0.0.0 Safari/537.36 NetType/WIFI MicroMessenger/7.0.20.1781(0x6700143B) WindowsWechat(0x63090a13) UnifiedPCWindowsWechat(0xf254191e) XWEB/19769 Flue"
+172.17.0.1 - - [10/May/2026:03:45:49 +0000] "POST /api/style-analysis HTTP/1.1" 202 928 "https://img.86969678.xyz/suite" "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/132.0.0.0 Safari/537.36 NetType/WIFI MicroMessenger/7.0.20.1781(0x6700143B) WindowsWechat(0x63090a13) UnifiedPCWindowsWechat(0xf254191e) XWEB/19769 Flue"
+[2026-05-10 03:45:49,781: INFO/MainProcess] Task generation.run_style_analysis_task[d62c59d8-f825-44c0-b8cd-ca1d296a373e] received
+[2026-05-10 03:45:50,650: ERROR/ForkPoolWorker-16] Task generation.run_ai_write_task[cd7ac7b5-a567-4ac6-97bb-ff55ea313472] raised unexpected: ModuleNotFoundError("No module named 'app'")
+Traceback (most recent call last):
+  File "/usr/local/lib/python3.11/site-packages/celery/app/trace.py", line 585, in trace_task
+    R = retval = fun(*args, **kwargs)
+                 ^^^^^^^^^^^^^^^^^^^^
+  File "/usr/local/lib/python3.11/site-packages/celery/app/trace.py", line 858, in __protected_call__
+    return self.run(*args, **kwargs)
+           ^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/usr/local/lib/python3.11/site-packages/celery/app/autoretry.py", line 38, in run
+    return task._orig_run(*args, **kwargs)
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/app/celery_tasks.py", line 155, in run_ai_write_task_celery
+    from app import run_ai_write_task
+ModuleNotFoundError: No module named 'app'
+[2026-05-10 03:45:51,480: ERROR/ForkPoolWorker-1] Task generation.run_style_analysis_task[d62c59d8-f825-44c0-b8cd-ca1d296a373e] raised unexpected: ModuleNotFoundError("No module named 'app'")
+Traceback (most recent call last):
+  File "/usr/local/lib/python3.11/site-packages/celery/app/trace.py", line 585, in trace_task
+    R = retval = fun(*args, **kwargs)
+                 ^^^^^^^^^^^^^^^^^^^^
+  File "/usr/local/lib/python3.11/site-packages/celery/app/trace.py", line 858, in __protected_call__
+    return self.run(*args, **kwargs)
+           ^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/usr/local/lib/python3.11/site-packages/celery/app/autoretry.py", line 38, in run
+    return task._orig_run(*args, **kwargs)
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/app/celery_tasks.py", line 162, in run_style_analysis_task_celery
+    from app import run_style_analysis_task
+ModuleNotFoundError: No module named 'app'
+172.17.0.1 - - [10/May/2026:03:45:53 +0000] "GET /api/generation-tasks/6c826711fee945af96fedf4cc186e62b HTTP/1.1" 200 853 "https://img.86969678.xyz/suite" "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/132.0.0.0 Safari/537.36 NetType/WIFI MicroMessenger/7.0.20.1781(0x6700143B) WindowsWechat(0x63090a13) UnifiedPCWindowsWechat(0xf254191e) XWEB/19769 Flue"
+172.17.0.1 - - [10/May/2026:03:45:59 +0000] "GET /api/generation-tasks/6c826711fee945af96fedf4cc186e62b HTTP/1.1" 200 853 "https://img.86969678.xyz/suite" "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/132.0.0.0 Safari/537.36 NetType/WIFI MicroMessenger/7.0.20.1781(0x6700143B) WindowsWechat(0x63090a13) UnifiedPCWindowsWechat(0xf254191e) XWEB/19769 Flue"
+172.17.0.1 - - [10/May/2026:03:46:05 +0000] "GET /api/generation-tasks/6c826711fee945af96fedf4cc186e62b HTTP/1.1" 200 853 "https://img.86969678.xyz/suite" "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/132.0.0.0 Safari/537.36 NetType/WIFI MicroMessenger/7.0.20.1781(0x6700143B) WindowsWechat(0x63090a13) UnifiedPCWindowsWechat(0xf254191e) XWEB/19769 Flue"
+172.17.0.1 - - [10/May/2026:03:46:10 +0000] "GET /api/generation-tasks/6c826711fee945af96fedf4cc186e62b HTTP/1.1" 200 853 "https://img.86969678.xyz/suite" "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/132.0.0.0 Safari/537.36 NetType/WIFI MicroMessenger/7.0.20.1781(0x6700143B) WindowsWechat(0x63090a13) UnifiedPCWindowsWechat(0xf254191e) XWEB/19769 Flue"
+172.17.0.1 - - [10/May/2026:03:46:16 +0000] "GET /api/generation-tasks/6c826711fee945af96fedf4cc186e62b HTTP/1.1" 200 853 "https://img.86969678.xyz/suite" "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/132.0.0.0 Safari/537.36 NetType/WIFI MicroMessenger/7.0.20.1781(0x6700143B) WindowsWechat(0x63090a13) UnifiedPCWindowsWechat(0xf254191e) XWEB/19769 Flue"
