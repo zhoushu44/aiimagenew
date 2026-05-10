@@ -1,8 +1,14 @@
 import logging
+import sys
+from pathlib import Path
 from urllib.parse import urlparse
 
 from celery import Celery
 from kombu import Exchange, Queue
+
+BASE_DIR = Path(__file__).resolve().parent
+if str(BASE_DIR) not in sys.path:
+    sys.path.insert(0, str(BASE_DIR))
 
 from config import get_optional_env, get_optional_int_env
 
@@ -67,6 +73,7 @@ celery_app = Celery(
 )
 
 celery_app.conf.update(
+    imports=('celery_tasks',),
     task_serializer='json',
     accept_content=['json'],
     result_serializer='json',
@@ -102,5 +109,4 @@ celery_app.conf.update(
         Queue(CELERY_NORMAL_QUEUE_NAME, generation_exchange, routing_key=CELERY_NORMAL_QUEUE_NAME, max_priority=9),
     ),
 )
-
-celery_app.autodiscover_tasks(['celery_tasks'])
+

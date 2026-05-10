@@ -1,3 +1,21 @@
+## v12.1 (2026-05-10)
+
+### Celery Worker 启动修复
+
+- **修复 ModuleNotFoundError**：解决 Docker 容器中 Celery Worker 启动时 `No module named 'celery_tasks'` 错误
+- **sys.path 设置**：`celery_app.py` 新增 `BASE_DIR` 加入 `sys.path`，确保模块可被正确导入
+- **imports 配置**：使用 `celery_app.conf.imports` 显式声明任务模块，替代 `autodiscover_tasks`
+- **验证通过**：8 个 Celery 任务函数全部正确注册
+
+### Docker 镜像标签更新
+
+- 镜像标签 12.0 → 12.1
+- GitHub Action 自动打 `12.1` + `latest` 双标签
+- 推送仍由 GitHub Action 自动完成，本地不执行 Docker 推送操作
+- `.dockerignore` 继续排除 `.env` 和 `.env.*`
+
+***
+
 ## v12.0 (2026-05-10)
 
 ### 并发配置优化（4核8G服务器）
