@@ -162,3 +162,10 @@ def run_style_analysis_task_celery(task_id: str, form_payload: dict, file_payloa
     from app import run_style_analysis_task
 
     return run_style_analysis_task(task_id, form_payload, restore_payloads_from_celery(file_payloads))
+
+
+@celery_app.task(name='generation.run_virtual_tryon_task', autoretry_for=_TRANSIENT_EXCEPTIONS, **_RETRY_KWARGS)
+def run_virtual_tryon_task_celery(task_id: str, form_payload: dict):
+    from app import run_virtual_tryon_task
+
+    return run_virtual_tryon_task(task_id, form_payload)

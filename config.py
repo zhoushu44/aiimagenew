@@ -144,8 +144,8 @@ def get_supabase_setting_float(name: str, default: float) -> float:
 
 
 def get_supabase_setting_bool(name: str, default: bool = False) -> bool:
-    raw_value = get_supabase_setting(name, 'true' if default else 'false').lower()
-    return raw_value in {'1', 'true', 'yes', 'on'}
+    raw_value = get_supabase_setting(name, 'true' if default else 'false')
+    return _is_truthy_flag(raw_value)
 
 
 def get_supabase_setting_csv(name: str) -> set[str]:
@@ -155,6 +155,14 @@ def get_supabase_setting_csv(name: str) -> set[str]:
         for value in raw_value.split(',')
         if value.strip()
     }
+
+
+def _is_truthy_flag(value) -> bool:
+    if isinstance(value, bool):
+        return value
+    if value is None:
+        return False
+    return str(value).strip().lower() in {'1', 'true', 'yes', 'on'}
 
 
 def get_supabase_setting_json(name: str, default=None):
@@ -174,6 +182,31 @@ def get_optional_env(name: str, default: str = '') -> str:
     return value.strip()
 
 
+def get_unified_setting(name: str, default: str = '') -> str:
+    return get_supabase_setting(name, get_optional_env(name, default))
+
+
+def get_unified_setting_int(name: str, default: int) -> int:
+    raw_value = get_unified_setting(name, str(default))
+    try:
+        return int(raw_value)
+    except ValueError as exc:
+        raise ValueError(f'环境变量 {name} 必须为整数') from exc
+
+
+def get_unified_setting_float(name: str, default: float) -> float:
+    raw_value = get_unified_setting(name, str(default))
+    try:
+        return float(raw_value)
+    except ValueError as exc:
+        raise ValueError(f'环境变量 {name} 必须为数字') from exc
+
+
+def get_unified_setting_bool(name: str, default: bool = False) -> bool:
+    raw_value = get_unified_setting(name, 'true' if default else 'false')
+    return _is_truthy_flag(raw_value)
+
+
 def get_optional_int_env(name: str, default: int) -> int:
     value = get_optional_env(name, str(default))
     try:
@@ -183,8 +216,8 @@ def get_optional_int_env(name: str, default: int) -> int:
 
 
 def get_optional_bool_env(name: str, default: bool = False) -> bool:
-    raw_value = get_optional_env(name, 'true' if default else 'false').lower()
-    return raw_value in {'1', 'true', 'yes', 'on'}
+    raw_value = get_optional_env(name, 'true' if default else 'false')
+    return _is_truthy_flag(raw_value)
 
 
 def build_supabase_request_url(path: str) -> str:
@@ -227,9 +260,7 @@ def _post_supabase_rpc(function_name: str, payload: dict) -> dict:
 
 
 def get_mode2_allowed_image_hosts() -> set[str]:
-    raw_value = get_supabase_setting('MODE2_ALLOWED_IMAGE_HOSTS', '')
-    if not raw_value:
-        raw_value = os.getenv('MODE2_ALLOWED_IMAGE_HOSTS', '').strip()
+    raw_value = get_unified_setting('MODE2_ALLOWED_IMAGE_HOSTS', '')
     allowed_hosts = {
         host.strip().lower()
         for host in raw_value.split(',')
@@ -291,14 +322,6 @@ def _normalize_phone_identifier(value: str | None) -> str:
     if normalized.startswith('86') and len(normalized) == 13:
         return normalized[2:]
     return normalized
-
-
-def _is_truthy_flag(value) -> bool:
-    if isinstance(value, bool):
-        return value
-    if value is None:
-        return False
-    return str(value).strip().lower() in {'1', 'true', 'yes', 'on'}
 
 
 def normalize_app_mode(value: str | None) -> str:
@@ -367,38 +390,23 @@ def _parse_api_keys(raw_keys: str) -> list[str]:
     return [k.strip() for k in raw_keys.split(',') if k.strip()]
 
 
+def _get_api_key_concurrency_limit() -> int:
+    return max(get_unified_setting_int('API_KEY_CONCURRENCY_LIMIT', 10), 1)
+
+
 def _get_api_concurrency_limit() -> int:
-    explicit_limit = get_supabase_setting_int(
-        'API_GLOBAL_CONCURRENCY_LIMIT',
-        get_optional_int_env('API_GLOBAL_CONCURRENCY_LIMIT', 0),
-    )
+    explicit_limit = get_unified_setting_int('API_GLOBAL_CONCURRENCY_LIMIT', 0)
     if explicit_limit > 0:
         return explicit_limit
-    return max(get_supabase_setting_int(
-        'API_KEY_CONCURRENCY_LIMIT',
-        get_optional_int_env('API_KEY_CONCURRENCY_LIMIT', 10),
-    ), 1)
-
-
-def _get_api_key_concurrency_limit() -> int:
-    return max(get_supabase_setting_int(
-        'API_KEY_CONCURRENCY_LIMIT',
-        get_optional_int_env('API_KEY_CONCURRENCY_LIMIT', 10),
-    ), 1)
+    return _get_api_key_concurrency_limit()
 
 
 def _get_api_failure_threshold() -> int:
-    return max(get_supabase_setting_int(
-        'API_KEY_FAILURE_THRESHOLD',
-        get_optional_int_env('API_KEY_FAILURE_THRESHOLD', 3),
-    ), 1)
+    return max(get_unified_setting_int('API_KEY_FAILURE_THRESHOLD', 3), 1)
 
 
 def _get_api_failure_cooldown() -> float:
-    raw = get_supabase_setting(
-        'API_KEY_FAILURE_COOLDOWN_SECONDS',
-        get_optional_env('API_KEY_FAILURE_COOLDOWN_SECONDS', '60'),
-    )
+    raw = get_unified_setting('API_KEY_FAILURE_COOLDOWN_SECONDS', '60')
     try:
         return max(float(raw), 1.0)
     except ValueError:
@@ -406,13 +414,7 @@ def _get_api_failure_cooldown() -> float:
 
 
 def _get_api_key_state_ttl() -> int:
-    return max(
-        get_supabase_setting_int(
-            'API_KEY_STATE_TTL_SECONDS',
-            get_optional_int_env('API_KEY_STATE_TTL_SECONDS', 86400),
-        ),
-        60,
-    )
+    return max(get_unified_setting_int('API_KEY_STATE_TTL_SECONDS', 86400), 60)
 
 
 def _get_redis_key_state_client():
@@ -478,17 +480,127 @@ def _get_api_key_state_snapshot() -> dict:
         }
 
 
-def _get_mode_keys(mode: str) -> list[str]:
+def get_mode_config(mode: str) -> dict:
+    """
+    获取指定 mode 的统一配置
+    
+    Args:
+        mode: mode1, mode2, 或 mode3
+        
+    Returns:
+        dict: 包含 api_key, base_url, model, size, watermark 等配置的字典
+    """
     mode_num = mode[-1]
-    key_name = f'MODE{mode_num}_IMAGE_API_KEY'
-    raw = get_supabase_setting(key_name, get_optional_env(key_name, ''))
-    if not raw:
-        if mode_num == '1':
-            raw = get_supabase_setting('ARK_API_KEY', get_optional_env('ARK_API_KEY', ''))
-        elif mode_num == '3':
-            raw = get_supabase_setting('OPENAI_API_KEY', get_optional_env('OPENAI_API_KEY', ''))
-        if not raw:
-            raw = get_supabase_setting('IMAGE_API_KEY', get_optional_env('IMAGE_API_KEY', ''))
+    
+    MODE_DEFAULTS = {
+        '1': {
+            'base_url': 'https://ark.cn-beijing.volces.com/api/v3',
+            'model': 'doubao-seedream-5-0-260128',
+        },
+        '2': {
+            'base_url': 'https://ark.cn-beijing.volces.com/api/v3',
+            'model': 'jimeng-5.0',
+        },
+        '3': {
+            'base_url': 'https://code.ciyuanapi.xyz/v1',
+            'model': 'gpt-image-2',
+        },
+    }
+    
+    defaults = MODE_DEFAULTS.get(mode_num, MODE_DEFAULTS['1'])
+    
+    api_key = get_unified_setting(f'MODE{mode_num}_IMAGE_API_KEY', '')
+    base_url = get_unified_setting(f'MODE{mode_num}_IMAGE_BASE_URL', defaults['base_url']).rstrip('/')
+    model = get_unified_setting(f'MODE{mode_num}_IMAGE_MODEL', defaults['model'])
+    size = get_unified_setting(f'MODE{mode_num}_IMAGE_SIZE', '2048x2048')
+    quality = get_unified_setting(f'MODE{mode_num}_IMAGE_QUALITY', '')
+    watermark = get_unified_setting_bool(f'MODE{mode_num}_IMAGE_WATERMARK', False)
+    
+    config = {
+        'api_key': api_key,
+        'base_url': base_url,
+        'model': model,
+        'size': size,
+        'quality': quality,
+        'watermark': watermark,
+    }
+    
+    if mode == 'mode2':
+        config['sample_strength'] = get_unified_setting('MODE2_SAMPLE_STRENGTH', '0.65')
+    
+    return config
+
+
+def get_mode_api_key(mode: str) -> str:
+    """
+    获取指定 mode 的 API Key（支持轮询）
+    
+    Args:
+        mode: mode1, mode2, 或 mode3
+        
+    Returns:
+        str: API Key
+    """
+    return get_round_robin_api_key(mode)
+
+
+def get_mode_base_url(mode: str) -> str:
+    """
+    获取指定 mode 的 Base URL
+    
+    Args:
+        mode: mode1, mode2, 或 mode3
+        
+    Returns:
+        str: Base URL
+    """
+    config = get_mode_config(mode)
+    return config['base_url']
+
+
+def get_mode_model(mode: str) -> str:
+    """
+    获取指定 mode 的 Model
+    
+    Args:
+        mode: mode1, mode2, 或 mode3
+        
+    Returns:
+        str: Model 名称
+    """
+    config = get_mode_config(mode)
+    return config['model']
+
+
+def get_mode_client(mode: str):
+    """
+    获取指定 mode 的 OpenAI Client
+    
+    Args:
+        mode: mode1, mode2, 或 mode3
+        
+    Returns:
+        OpenAI: OpenAI Client 实例
+    """
+    from openai import OpenAI
+    return OpenAI(
+        api_key=get_mode_api_key(mode),
+        base_url=get_mode_base_url(mode),
+    )
+
+
+def _get_mode_keys(mode: str) -> list[str]:
+    """
+    获取指定 mode 的 API Keys 列表
+    
+    Args:
+        mode: mode1, mode2, 或 mode3
+        
+    Returns:
+        list[str]: API Keys 列表
+    """
+    mode_num = mode[-1]
+    raw = get_unified_setting(f'MODE{mode_num}_IMAGE_API_KEY', '')
     return _parse_api_keys(raw)
 
 
@@ -509,10 +621,7 @@ def _count_healthy_keys_for_mode(mode: str) -> int:
 
 
 def _calculate_semaphore_capacity() -> int:
-    explicit_limit = get_supabase_setting_int(
-        'API_GLOBAL_CONCURRENCY_LIMIT',
-        get_optional_int_env('API_GLOBAL_CONCURRENCY_LIMIT', 0),
-    )
+    explicit_limit = get_unified_setting_int('API_GLOBAL_CONCURRENCY_LIMIT', 0)
     if explicit_limit > 0:
         return explicit_limit
     limit = _get_api_key_concurrency_limit()
@@ -600,17 +709,11 @@ def _api_slot_token_key(token: str) -> str:
 
 
 def _get_api_slot_ttl() -> int:
-    return max(get_supabase_setting_int(
-        'API_SLOT_TTL_SECONDS',
-        get_optional_int_env('API_SLOT_TTL_SECONDS', 600),
-    ), 30)
+    return max(get_unified_setting_int('API_SLOT_TTL_SECONDS', 600), 30)
 
 
 def _get_api_slot_poll_interval() -> float:
-    raw = get_supabase_setting(
-        'API_SLOT_POLL_INTERVAL_SECONDS',
-        get_optional_env('API_SLOT_POLL_INTERVAL_SECONDS', '0.2'),
-    )
+    raw = get_unified_setting('API_SLOT_POLL_INTERVAL_SECONDS', '0.2')
     try:
         return min(max(float(raw), 0.05), 2.0)
     except ValueError:

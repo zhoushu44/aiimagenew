@@ -1,0 +1,941 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>AI虚拟试穿</title>
+  <link rel="stylesheet" href="/static/css/workspace.css?v=virtual-tryon-20260510">
+  <link rel="stylesheet" href="/static/css/replicate.css?v=virtual-tryon-20260510">
+  <script src="/static/js/shared-topbar.js?v=topbar-record-20260504" defer></script>
+</head>
+<body data-page-mode="virtual-tryon" class="virtual-tryon-page">
+  <div class="app-shell">
+    <header class="console-topbar" data-shared-topbar>
+      <div class="console-brand">
+        <a class="console-home" href="/" data-topbar-home>AI Commerce Console</a>
+        <div>
+          <div class="console-kicker" data-topbar-kicker>Virtual Try-On / AI Fashion Tech</div>
+          <div class="console-title" data-topbar-title>虚拟试穿工作台</div>
+        </div>
+      </div>
+      <div class="console-topbar-meta" data-topbar-meta></div>
+    </header>
+
+    <main class="workspace-layout">
+      <aside class="control-rail">
+        <nav class="side-nav" aria-label="功能导航">
+          <a class="nav-item" href="/suite" data-mode="suite" data-nav-link="true" aria-pressed="false">
+            <span class="nav-item-index">01</span>
+            <span class="nav-item-label">商品套图</span>
+          </a>
+          <a class="nav-item" href="/aplus" data-mode="aplus" data-nav-link="true" aria-pressed="false">
+            <span class="nav-item-index">02</span>
+            <span class="nav-item-label">A+详情页</span>
+          </a>
+          <a class="nav-item" href="/fashion" data-mode="fashion" data-nav-link="true" aria-pressed="false">
+            <span class="nav-item-index">03</span>
+            <span class="nav-item-label">服饰穿戴</span>
+          </a>
+          <a class="nav-item active" href="/virtual-tryon" data-mode="virtual-tryon" data-nav-link="true" aria-pressed="true">
+            <span class="nav-item-index">04</span>
+            <span class="nav-item-label">虚拟试穿</span>
+          </a>
+          <a class="nav-item" href="/batch" data-mode="batch" data-nav-link="true" aria-pressed="false">
+            <span class="nav-item-index">05</span>
+            <span class="nav-item-label">批量任务</span>
+          </a>
+          <a class="nav-item" href="/replicate" data-mode="replicate" data-nav-link="true" aria-pressed="false">
+            <span class="nav-item-index">06</span>
+            <span class="nav-item-label">主图详情页sku复刻</span>
+          </a>
+        </nav>
+
+        <section class="panel stack-panel">
+          <div class="panel-head">
+            <span class="panel-kicker">model upload</span>
+            <h2>上传模特图</h2>
+          </div>
+          <div class="upload-box virtual-tryon-upload-box">
+            <div class="upload-top virtual-tryon-upload-top">
+              <div class="upload-copy">
+                <button class="upload-btn" id="modelUploadBtn" type="button">上传模特图</button>
+                <input id="modelFileInput" type="file" accept="image/*" hidden>
+                <div class="upload-copy-meta">支持全身/半身，不限性别/场景</div>
+              </div>
+            </div>
+            <div class="hint upload-hint virtual-tryon-upload-hint">需要穿衣服的模特照片</div>
+            <div class="thumbs" id="modelThumbs" style="display: none;"></div>
+          </div>
+        </section>
+
+        <section class="panel stack-panel" id="garmentSection">
+          <div class="panel-head">
+            <span class="panel-kicker">garment upload</span>
+            <h2>上传服装图</h2>
+          </div>
+          <div class="upload-box replicate-upload-box">
+            <div class="product-header">
+              <div class="product-count-badge" id="garmentCount">0/6</div>
+              <button class="upload-btn replicate-upload-btn" id="garmentUploadBtn" type="button">上传服装图</button>
+              <input type="file" id="garmentFileInput" accept="image/*" multiple hidden>
+            </div>
+            <div class="product-grid" id="garmentGrid"></div>
+            <div class="hint">白底/平铺/上身实拍都可，最多上传 6 张服装图</div>
+          </div>
+        </section>
+
+        <section class="panel stack-panel">
+          <div class="panel-head">
+            <span class="panel-kicker">custom instructions</span>
+            <h2>自定义指令（可选）</h2>
+          </div>
+          <label class="field full">
+            <span class="field-label">提示词</span>
+            <textarea id="customPrompt" placeholder="输入提示词控制效果：&#10;- 光影匹配：和原图保持一致的自然光/灯光效果&#10;- 服装细节：保留面料纹理、褶皱、版型&#10;- 场景适配：服装和模特的肤色、身材、姿势自然贴合"></textarea>
+          </label>
+          <div class="quick-prompts">
+            <button class="quick-prompt-btn" type="button" data-prompt="保持原图光影效果">光影匹配</button>
+            <button class="quick-prompt-btn" type="button" data-prompt="保留面料纹理和褶皱细节">服装细节</button>
+            <button class="quick-prompt-btn" type="button" data-prompt="自然贴合肤色和身材">场景适配</button>
+          </div>
+          <div class="model-selection-inline">
+            <span class="model-label">模型：</span>
+            <span class="model-name">全能图像 Pro</span>
+            <span class="model-desc">识别模特体型、姿势、光影，提取服装版型、纹理、颜色，生成自然上身效果图</span>
+          </div>
+          <input type="hidden" name="aiModel" value="pro" id="aiModelInput">
+        </section>
+
+        <section class="panel stack-panel">
+          <div class="panel-head">
+            <span class="panel-kicker">output ratio</span>
+            <h2>输出规格</h2>
+          </div>
+          <div class="output-specs">
+            <label class="spec-option"><input type="radio" name="outputSpec" value="3:4" checked><span>3:4</span></label>
+            <label class="spec-option"><input type="radio" name="outputSpec" value="1:1"><span>1:1</span></label>
+            <label class="spec-option"><input type="radio" name="outputSpec" value="9:16"><span>9:16</span></label>
+          </div>
+        </section>
+
+        <section class="action-bar panel">
+          <button class="generate-btn" id="generateBtn" disabled>请上传模特图和服装图</button>
+        </section>
+      </aside>
+
+      <section class="workspace-main">
+        <div class="intro-view active" id="introView">
+          <section class="hero-console panel">
+            <div class="hero-main">
+              <div class="hero-copy">
+                <span class="small-label" id="heroEyebrow">04 / Virtual Try-On</span>
+                <h1 id="heroTitle">AI虚拟试穿</h1>
+                <p id="heroDescription">上传模特图和服装图，AI自动将服装合成到模特身上，生成自然的上身效果图。</p>
+                <p class="hero-note" id="heroNote">AI Fashion Tech / Smart Synthesis</p>
+              </div>
+              <div class="hero-metrics">
+                <article class="metric-card">
+                  <span class="stat-label" id="outputSystemLabel">output</span>
+                  <span class="stat-value" id="outputCountValue">01</span>
+                  <span class="result-meta" id="outputSystemMeta">生成自然的上身效果图。</span>
+                </article>
+                <article class="metric-card">
+                  <span class="stat-label" id="gridLogicLabel">model</span>
+                  <span class="stat-value" id="gridLogicValue">Pro</span>
+                  <span class="result-meta" id="gridLogicMeta">全能图像 Pro 智能合成。</span>
+                </article>
+              </div>
+            </div>
+            <div class="showcase-grid compact-showcase-grid">
+              <article class="showcase-card hero-showcase compact-hero-showcase">
+                <div class="showcase-topline"><span>try-on flow</span><span>smart</span></div>
+                <div class="showcase-title">两图合一，智能合成</div>
+                <p>上传模特和服装，AI自动识别并合成自然上身效果图。</p>
+                <div class="preview-strip">
+                  <div class="strip-item"><span class="small-label">model</span><span class="strip-value">全身/半身</span></div>
+                  <div class="strip-item"><span class="small-label">garment</span><span class="strip-value">白底/平铺</span></div>
+                  <div class="strip-item"><span class="small-label">ratio</span><span class="strip-value">3:4</span></div>
+                </div>
+              </article>
+              <article class="showcase-card"><span class="section-index">01</span><div class="mini-title">模特图</div><div class="mini-sub">支持全身/半身，不限性别/场景。</div></article>
+              <article class="showcase-card"><span class="section-index">02</span><div class="mini-title">服装图</div><div class="mini-sub">白底/平铺/上身实拍都可。</div></article>
+              <article class="showcase-card"><span class="section-index">03</span><div class="mini-title">合成结果</div><div class="mini-sub">AI自动生成自然上身效果图。</div></article>
+            </div>
+          </section>
+        </div>
+
+        <div class="result-view" id="resultView">
+          <section class="result-console panel">
+            <div class="result-header">
+              <div class="result-heading">
+                <span class="small-label" id="resultEyebrow">05 / Try-On Result</span>
+                <div class="result-taskbar">
+                  <div class="task-summary">
+                    <h2 id="resultTitle">合成结果</h2>
+                    <div class="task-summary-line" id="taskSummaryLine">AI已将服装自然合成到模特身上。</div>
+                  </div>
+                  <div class="toolbar">
+                    <button class="tool-btn" id="selectAllBtn" type="button">全选</button>
+                    <button class="tool-btn" id="downloadSelectedBtn" type="button">下载</button>
+                  </div>
+                </div>
+                <p class="result-meta" id="resultMeta">系统将根据模特图、服装图和自定义指令生成自然的上身效果图。</p>
+                <div class="result-status-message" id="resultStatusMessage"></div>
+                <div class="progress-bar-wrapper" id="generationProgressBar" hidden>
+                  <div class="progress-bar"><div class="progress-bar-fill"></div></div>
+                  <button class="progress-cancel-btn" id="progressCancelBtn" type="button" title="取消生成">×</button>
+                </div>
+              </div>
+            </div>
+            <div class="result-grid" id="resultGrid"></div>
+          </section>
+        </div>
+      </section>
+    </main>
+  </div>
+
+  <div class="preview-modal" id="previewModal" hidden>
+    <div class="preview-backdrop" id="previewBackdrop"></div>
+    <div class="preview-dialog" role="dialog" aria-modal="true" aria-labelledby="previewTitle">
+      <div class="preview-header-bar">
+        <div>
+          <div class="small-label" id="previewType">预览</div>
+          <div class="preview-title" id="previewTitle">图片预览</div>
+        </div>
+        <div class="preview-actions">
+          <button class="tool-btn" id="previewDownloadBtn" type="button">下载当前图</button>
+          <button class="tool-btn" id="previewCloseBtn" type="button">关闭</button>
+        </div>
+      </div>
+      <div class="preview-stage">
+        <button class="preview-nav" id="previewPrevBtn" type="button" aria-label="上一张">‹</button>
+        <img id="previewImage" alt="预览图片">
+        <button class="preview-nav" id="previewNextBtn" type="button" aria-label="下一张">›</button>
+      </div>
+    </div>
+  </div>
+
+  <script src="https://cdn.jsdelivr.net/npm/jszip@3.10.1/dist/jszip.min.js"></script>
+  <script src="/static/js/workspace.js"></script>
+  <script>
+    document.addEventListener('DOMContentLoaded', function() {
+      const STORAGE_KEY = 'aiDesignState:virtualTryon';
+      
+      const modelUploadBtn = document.getElementById('modelUploadBtn');
+      const modelFileInput = document.getElementById('modelFileInput');
+      const modelThumbs = document.getElementById('modelThumbs');
+      
+      const garmentUploadBtn = document.getElementById('garmentUploadBtn');
+      const garmentFileInput = document.getElementById('garmentFileInput');
+      const garmentGrid = document.getElementById('garmentGrid');
+      const garmentCount = document.getElementById('garmentCount');
+      
+      const customPrompt = document.getElementById('customPrompt');
+      const quickPromptBtns = document.querySelectorAll('.quick-prompt-btn');
+      
+      const generateBtn = document.getElementById('generateBtn');
+      const introView = document.getElementById('introView');
+      const resultView = document.getElementById('resultView');
+      const resultGrid = document.getElementById('resultGrid');
+      const generationProgressBar = document.getElementById('generationProgressBar');
+      const resultStatusMessage = document.getElementById('resultStatusMessage');
+      const selectAllBtn = document.getElementById('selectAllBtn');
+      const downloadSelectedBtn = document.getElementById('downloadSelectedBtn');
+      const progressCancelBtn = document.getElementById('progressCancelBtn');
+      
+      const previewModal = document.getElementById('previewModal');
+      const previewBackdrop = document.getElementById('previewBackdrop');
+      const previewImage = document.getElementById('previewImage');
+      const previewCloseBtn = document.getElementById('previewCloseBtn');
+      const previewDownloadBtn = document.getElementById('previewDownloadBtn');
+      
+      let modelImage = null;
+      let garmentImages = [];
+      let resultImages = [];
+      let selectedIndices = new Set();
+      let currentPreviewIndex = 0;
+      let currentTaskId = null;
+      let isGenerating = false;
+
+      const readState = () => {
+        try {
+          return JSON.parse(localStorage.getItem(STORAGE_KEY) || '{}');
+        } catch (error) {
+          console.error('Failed to read virtual try-on state:', error);
+          return {};
+        }
+      };
+
+      const saveState = (state) => {
+        try {
+          localStorage.setItem(STORAGE_KEY, JSON.stringify(state));
+        } catch (error) {
+          console.error('Failed to save virtual try-on state:', error);
+        }
+      };
+
+      const updateGenerateButton = () => {
+        if (modelImage && garmentImages.length > 0) {
+          generateBtn.disabled = false;
+          generateBtn.textContent = `生成虚拟试穿图（${garmentImages.length}张服装）`;
+        } else {
+          generateBtn.disabled = true;
+          if (!modelImage && garmentImages.length === 0) {
+            generateBtn.textContent = '请上传模特图和服装图';
+          } else if (!modelImage) {
+            generateBtn.textContent = '请上传模特图';
+          } else {
+            generateBtn.textContent = '请上传服装图';
+          }
+        }
+      };
+
+      const handleModelUpload = async (file) => {
+        if (!file || !file.type.startsWith('image/')) {
+          return;
+        }
+
+        try {
+          const formData = new FormData();
+          formData.append('file', file);
+          
+          const response = await fetch('/api/reference-images/upload', {
+            method: 'POST',
+            body: formData,
+            credentials: 'include',
+          });
+          
+          const result = await response.json();
+          
+          if (!response.ok || !result.success || !result.image_url) {
+            throw new Error(result.error || '模特图上传失败');
+          }
+
+          modelImage = {
+            url: result.image_url,
+            path: result.image_path,
+            name: file.name,
+          };
+
+          modelThumbs.innerHTML = `
+            <div class="thumb-item">
+              <img src="${result.image_url}" alt="模特图">
+              <button class="thumb-remove" data-type="model" type="button" aria-label="移除">×</button>
+            </div>
+          `;
+          modelThumbs.style.display = 'flex';
+
+          saveState({
+            ...readState(),
+            modelImage,
+          });
+
+          updateGenerateButton();
+        } catch (error) {
+          console.error('Model upload error:', error);
+          alert(error.message || '模特图上传失败，请稍后重试');
+        }
+      };
+
+      const handleGarmentUpload = async (files) => {
+        const fileArray = Array.from(files || []).filter(file => file && file.type.startsWith('image/'));
+        if (!fileArray.length) {
+          return;
+        }
+
+        const remaining = 6 - garmentImages.length;
+        if (remaining <= 0) {
+          alert('最多上传 6 张服装图');
+          return;
+        }
+
+        const filesToUpload = fileArray.slice(0, remaining);
+
+        for (const file of filesToUpload) {
+          try {
+            const formData = new FormData();
+            formData.append('file', file);
+            
+            const response = await fetch('/api/reference-images/upload', {
+              method: 'POST',
+              body: formData,
+              credentials: 'include',
+            });
+            
+            const result = await response.json();
+            
+            if (!response.ok || !result.success || !result.image_url) {
+              throw new Error(result.error || '服装图上传失败');
+            }
+
+            garmentImages.push({
+              id: `garment-${Date.now()}-${Math.random().toString(36).slice(2, 7)}`,
+              url: result.image_url,
+              path: result.image_path,
+              name: file.name,
+            });
+
+            renderGarmentThumbs();
+            saveState({
+              ...readState(),
+              garmentImages,
+            });
+            updateGenerateButton();
+          } catch (error) {
+            console.error('Garment upload error:', error);
+            alert(error.message || '服装图上传失败，请稍后重试');
+          }
+        }
+      };
+
+      const renderGarmentThumbs = () => {
+        if (garmentCount) {
+          garmentCount.textContent = `${garmentImages.length}/6`;
+        }
+
+        if (garmentImages.length === 0) {
+          garmentGrid.innerHTML = '';
+          return;
+        }
+
+        garmentGrid.innerHTML = garmentImages.map((img, index) => `
+          <div class="product-item" data-id="${img.id}">
+            <img src="${img.url}" alt="服装图 ${index + 1}">
+            <span class="product-item-number">${index + 1}</span>
+            <button class="product-item-delete" data-type="garment" data-id="${img.id}" type="button" aria-label="移除">×</button>
+          </div>
+        `).join('');
+      };
+
+      const removeImage = (type, id) => {
+        if (type === 'model') {
+          modelImage = null;
+          modelThumbs.innerHTML = '';
+          modelThumbs.style.display = 'none';
+        } else if (type === 'garment') {
+          if (id) {
+            garmentImages = garmentImages.filter(img => img.id !== id);
+            renderGarmentThumbs();
+          } else {
+            garmentImages = [];
+            garmentGrid.innerHTML = '';
+          }
+        }
+
+        saveState({
+          ...readState(),
+          modelImage,
+          garmentImages,
+        });
+
+        updateGenerateButton();
+      };
+
+      const startGeneration = async () => {
+        if (!modelImage || garmentImages.length === 0 || isGenerating) {
+          return;
+        }
+
+        isGenerating = true;
+        generateBtn.disabled = true;
+        generateBtn.textContent = '生成中...';
+        generationProgressBar.hidden = false;
+        resultStatusMessage.textContent = `正在生成虚拟试穿图...`;
+
+        const progressBarFill = generationProgressBar.querySelector('.progress-bar-fill');
+        if (progressBarFill) {
+          progressBarFill.style.width = '0%';
+          progressBarFill.style.transition = 'width 0.3s ease';
+        }
+
+        let progressValue = 0;
+        const progressInterval = setInterval(() => {
+          if (!isGenerating) {
+            clearInterval(progressInterval);
+            return;
+          }
+          progressValue = Math.min(progressValue + Math.random() * 5, 90);
+          if (progressBarFill) {
+            progressBarFill.style.width = `${progressValue}%`;
+          }
+        }, 500);
+
+        try {
+          const payload = {
+            model_image_path: modelImage.path,
+            garment_image_paths: garmentImages.map(img => img.path),
+            custom_prompt: customPrompt.value.trim(),
+            output_spec: document.querySelector('input[name="outputSpec"]:checked')?.value || '3:4',
+            async_task: true,
+          };
+
+          const response = await fetch('/api/virtual-tryon', {
+            method: 'POST',
+            headers: {
+              'Content-Type': 'application/json',
+            },
+            body: JSON.stringify(payload),
+          });
+
+          const result = await response.json();
+
+          if (!response.ok || !result.success || !result.task_id) {
+            throw new Error(result.error || '虚拟试穿生成失败');
+          }
+
+          currentTaskId = result.task_id;
+          await pollTaskResult(currentTaskId, progressInterval, progressBarFill);
+        } catch (error) {
+          console.error('Generation error:', error);
+          clearInterval(progressInterval);
+          isGenerating = false;
+          resultStatusMessage.textContent = error.message || '生成失败，请稍后重试';
+          generateBtn.disabled = false;
+          updateGenerateButton();
+          generationProgressBar.hidden = true;
+        }
+      };
+
+      const pollTaskResult = async (taskId, progressInterval, progressBarFill) => {
+        const startedAt = Date.now();
+        const timeout = 10 * 60 * 1000;
+
+        while (Date.now() - startedAt < timeout) {
+          if (!isGenerating) {
+            clearInterval(progressInterval);
+            return;
+          }
+
+          try {
+            const response = await fetch(`/api/generation-tasks/${encodeURIComponent(taskId)}`);
+            const result = await response.json();
+
+            if (!response.ok || !result.success) {
+              throw new Error(result.error || '任务状态查询失败');
+            }
+
+            const task = result.task || {};
+
+            if (task.status === 'succeeded') {
+              clearInterval(progressInterval);
+              if (progressBarFill) {
+                progressBarFill.style.width = '100%';
+              }
+              handleGenerationSuccess(task.result || {});
+              return;
+            }
+
+            if (task.status === 'failed') {
+              clearInterval(progressInterval);
+              throw new Error(task.error || '虚拟试穿生成失败');
+            }
+
+            await new Promise(resolve => setTimeout(resolve, 3000));
+          } catch (error) {
+            clearInterval(progressInterval);
+            throw error;
+          }
+        }
+
+        clearInterval(progressInterval);
+        throw new Error('生成超时，请稍后重试');
+      };
+
+      const handleGenerationSuccess = (result) => {
+        resultImages = [];
+
+        if (result.image_url) {
+          resultImages.push({
+            url: result.image_url,
+            path: result.image_path,
+            downloadName: result.download_name || 'virtual-tryon-result.png',
+          });
+        }
+
+        if (result.images && Array.isArray(result.images)) {
+          resultImages = result.images.map((img, index) => ({
+            url: img.image_url || img.url,
+            path: img.image_path || img.path,
+            downloadName: img.download_name || `virtual-tryon-result-${index + 1}.png`,
+          }));
+        }
+
+        if (resultImages.length === 0) {
+          resultStatusMessage.textContent = '生成成功，但未返回结果图片';
+          generateBtn.disabled = false;
+          updateGenerateButton();
+          generationProgressBar.hidden = true;
+          isGenerating = false;
+          return;
+        }
+
+        selectedIndices.clear();
+        resultImages.forEach((_, index) => selectedIndices.add(index));
+
+        renderResultGrid();
+        updateSelectionSummary();
+
+        introView.classList.remove('active');
+        resultView.classList.add('active');
+        generationProgressBar.hidden = true;
+        resultStatusMessage.textContent = '';
+        isGenerating = false;
+
+        generateBtn.disabled = false;
+        generateBtn.textContent = '重新生成';
+      };
+
+      const renderResultGrid = () => {
+        resultGrid.innerHTML = resultImages.map((img, index) => {
+          const isSelected = selectedIndices.has(index);
+          return `
+            <article class="result-card${isSelected ? ' is-selected' : ''}" data-index="${index}">
+              <label class="result-select">
+                <input type="checkbox" data-role="select-item" data-index="${index}" ${isSelected ? 'checked' : ''}>
+                <span class="select-indicator"></span>
+              </label>
+              <div class="result-image" data-role="preview-image" data-index="${index}">
+                <img src="${img.url}" alt="虚拟试穿结果 ${index + 1}" loading="lazy">
+              </div>
+              <div class="result-overlay">
+                <button class="preview-btn" data-index="${index}" type="button" aria-label="预览">
+                  <span>预览</span>
+                </button>
+                <button class="download-btn" data-index="${index}" type="button" aria-label="下载">
+                  <span>下载</span>
+                </button>
+              </div>
+            </article>
+          `;
+        }).join('');
+      };
+
+      const updateSelectionSummary = () => {
+        const total = resultImages.length;
+        const selected = selectedIndices.size;
+        const allSelected = total > 0 && selected === total;
+
+        if (selectAllBtn) {
+          selectAllBtn.textContent = allSelected ? '取消全选' : '全选';
+          selectAllBtn.disabled = total === 0;
+        }
+
+        if (downloadSelectedBtn) {
+          downloadSelectedBtn.disabled = selected === 0;
+        }
+
+        if (taskSummaryLine) {
+          taskSummaryLine.textContent = `共 ${total} 张结果，已选择 ${selected} 张`;
+        }
+      };
+
+      const toggleSelection = (index) => {
+        if (selectedIndices.has(index)) {
+          selectedIndices.delete(index);
+        } else {
+          selectedIndices.add(index);
+        }
+        renderResultGrid();
+        updateSelectionSummary();
+      };
+
+      const setAllSelections = (shouldSelect) => {
+        if (shouldSelect) {
+          resultImages.forEach((_, index) => selectedIndices.add(index));
+        } else {
+          selectedIndices.clear();
+        }
+        renderResultGrid();
+        updateSelectionSummary();
+      };
+
+      const downloadItemsAsZip = async () => {
+        const selectedItems = Array.from(selectedIndices).map(index => resultImages[index]);
+        if (selectedItems.length === 0) {
+          return;
+        }
+
+        try {
+          downloadSelectedBtn.disabled = true;
+          downloadSelectedBtn.textContent = '打包中...';
+
+          const zip = new JSZip();
+          const folder = zip.folder('virtual-tryon-results');
+
+          for (let i = 0; i < selectedItems.length; i++) {
+            const item = selectedItems[i];
+            const response = await fetch(item.url);
+            const blob = await response.blob();
+            const ext = item.downloadName.split('.').pop() || 'png';
+            folder.file(`result-${String(i + 1).padStart(2, '0')}.${ext}`, blob);
+          }
+
+          const zipBlob = await zip.generateAsync({ type: 'blob' });
+          const url = URL.createObjectURL(zipBlob);
+          const a = document.createElement('a');
+          a.href = url;
+          a.download = `virtual-tryon-results-${Date.now()}.zip`;
+          document.body.appendChild(a);
+          a.click();
+          document.body.removeChild(a);
+          URL.revokeObjectURL(url);
+        } catch (error) {
+          console.error('Zip download error:', error);
+          alert('打包下载失败，请稍后重试');
+        } finally {
+          downloadSelectedBtn.disabled = false;
+          downloadSelectedBtn.textContent = '下载';
+        }
+      };
+
+      const cancelGeneration = () => {
+        if (currentTaskId) {
+          fetch(`/api/generation-tasks/${encodeURIComponent(currentTaskId)}/cancel`, {
+            method: 'POST',
+            credentials: 'include',
+          }).catch(err => console.error('Cancel task error:', err));
+        }
+
+        isGenerating = false;
+        generationProgressBar.hidden = true;
+        resultStatusMessage.textContent = '已取消生成';
+        generateBtn.disabled = false;
+        updateGenerateButton();
+      };
+
+      const openPreview = (index) => {
+        if (index < 0 || index >= resultImages.length) {
+          return;
+        }
+
+        currentPreviewIndex = index;
+        previewImage.src = resultImages[index].url;
+        previewModal.hidden = false;
+      };
+
+      const closePreview = () => {
+        previewModal.hidden = true;
+        previewImage.src = '';
+      };
+
+      const navigatePreview = (direction) => {
+        currentPreviewIndex += direction;
+        if (currentPreviewIndex < 0) {
+          currentPreviewIndex = resultImages.length - 1;
+        } else if (currentPreviewIndex >= resultImages.length) {
+          currentPreviewIndex = 0;
+        }
+        previewImage.src = resultImages[currentPreviewIndex].url;
+      };
+
+      const downloadImage = async (index) => {
+        if (index < 0 || index >= resultImages.length) {
+          return;
+        }
+
+        const img = resultImages[index];
+        try {
+          const response = await fetch(img.url);
+          const blob = await response.blob();
+          const url = URL.createObjectURL(blob);
+          const a = document.createElement('a');
+          a.href = url;
+          a.download = img.downloadName;
+          document.body.appendChild(a);
+          a.click();
+          document.body.removeChild(a);
+          URL.revokeObjectURL(url);
+        } catch (error) {
+          console.error('Download error:', error);
+          alert('下载失败，请稍后重试');
+        }
+      };
+
+      const restoreState = () => {
+        const state = readState();
+
+        if (state.modelImage) {
+          modelImage = state.modelImage;
+          modelThumbs.innerHTML = `
+            <div class="thumb-item">
+              <img src="${modelImage.url}" alt="模特图">
+              <button class="thumb-remove" data-type="model" type="button" aria-label="移除">×</button>
+            </div>
+          `;
+          modelThumbs.style.display = 'flex';
+        }
+
+        if (state.garmentImages && Array.isArray(state.garmentImages)) {
+          garmentImages = state.garmentImages;
+          renderGarmentThumbs();
+        }
+
+        if (state.customPrompt) {
+          customPrompt.value = state.customPrompt;
+        }
+
+        updateGenerateButton();
+      };
+
+      if (modelUploadBtn) {
+        modelUploadBtn.addEventListener('click', () => {
+          modelFileInput?.click();
+        });
+      }
+
+      if (modelFileInput) {
+        modelFileInput.addEventListener('change', (e) => {
+          const file = e.target.files?.[0];
+          if (file) {
+            handleModelUpload(file);
+          }
+          modelFileInput.value = '';
+        });
+      }
+
+      if (garmentUploadBtn) {
+        garmentUploadBtn.addEventListener('click', () => {
+          garmentFileInput?.click();
+        });
+      }
+
+      if (garmentFileInput) {
+        garmentFileInput.addEventListener('change', (e) => {
+          const files = e.target.files;
+          if (files && files.length > 0) {
+            handleGarmentUpload(files);
+          }
+          garmentFileInput.value = '';
+        });
+      }
+
+      if (modelThumbs) {
+        modelThumbs.addEventListener('click', (e) => {
+          const removeBtn = e.target.closest('.thumb-remove[data-type="model"]');
+          if (removeBtn) {
+            removeImage('model');
+          }
+        });
+      }
+
+      if (garmentGrid) {
+        garmentGrid.addEventListener('click', (e) => {
+          const removeBtn = e.target.closest('.product-item-delete[data-type="garment"]');
+          if (removeBtn) {
+            const id = removeBtn.dataset.id;
+            removeImage('garment', id);
+          }
+        });
+      }
+
+      if (quickPromptBtns && quickPromptBtns.length > 0) {
+        quickPromptBtns.forEach((btn) => {
+          btn.addEventListener('click', () => {
+            const prompt = btn.dataset.prompt || '';
+            const currentValue = customPrompt.value.trim();
+            if (currentValue) {
+              customPrompt.value = currentValue + '\n' + prompt;
+            } else {
+              customPrompt.value = prompt;
+            }
+            saveState({
+              ...readState(),
+              customPrompt: customPrompt.value,
+            });
+          });
+        });
+      }
+
+      if (customPrompt) {
+        customPrompt.addEventListener('input', () => {
+          saveState({
+            ...readState(),
+            customPrompt: customPrompt.value,
+          });
+        });
+      }
+
+      if (generateBtn) {
+        generateBtn.addEventListener('click', startGeneration);
+      }
+
+      if (progressCancelBtn) {
+        progressCancelBtn.addEventListener('click', cancelGeneration);
+      }
+
+      if (selectAllBtn) {
+        selectAllBtn.addEventListener('click', () => {
+          const shouldSelectAll = selectedIndices.size !== resultImages.length;
+          setAllSelections(shouldSelectAll);
+        });
+      }
+
+      if (downloadSelectedBtn) {
+        downloadSelectedBtn.addEventListener('click', downloadItemsAsZip);
+      }
+
+      if (resultGrid) {
+        resultGrid.addEventListener('click', (e) => {
+          const selectInput = e.target.closest('[data-role="select-item"]');
+          if (selectInput) {
+            const index = parseInt(selectInput.dataset.index || '0', 10);
+            toggleSelection(index);
+            return;
+          }
+
+          const previewTarget = e.target.closest('[data-role="preview-image"]');
+          if (previewTarget) {
+            const index = parseInt(previewTarget.dataset.index || '0', 10);
+            openPreview(index);
+            return;
+          }
+
+          const previewBtn = e.target.closest('.preview-btn');
+          if (previewBtn) {
+            const index = parseInt(previewBtn.dataset.index || '0', 10);
+            openPreview(index);
+            return;
+          }
+
+          const downloadBtn = e.target.closest('.download-btn');
+          if (downloadBtn) {
+            const index = parseInt(downloadBtn.dataset.index || '0', 10);
+            downloadImage(index);
+            return;
+          }
+        });
+      }
+
+      if (previewBackdrop) {
+        previewBackdrop.addEventListener('click', closePreview);
+      }
+
+      if (previewCloseBtn) {
+        previewCloseBtn.addEventListener('click', closePreview);
+      }
+
+      if (previewDownloadBtn) {
+        previewDownloadBtn.addEventListener('click', () => {
+          downloadImage(currentPreviewIndex);
+        });
+      }
+
+      document.addEventListener('keydown', (e) => {
+        if (previewModal.hidden) {
+          return;
+        }
+
+        if (e.key === 'Escape') {
+          closePreview();
+        } else if (e.key === 'ArrowLeft') {
+          navigatePreview(-1);
+        } else if (e.key === 'ArrowRight') {
+          navigatePreview(1);
+        }
+      });
+
+      restoreState();
+    });
+  </script>
+</body>
+</html>

@@ -20,6 +20,11 @@ from config import (
     get_optional_int_env,
     get_optional_bool_env,
     get_app_mode,
+    get_mode_config,
+    get_mode_api_key,
+    get_mode_base_url,
+    get_mode_model,
+    get_mode_client,
     _parse_api_keys,
     get_round_robin_api_key,
     acquire_api_slot,
@@ -127,102 +132,6 @@ def collect_generated_images(response):
     return [_normalize_generated_image_item(item) for item in data]
 
 
-def _common_image_api_key(default: str = '') -> str:
-    return get_supabase_setting('IMAGE_API_KEY', get_optional_env('IMAGE_API_KEY', default))
-
-
-def _common_image_base_url(default: str = '') -> str:
-    return get_supabase_setting('IMAGE_BASE_URL', get_optional_env('IMAGE_BASE_URL', default)).rstrip('/')
-
-
-def _common_image_model(default: str = '') -> str:
-    return get_supabase_setting('IMAGE_MODEL', get_optional_env('IMAGE_MODEL', default))
-
-
-def get_mode1_api_key() -> str:
-    keys = _parse_api_keys(get_supabase_setting('MODE1_IMAGE_API_KEY', get_optional_env('MODE1_IMAGE_API_KEY', '')))
-    if keys:
-        return get_round_robin_api_key('mode1')
-    api_key = _common_image_api_key('')
-    if not api_key:
-        api_key = get_supabase_setting('ARK_API_KEY', get_optional_env('ARK_API_KEY', ''))
-    if not api_key:
-        api_key = get_supabase_setting('OPENAI_API_KEY', get_optional_env('OPENAI_API_KEY', ''))
-    return api_key
-
-
-def get_mode1_base_url() -> str:
-    url = get_supabase_setting('MODE1_IMAGE_BASE_URL', get_optional_env('MODE1_IMAGE_BASE_URL', '')).rstrip('/')
-    if not url:
-        url = _common_image_base_url('')
-    if not url:
-        url = get_supabase_setting('ARK_BASE_URL', get_optional_env('ARK_BASE_URL', 'https://ark.cn-beijing.volces.com/api/v3')).rstrip('/')
-    return url
-
-
-def get_mode1_client() -> OpenAI:
-    return OpenAI(
-        api_key=get_mode1_api_key(),
-        base_url=get_mode1_base_url(),
-    )
-
-
-def get_mode2_api_key() -> str:
-    keys = _parse_api_keys(get_supabase_setting('MODE2_IMAGE_API_KEY', get_optional_env('MODE2_IMAGE_API_KEY', '')))
-    if keys:
-        return get_round_robin_api_key('mode2')
-    api_key = _common_image_api_key('any-value')
-    return api_key
-
-
-def get_mode2_base_url() -> str:
-    url = get_supabase_setting('MODE2_IMAGE_BASE_URL', get_optional_env('MODE2_IMAGE_BASE_URL', '')).rstrip('/')
-    if not url:
-        url = _common_image_base_url('https://ark.cn-beijing.volces.com/api/v3')
-    return url
-
-
-def get_mode2_client() -> OpenAI:
-    return OpenAI(
-        api_key=get_mode2_api_key(),
-        base_url=get_mode2_base_url(),
-    )
-
-
-def get_mode3_api_key() -> str:
-    keys = _parse_api_keys(get_supabase_setting('MODE3_IMAGE_API_KEY', get_optional_env('MODE3_IMAGE_API_KEY', '')))
-    if keys:
-        return get_round_robin_api_key('mode3')
-    api_key = _common_image_api_key('')
-    if not api_key:
-        api_key = get_supabase_setting('OPENAI_API_KEY', get_optional_env('OPENAI_API_KEY', ''))
-    return api_key
-
-
-def get_mode3_base_url() -> str:
-    url = get_supabase_setting('MODE3_IMAGE_BASE_URL', get_optional_env('MODE3_IMAGE_BASE_URL', '')).rstrip('/')
-    if not url:
-        url = _common_image_base_url('https://code.ciyuanapi.xyz/v1')
-    return url
-
-
-def get_mode3_client() -> OpenAI:
-    return OpenAI(
-        api_key=get_mode3_api_key(),
-        base_url=get_mode3_base_url(),
-    )
-
-
-def get_ark_client() -> OpenAI:
-    api_key = get_supabase_setting('ARK_API_KEY', get_optional_env('ARK_API_KEY', ''))
-    if not api_key:
-        raise ValueError('缺少环境变量：ARK_API_KEY')
-    return OpenAI(
-        api_key=api_key,
-        base_url=get_supabase_setting('ARK_BASE_URL', get_optional_env('ARK_BASE_URL', 'https://ark.cn-beijing.volces.com/api/v3')).rstrip('/'),
-    )
-
-
 def _common_parallel_workers() -> int:
     return max(get_supabase_setting_int('PARALLEL_WORKERS', get_optional_int_env('PARALLEL_WORKERS', 3)), 1)
 
@@ -285,6 +194,16 @@ def should_mode1_use_sequential_generation(target_count: int, image_payloads) ->
     return _common_sequential_generation(target_count, image_payloads)
 
 
+def get_mode1_timeout_seconds() -> int:
+    return max(get_supabase_setting_int('MODE1_TIMEOUT_SECONDS', get_optional_int_env('MODE1_TIMEOUT_SECONDS', _common_timeout_seconds())), 30)
+
+
+def get_mode1_request_timeout() -> tuple[int, int]:
+    total_timeout = get_mode1_timeout_seconds()
+    connect_timeout = max(min(get_supabase_setting_int('MODE1_CONNECT_TIMEOUT_SECONDS', get_optional_int_env('MODE1_CONNECT_TIMEOUT_SECONDS', 15)), total_timeout), 3)
+    return (connect_timeout, total_timeout)
+
+
 def get_mode2_retry_attempts() -> int:
     return max(get_supabase_setting_int('MODE2_RETRY_ATTEMPTS', get_optional_int_env('MODE2_RETRY_ATTEMPTS', _common_retry_attempts())), 0)
 
@@ -344,6 +263,35 @@ def get_mode3_request_timeout() -> tuple[int, int]:
     return (connect_timeout, total_timeout)
 
 
+def get_mode2_timeout_seconds() -> int:
+    return get_supabase_setting_int('MODE2_TIMEOUT_SECONDS', get_optional_int_env('MODE2_TIMEOUT_SECONDS', 180))
+
+
+def get_mode2_request_timeout() -> tuple[int, int]:
+    total_timeout = get_mode2_timeout_seconds()
+    connect_timeout = max(min(get_supabase_setting_int('MODE2_CONNECT_TIMEOUT_SECONDS', get_optional_int_env('MODE2_CONNECT_TIMEOUT_SECONDS', 15)), total_timeout), 3)
+    return (connect_timeout, total_timeout)
+
+
+def get_mode2_image_edit_size(ratio: str, resolution: str) -> str:
+    normalized_ratio = (ratio or '').strip()
+    normalized_resolution = (resolution or '').strip().lower().replace(' ', '')
+    if normalized_ratio in IMAGE_SIZE_RATIO_MAP:
+        base_size = IMAGE_SIZE_RATIO_MAP[normalized_ratio]
+    else:
+        base_size = '2048x2048'
+    if normalized_resolution == '4k':
+        return base_size.replace('2048', '4096').replace('1024', '2048')
+    elif normalized_resolution == '1k':
+        return base_size.replace('2048', '1024').replace('4096', '2048')
+    else:
+        return base_size
+
+
+def get_mode2_image_generation_size(ratio: str, resolution: str) -> str:
+    return get_mode2_image_edit_size(ratio, resolution)
+
+
 def should_mode3_use_sequential_generation(target_count: int, image_payloads) -> bool:
     mode = str(get_supabase_setting('MODE3_SEQUENTIAL_GENERATION', get_optional_env('MODE3_SEQUENTIAL_GENERATION', 'auto')) or 'auto').strip().lower()
     if mode in {'on', 'true', '1', 'yes'}:
@@ -389,6 +337,43 @@ def is_retryable_mode1_error(exc: Exception) -> bool:
     return status_code in {408, 409, 425, 429, 500, 502, 503, 504, 524}
 
 
+def classify_mode1_error(exc: Exception) -> str:
+    message = str(exc or '').lower()
+    status_code = getattr(exc, 'status_code', None)
+    if status_code == 524 or ' 524' in message or 'status=524' in message or 'cloudflare' in message:
+        return 'UPSTREAM_TIMEOUT_524'
+    if 'timed out' in message or 'timeout' in message:
+        return 'TIMEOUT_ERROR'
+    if 'unexpected eof' in message or ('ssl' in message and 'eof' in message):
+        return 'SSL_EOF_ERROR'
+    if 'ssl' in message or 'sslerror' in message:
+        return 'SSL_ERROR'
+    if 'connection aborted' in message:
+        return 'CONNECTION_ABORTED'
+    if 'connection reset' in message:
+        return 'CONNECTION_RESET'
+    if 'max retries exceeded' in message or 'connectionpool' in message or 'protocolerror' in message:
+        return 'NETWORK_RETRY_EXHAUSTED'
+    if status_code in {500, 502, 503, 504}:
+        return f'HTTP_{status_code}'
+    if status_code == 429:
+        return 'RATE_LIMITED'
+    return format_error_brief(exc)
+
+
+def compute_mode1_retry_delay(base_delay: float, attempt: int, exc: Exception) -> float:
+    error_kind = classify_mode1_error(exc)
+    if error_kind == 'UPSTREAM_TIMEOUT_524':
+        return min(base_delay * (attempt + 1), 12.0)
+    if error_kind in {'TIMEOUT_ERROR', 'SSL_EOF_ERROR', 'SSL_ERROR', 'NETWORK_RETRY_EXHAUSTED', 'CONNECTION_ABORTED', 'CONNECTION_RESET'}:
+        return min(base_delay * (attempt + 1), 8.0)
+    if is_server_error(exc):
+        return min(base_delay * (2 ** attempt), 30.0)
+    if is_ssl_or_network_error(exc):
+        return min(base_delay * (2 ** attempt) * 2, 60.0)
+    return base_delay * (attempt + 1)
+
+
 def is_ssl_or_network_error(exc: Exception) -> bool:
     message = str(exc or '').lower()
     ssl_network_fragments = (
@@ -426,23 +411,43 @@ def format_error_brief(exc: Exception) -> str:
 
 def is_retryable_mode2_error(exc: Exception) -> bool:
     message = str(exc or '')
-    retryable_fragments = (
+    # 通用可重试错误片段（与 mode3 保持一致）
+    common_retryable_fragments = (
+        'openai_error',
+        'bad_response_status_code',
+        'Read timed out',
+        'timed out',
+        'Connection aborted',
+        'Connection reset',
+        'temporarily unavailable',
+        'upstream',
+        '524',
+        'ssl',
+        'sslerror',
+        'decryption failed',
+        'bad record mac',
+        'max retries exceeded',
+        'connectionpool',
+        'protocolerror',
+        'eof',
+        'unexpected eof',
+    )
+    # mode2 特有可重试错误片段（Jimeng API 相关）
+    mode2_specific_retryable_fragments = (
         'Unexpected end of JSON input',
         'sessions.json',
         'JSONDecodeError',
         'Expecting value',
-        'Read timed out',
-        'Connection aborted',
-        'Connection reset',
-        'temporarily unavailable',
         '积分不足或没有相关权益',
         '没有相关权益',
         '请求jimeng失败',
     )
-    if any(fragment.lower() in message.lower() for fragment in retryable_fragments):
+    # 合并所有可重试错误片段
+    all_retryable_fragments = common_retryable_fragments + mode2_specific_retryable_fragments
+    if any(fragment.lower() in message.lower() for fragment in all_retryable_fragments):
         return True
     status_code = getattr(exc, 'status_code', None)
-    return status_code in {408, 409, 425, 429, 500, 502, 503, 504}
+    return status_code in {408, 409, 425, 429, 500, 502, 503, 504, 524}
 
 
 def is_retryable_mode3_error(exc: Exception) -> bool:
@@ -497,6 +502,47 @@ def classify_mode3_error(exc: Exception) -> str:
     return format_error_brief(exc)
 
 
+def classify_mode2_error(exc: Exception) -> str:
+    message = str(exc or '').lower()
+    status_code = getattr(exc, 'status_code', None)
+    if status_code == 524 or ' 524' in message or 'status=524' in message or 'cloudflare' in message:
+        return 'UPSTREAM_TIMEOUT_524'
+    if 'timed out' in message or 'timeout' in message:
+        return 'TIMEOUT_ERROR'
+    if 'unexpected eof' in message or ('ssl' in message and 'eof' in message):
+        return 'SSL_EOF_ERROR'
+    if 'ssl' in message or 'sslerror' in message:
+        return 'SSL_ERROR'
+    if 'connection aborted' in message:
+        return 'CONNECTION_ABORTED'
+    if 'connection reset' in message:
+        return 'CONNECTION_RESET'
+    if 'max retries exceeded' in message or 'connectionpool' in message or 'protocolerror' in message:
+        return 'NETWORK_RETRY_EXHAUSTED'
+    if '积分不足' in message or '没有相关权益' in message or '请求jimeng失败' in message:
+        return 'JIMENG_API_ERROR'
+    if 'unexpected end of json input' in message or 'jsondecodeerror' in message or 'expecting value' in message:
+        return 'JSON_DECODE_ERROR'
+    if status_code in {500, 502, 503, 504}:
+        return f'HTTP_{status_code}'
+    if status_code == 429:
+        return 'RATE_LIMITED'
+    return format_error_brief(exc)
+
+
+def should_log_mode1_traceback(exc: Exception) -> bool:
+    error_kind = classify_mode1_error(exc)
+    return error_kind not in {
+        'TIMEOUT_ERROR',
+        'UPSTREAM_TIMEOUT_524',
+        'SSL_EOF_ERROR',
+        'SSL_ERROR',
+        'NETWORK_RETRY_EXHAUSTED',
+        'CONNECTION_ABORTED',
+        'CONNECTION_RESET',
+    }
+
+
 def should_log_mode3_traceback(exc: Exception) -> bool:
     error_kind = classify_mode3_error(exc)
     return error_kind not in {
@@ -507,6 +553,21 @@ def should_log_mode3_traceback(exc: Exception) -> bool:
         'NETWORK_RETRY_EXHAUSTED',
         'CONNECTION_ABORTED',
         'CONNECTION_RESET',
+    }
+
+
+def should_log_mode2_traceback(exc: Exception) -> bool:
+    error_kind = classify_mode2_error(exc)
+    return error_kind not in {
+        'TIMEOUT_ERROR',
+        'UPSTREAM_TIMEOUT_524',
+        'SSL_EOF_ERROR',
+        'SSL_ERROR',
+        'NETWORK_RETRY_EXHAUSTED',
+        'CONNECTION_ABORTED',
+        'CONNECTION_RESET',
+        'JIMENG_API_ERROR',
+        'JSON_DECODE_ERROR',
     }
 
 
@@ -523,6 +584,19 @@ def compute_retry_delay(base_delay: float, attempt: int, exc: Exception) -> floa
     if error_kind == 'UPSTREAM_TIMEOUT_524':
         return min(base_delay * (attempt + 1), 12.0)
     if error_kind in {'TIMEOUT_ERROR', 'SSL_EOF_ERROR', 'SSL_ERROR', 'NETWORK_RETRY_EXHAUSTED', 'CONNECTION_ABORTED', 'CONNECTION_RESET'}:
+        return min(base_delay * (attempt + 1), 8.0)
+    if is_server_error(exc):
+        return min(base_delay * (2 ** attempt), 30.0)
+    if is_ssl_or_network_error(exc):
+        return min(base_delay * (2 ** attempt) * 2, 60.0)
+    return base_delay * (attempt + 1)
+
+
+def compute_mode2_retry_delay(base_delay: float, attempt: int, exc: Exception) -> float:
+    error_kind = classify_mode2_error(exc)
+    if error_kind == 'UPSTREAM_TIMEOUT_524':
+        return min(base_delay * (attempt + 1), 12.0)
+    if error_kind in {'TIMEOUT_ERROR', 'SSL_EOF_ERROR', 'SSL_ERROR', 'NETWORK_RETRY_EXHAUSTED', 'CONNECTION_ABORTED', 'CONNECTION_RESET', 'JIMENG_API_ERROR', 'JSON_DECODE_ERROR'}:
         return min(base_delay * (attempt + 1), 8.0)
     if is_server_error(exc):
         return min(base_delay * (2 ** attempt), 30.0)
@@ -736,64 +810,109 @@ def call_mode1_text2image(client: OpenAI, prompt: str):
     return generated_item, model
 
 
-def call_mode2_images_generate_with_retry(client: OpenAI, request_payload: dict, _logger: logging.Logger | None = None):
+def call_mode2_image_generation(api_key: str, prompt: str, ratio: str, resolution: str, _logger: logging.Logger | None = None):
     log = _logger or logger
-    retry_attempts = get_mode2_retry_attempts()
-    retry_delay_seconds = get_mode2_retry_delay_seconds()
-    total_attempts = retry_attempts + 1
-    last_exc = None
-    api_key = client.api_key
-    for attempt_index in range(total_attempts):
-        if not acquire_api_slot(timeout=300):
-            raise RuntimeError('mode2 生图获取并发槽位超时')
-        try:
-            response = client.images.generate(**request_payload)
-            response_error = get_mode2_response_error(response)
-            if response_error and is_retryable_mode2_error(Exception(response_error)):
-                report_key_failure(api_key)
-                release_api_slot()
-                raise RetryableMode2ResponseError(response_error)
-            report_key_success(api_key)
-            release_api_slot()
-            return response
-        except Exception as exc:
-            report_key_failure(api_key)
-            release_api_slot()
-            last_exc = exc
-            should_retry = attempt_index < retry_attempts and is_retryable_mode2_error(exc)
-            if not should_retry:
-                raise
-            wait_seconds = retry_delay_seconds * (attempt_index + 1)
-            log.warning('Mode2 image generation failed, retrying in %.2fs (%s/%s): %s', wait_seconds, attempt_index + 1, retry_attempts, exc)
-            time.sleep(wait_seconds)
-    raise last_exc
-
-
-def call_mode2_image_edit(client: OpenAI, prompt: str, image_payloads, ratio: str, resolution: str, sample_strength: str, _logger: logging.Logger | None = None):
-    log = _logger or logger
-    model = get_supabase_setting('MODE2_IMAGE_EDIT_MODEL', get_optional_env('MODE2_IMAGE_EDIT_MODEL', 'doubao-seedream-5-0-260128'))
+    model = get_supabase_setting('MODE2_IMAGE_MODEL', get_optional_env('MODE2_IMAGE_MODEL', 'jimeng-5.0'))
+    watermark = get_supabase_setting_bool('MODE2_IMAGE_WATERMARK', get_optional_bool_env('MODE2_IMAGE_WATERMARK', False))
+    base_url = get_mode_base_url('mode2')
+    if not api_key:
+        raise ValueError('mode2 文生图缺少 MODE2_IMAGE_API_KEY')
+    client = OpenAI(api_key=api_key, base_url=base_url)
     request_payload = {
         'model': model,
         'prompt': prompt,
-        'response_format': 'url',
         'extra_body': {
-            'image': [image_payload['data_url'] for image_payload in image_payloads],
-            'sample_strength': get_mode2_sample_strength(sample_strength),
             'ratio': resolve_mode2_image_ratio(ratio),
             'resolution': resolve_mode2_image_resolution(resolution),
         },
     }
-    request_extra_body = dict(request_payload['extra_body'])
-    request_extra_body['image_count'] = len(image_payloads)
-    log.warning('Mode2 image edit request extra_body image_count=%s ratio=%s resolution=%s', request_extra_body['image_count'], request_extra_body['ratio'], request_extra_body['resolution'])
-    response = call_mode2_images_generate_with_retry(client, request_payload, _logger=log)
+    quality = get_supabase_setting('MODE2_IMAGE_QUALITY', get_optional_env('MODE2_IMAGE_QUALITY', '')).strip()
+    if quality:
+        request_payload['extra_body']['quality'] = quality
+    if watermark:
+        request_payload['extra_body']['watermark'] = True
+    log.warning('Mode2 image generation request model=%s ratio=%s resolution=%s base_url=%s', model, ratio, resolution, base_url)
+    if not acquire_api_slot(timeout=300):
+        raise RuntimeError('mode2 文生图获取并发槽位超时')
+    try:
+        response = client.images.generate(**request_payload)
+        response_error = get_mode2_response_error(response)
+        if response_error:
+            raise ValueError(f'图像生成接口返回错误：{response_error}')
+    except Exception as exc:
+        report_key_failure(api_key)
+        release_api_slot()
+        error_kind = classify_mode2_error(exc)
+        if should_log_mode2_traceback(exc):
+            log.exception('Mode2 image generation request failed: model=%s ratio=%s resolution=%s base_url=%s error_kind=%s error=%s', model, ratio, resolution, base_url, error_kind, exc)
+        else:
+            log.warning('Mode2 image generation request failed: model=%s ratio=%s resolution=%s base_url=%s error_kind=%s error=%s', model, ratio, resolution, base_url, error_kind, format_error_brief(exc))
+        raise RuntimeError(f'mode2 文生图请求失败：{error_kind}') from exc
+    report_key_success(api_key)
+    release_api_slot()
     return pick_generated_image_item(response), model
 
 
-def call_mode2_text2image(client: OpenAI, prompt: str, ratio: str, resolution: str):
-    model = get_supabase_setting('MODE2_TEXT2IMAGE_MODEL', get_optional_env('MODE2_TEXT2IMAGE_MODEL', 'doubao-seedream-5-0-260128'))
-    blank_payload = create_mode2_blank_canvas_payload(ratio, resolution)
-    generated_item, _model = call_mode2_image_edit(client, prompt, [blank_payload], ratio, resolution, '')
+def call_mode2_image_edit(api_key: str, prompt: str, image_payloads, ratio: str, resolution: str, sample_strength: str, _logger: logging.Logger | None = None):
+    log = _logger or logger
+    model = get_supabase_setting('MODE2_IMAGE_EDIT_MODEL', get_optional_env('MODE2_IMAGE_EDIT_MODEL', 'jimeng-4.6'))
+    reference_instruction = build_mode1_reference_anchor_prompt(len(image_payloads or []))
+    base_url = get_mode_base_url('mode2')
+    if not api_key:
+        raise ValueError('mode2 图生图缺少 MODE2_IMAGE_API_KEY')
+    client = OpenAI(api_key=api_key, base_url=base_url)
+    image_urls = []
+    for payload in (image_payloads or []):
+        url = getattr(payload, 'source_url', None) or payload.get('url') or payload.get('image_url') or ''
+        if url:
+            image_urls.append(url)
+    request_payload = {
+        'model': model,
+        'prompt': reference_instruction + prompt,
+        'extra_body': {
+            'images': image_urls,
+            'ratio': resolve_mode2_image_ratio(ratio),
+            'resolution': resolve_mode2_image_resolution(resolution),
+            'sample_strength': get_mode2_sample_strength(sample_strength),
+        },
+    }
+    quality = get_supabase_setting('MODE2_IMAGE_QUALITY', get_optional_env('MODE2_IMAGE_QUALITY', '')).strip()
+    if quality:
+        request_payload['extra_body']['quality'] = quality
+    watermark = get_supabase_setting_bool('MODE2_IMAGE_WATERMARK', get_optional_bool_env('MODE2_IMAGE_WATERMARK', False))
+    if watermark:
+        request_payload['extra_body']['watermark'] = True
+    log.warning(
+        'Mode2 image edit request via images/generate with extra_body model=%s ratio=%s resolution=%s reference_count=%s base_url=%s template=mode1_reference_anchor',
+        model,
+        ratio,
+        resolution,
+        len(image_urls),
+        base_url,
+    )
+    if not acquire_api_slot(timeout=300):
+        raise RuntimeError('mode2 图生图获取并发槽位超时')
+    try:
+        response = client.images.generate(**request_payload)
+        response_error = get_mode2_response_error(response)
+        if response_error:
+            raise ValueError(f'图像生成接口返回错误：{response_error}')
+    except Exception as exc:
+        report_key_failure(api_key)
+        release_api_slot()
+        error_kind = classify_mode2_error(exc)
+        if should_log_mode2_traceback(exc):
+            log.exception('Mode2 image edit request failed: model=%s ratio=%s resolution=%s reference_count=%s base_url=%s error_kind=%s error=%s', model, ratio, resolution, len(image_urls), base_url, error_kind, exc)
+        else:
+            log.warning('Mode2 image edit request failed: model=%s ratio=%s resolution=%s reference_count=%s base_url=%s error_kind=%s error=%s', model, ratio, resolution, len(image_urls), base_url, error_kind, format_error_brief(exc))
+        raise RuntimeError(f'mode2 图生图请求失败：{error_kind}') from exc
+    report_key_success(api_key)
+    release_api_slot()
+    return pick_generated_image_item(response), model
+
+
+def call_mode2_text2image(api_key: str, prompt: str, ratio: str, resolution: str):
+    generated_item, model = call_mode2_image_generation(api_key, prompt, ratio, resolution)
     return generated_item, model
 
 
@@ -802,7 +921,7 @@ def call_mode3_image_generation(api_key: str, prompt: str, image_size_ratio: str
     model = get_supabase_setting('MODE3_IMAGE_MODEL', get_optional_env('MODE3_IMAGE_MODEL', 'gpt-image-2'))
     size = get_mode3_image_generation_size(image_size_ratio)
     watermark = get_supabase_setting_bool('MODE3_IMAGE_WATERMARK', get_optional_bool_env('MODE3_IMAGE_WATERMARK', False))
-    base_url = get_mode3_base_url()
+    base_url = get_mode_base_url('mode3')
     if not api_key:
         raise ValueError('mode3 文生图缺少 MODE3_IMAGE_API_KEY')
     request_url = f'{base_url}/images/generations'
@@ -863,7 +982,7 @@ def call_mode3_image_edit(api_key: str, prompt: str, image_payloads, image_size_
     size = get_mode3_image_edit_size(image_size_ratio)
     watermark = get_supabase_setting_bool('MODE3_IMAGE_WATERMARK', get_optional_bool_env('MODE3_IMAGE_WATERMARK', False))
     reference_instruction = build_mode1_reference_anchor_prompt(len(image_payloads or []))
-    base_url = get_mode3_base_url()
+    base_url = get_mode_base_url('mode3')
     if not api_key:
         raise ValueError('mode3 图生图缺少 MODE3_IMAGE_API_KEY')
     request_url = f'{base_url}/images/edits'
@@ -949,7 +1068,7 @@ def call_mode3_text2image(api_key: str, prompt: str):
 
 
 def call_mode1_single_image(prompt: str, image_payloads, image_size_ratio: str = '', text_type: str = '', country: str = '', product_json=None, image_type: str = '', plan_item=None, all_plan_types=None):
-    generated_item, _model = call_mode1_image_edit(get_mode1_client(), prompt, image_payloads or [create_mode1_blank_canvas_payload(image_size_ratio)], image_size_ratio, image_type)
+    generated_item, _model = call_mode1_image_edit(get_mode_client('mode1'), prompt, image_payloads or [create_mode1_blank_canvas_payload(image_size_ratio)], image_size_ratio, image_type)
     return generated_item
 
 
@@ -963,36 +1082,41 @@ def call_mode1_single_image_with_retry(prompt: str, image_payloads, image_size_r
             return call_mode1_single_image(prompt, image_payloads, image_size_ratio, text_type, country, product_json, image_type, plan_item, all_plan_types)
         except Exception as exc:
             last_exc = exc
-            should_retry = attempt < retry_attempts and is_retryable_mode1_error(exc)
+            error_kind = classify_mode1_error(exc)
+            retry_exc = exc if is_retryable_mode1_error(exc) else RuntimeError(error_kind)
+            should_retry = attempt < retry_attempts and is_retryable_mode1_error(retry_exc)
             if not should_retry:
                 log.warning(
-                    'Mode1 single image failed without retry: attempt=%s/%s image_type=%s reference_count=%s plan_type=%s error=%s',
+                    'Mode1 single image failed without retry: attempt=%s/%s image_type=%s reference_count=%s plan_type=%s error_kind=%s error=%s',
                     attempt + 1,
                     retry_attempts + 1,
                     image_type or '',
                     len(image_payloads or []),
                     str((plan_item or {}).get('type') or ''),
-                    exc,
+                    error_kind,
+                    format_error_brief(exc),
                 )
-                raise
-            wait_seconds = compute_retry_delay(retry_delay_seconds, attempt, exc)
+                raise RuntimeError(f'mode1 单图生成失败：{error_kind}') from exc
+            wait_seconds = compute_mode1_retry_delay(retry_delay_seconds, attempt, retry_exc)
             log.warning(
-                'Mode1 single image failed, retrying in %.2fs (%s/%s): image_type=%s error=%s',
+                'Mode1 single image failed, retrying in %.2fs (%s/%s): image_type=%s error_kind=%s',
                 wait_seconds,
                 attempt + 1,
                 retry_attempts,
                 image_type or '',
-                format_error_brief(exc),
+                error_kind,
             )
             time.sleep(wait_seconds)
-    log.exception(
-        'Mode1 single image failed after retries: retry_attempts=%s image_type=%s reference_count=%s plan_type=%s',
+    log.warning(
+        'Mode1 single image failed after retries: retry_attempts=%s image_type=%s reference_count=%s plan_type=%s error_kind=%s error=%s',
         retry_attempts,
         image_type or '',
         len(image_payloads or []),
         str((plan_item or {}).get('type') or ''),
+        classify_mode1_error(last_exc or RuntimeError('unknown')),
+        format_error_brief(last_exc or RuntimeError('unknown')),
     )
-    raise last_exc
+    raise RuntimeError(f'mode1 单图生成失败：{classify_mode1_error(last_exc or RuntimeError("unknown"))}') from last_exc
 
 
 def call_mode1_images_parallel_with_partial_retry(prompt: str, image_payloads, max_images: int, image_size_ratio: str = '', text_type: str = '', country: str = '', product_json=None, image_type: str = '', plan_item=None, all_plan_types=None, _logger: logging.Logger | None = None):
@@ -1046,8 +1170,13 @@ def call_mode1_images_parallel_with_partial_retry(prompt: str, image_payloads, m
 
 
 def call_mode2_single_image(prompt: str, image_payloads, image_size_ratio: str = '', text_type: str = '', country: str = '', product_json=None, image_type: str = '', plan_item=None, all_plan_types=None):
+    api_key = get_mode_api_key('mode2')
     ratio = image_size_ratio or '1:1'
-    generated_item, _model = call_mode2_image_edit(get_mode2_client(), prompt, image_payloads or [create_mode2_blank_canvas_payload(ratio)], ratio, '', '')
+    resolution = '2k'
+    if image_payloads:
+        generated_item, _model = call_mode2_image_edit(api_key, prompt, image_payloads, ratio, resolution, '')
+    else:
+        generated_item, _model = call_mode2_text2image(api_key, prompt, ratio, resolution)
     return generated_item
 
 
@@ -1073,7 +1202,7 @@ def call_mode2_single_image_with_retry(prompt: str, image_payloads, image_size_r
                     exc,
                 )
                 raise
-            wait_seconds = compute_retry_delay(retry_delay_seconds, attempt, exc)
+            wait_seconds = compute_mode2_retry_delay(retry_delay_seconds, attempt, exc)
             log.warning(
                 'Mode2 single image failed, retrying in %.2fs (%s/%s): image_type=%s error=%s',
                 wait_seconds,
@@ -1144,7 +1273,7 @@ def call_mode2_images_parallel_with_partial_retry(prompt: str, image_payloads, m
 
 def call_mode3_single_image(prompt: str, image_payloads, image_size_ratio: str = '', text_type: str = '', country: str = '', product_json=None, image_type: str = '', plan_item=None, all_plan_types=None, _logger: logging.Logger | None = None):
     log = _logger or logger
-    api_key = get_mode3_api_key()
+    api_key = get_mode_api_key('mode3')
     started_at = time.time()
     try:
         if image_payloads:
@@ -1308,6 +1437,90 @@ def call_image_generation(client: OpenAI, prompt: str, image_payloads, image_siz
     report_key_success(api_key)
     release_api_slot()
     return collect_generated_images(response)
+
+
+def call_mode_image(
+    mode: str,
+    prompt: str,
+    image_payloads=None,
+    image_size_ratio: str = '',
+    text_type: str = '',
+    country: str = '',
+    product_json=None,
+    image_type: str = '',
+    plan_item=None,
+    all_plan_types=None,
+    _logger: logging.Logger | None = None,
+):
+    """
+    统一的图片生成接口
+    
+    Args:
+        mode: mode1, mode2, 或 mode3
+        prompt: 提示词
+        image_payloads: 图片载荷列表（图生图时使用）
+        image_size_ratio: 图片尺寸比例
+        text_type: 文本类型
+        country: 国家
+        product_json: 产品 JSON
+        image_type: 图片类型
+        plan_item: 计划项
+        all_plan_types: 所有计划类型
+        _logger: 日志记录器
+        
+    Returns:
+        生成的图片项
+    """
+    log = _logger or logger
+    mode_config = get_mode_config(mode)
+    api_key = get_mode_api_key(mode)
+    
+    # 判断是文生图还是图生图
+    has_images = bool(image_payloads)
+    
+    # 根据 mode 调用不同的接口
+    if mode == 'mode1':
+        client = get_mode_client(mode)
+        if has_images:
+            generated_item, _model = call_mode1_image_edit(
+                client, prompt, image_payloads, image_size_ratio, image_type, _logger=log
+            )
+        else:
+            blank_payload = create_mode1_blank_canvas_payload(image_size_ratio)
+            generated_item, _model = call_mode1_image_edit(
+                client, prompt, [blank_payload], image_size_ratio, image_type, _logger=log
+            )
+        return generated_item
+    
+    elif mode == 'mode2':
+        # mode2 特殊参数处理
+        ratio = image_size_ratio or '1:1'
+        resolution = '2k'
+        sample_strength = mode_config.get('sample_strength', '0.65')
+        
+        if has_images:
+            generated_item, _model = call_mode2_image_edit(
+                api_key, prompt, image_payloads, ratio, resolution, sample_strength, _logger=log
+            )
+        else:
+            generated_item, _model = call_mode2_text2image(
+                api_key, prompt, ratio, resolution
+            )
+        return generated_item
+    
+    elif mode == 'mode3':
+        if has_images:
+            generated_item, _model = call_mode3_image_edit(
+                api_key, prompt, image_payloads, image_size_ratio, _logger=log
+            )
+        else:
+            generated_item, _model = call_mode3_image_generation(
+                api_key, prompt, image_size_ratio, _logger=log
+            )
+        return generated_item
+    
+    else:
+        raise ValueError(f'不支持的 mode: {mode}')
 
 
 def call_app_mode_image_generation(client: OpenAI, prompt: str, image_payloads, image_size_ratio: str, text_type: str, country: str, product_json=None, image_type: str = '', plan_item=None, all_plan_types=None, max_images: int = 1, _logger: logging.Logger | None = None):

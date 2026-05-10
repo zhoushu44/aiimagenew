@@ -51,9 +51,9 @@ from supabase_client import (
 )
 from generation import (
     get_ark_client, get_mode1_client, get_mode2_client, get_mode3_client,
-    get_mode3_api_key,
+    get_mode2_api_key, get_mode3_api_key,
     call_mode1_image_edit, call_mode1_text2image,
-    call_mode2_image_edit, call_mode2_text2image, call_mode2_images_generate_with_retry,
+    call_mode2_image_edit, call_mode2_text2image,
     call_mode3_image_edit, call_mode3_text2image,
     call_mode1_single_image, call_mode1_single_image_with_retry,
     call_mode1_images_parallel_with_partial_retry,
@@ -131,6 +131,7 @@ from celery_tasks import (
     run_fashion_model_task_celery, run_mode_image_task_celery,
     run_aplus_task_celery, run_zip_task_celery,
     run_ai_write_task_celery, run_style_analysis_task_celery,
+    run_virtual_tryon_task_celery,
     serialize_payloads_for_celery,
 )
 from redis_client import get_redis_client
@@ -1475,6 +1476,54 @@ def fail_generation_task_with_refund(task_id: str, error: str, details: str = ''
         update_generation_task(task_id, refund_error=str(exc))
 
 
+def refund_task_points(task_id: str):
+    task = get_generation_task(task_id, prefer_cache=True)
+    if not task:
+        return
+    if bool(task.get('refunded')):
+        return
+    spend_record = task.get('spend_record') if isinstance(task.get('spend_record'), dict) else None
+    if not spend_record or bool(spend_record.get('skipped')) or int(spend_record.get('amount') or 0) <= 0:
+        return
+    refund_amount = int(spend_record.get('amount') or 0)
+    try:
+        request_id = str(task.get('request_id') or spend_record.get('requestId') or (spend_record.get('metadata') or {}).get('request_id') or '').strip()
+        if not request_id:
+            update_generation_task(task_id, refund_error='缺少 request_id，无法自动返还积分')
+            return
+        metadata = spend_record.get('metadata') if isinstance(spend_record.get('metadata'), dict) else {}
+        existing_refund = find_refund_transaction_for_request(task.get('user_id'), request_id)
+        if existing_refund:
+            update_generation_task(task_id, refunded=True)
+            return
+        spend_row = find_refundable_spend_transaction(task.get('user_id'), request_id, refund_amount, str(spend_record.get('type') or '').strip())
+        if not spend_row:
+            spend_row = find_refundable_spend_transaction(task.get('user_id'), request_id, refund_amount)
+        if not spend_row:
+            update_generation_task(task_id, refund_error='未找到匹配的原始扣费记录，无法自动返还积分')
+            return
+        refund_metadata = {
+            **metadata,
+            'request_id': request_id,
+            'refunded': True,
+            'refund_reason': 'generation_task_timeout',
+            'generation_task_id': task_id,
+            'refunded_spend_transaction_id': spend_row.get('id'),
+        }
+        add_user_points(
+            task.get('user_id'),
+            refund_amount,
+            'refund',
+            f'{spend_record.get("reason") or "生成消耗"}超时返还',
+            refund_metadata,
+            spend_row.get('id'),
+        )
+        update_generation_task(task_id, refunded=True, refund_error='')
+    except Exception as exc:
+        logger.warning('Failed to refund generation task %s: %s', task_id, exc)
+        update_generation_task(task_id, refund_error=str(exc))
+
+
 def _run_with_timeout(fn, timeout: int, error_message: str):
     import threading as _threading
     result_container = []
@@ -1840,7 +1889,7 @@ def build_mode_image_task_result(mode_name: str, form_payload: dict, file_payloa
         return response
     if mode_name == 'mode2-image-edit':
         generated_item, model = call_mode2_image_edit(
-            get_mode2_client(),
+            get_mode2_api_key(),
             prompt,
             image_payloads,
             str(form.get('image_size_ratio') or form.get('ratio') or ''),
@@ -1852,7 +1901,7 @@ def build_mode_image_task_result(mode_name: str, form_payload: dict, file_payloa
         return response
     if mode_name == 'mode2-text2image':
         generated_item, model = call_mode2_text2image(
-            get_mode2_client(),
+            get_mode2_api_key(),
             prompt,
             str(form.get('image_size_ratio') or form.get('ratio') or ''),
             str(form.get('resolution') or ''),
@@ -2663,6 +2712,23 @@ def guard_authentication():
             g.admin_session = get_admin_session()
             return None
 
+    if path == '/api/virtual-tryon' and request.method == 'POST':
+        payload = request.get_json(silent=True) if request.is_json else {}
+        async_task = str((payload.get('async_task') if isinstance(payload, dict) else None) or '').strip().lower() in {'1', 'true', 'yes'}
+        if async_task:
+            session_data = parse_supabase_session_cookie()
+            g.supabase_session = session_data
+            g.supabase_user = (session_data or {}).get('user') if session_data else None
+            g.admin_session = get_admin_session()
+            if not session_data:
+                return jsonify({'success': False, 'error': '请先登录'}), 401
+            return None
+        else:
+            g.supabase_session = get_supabase_session()
+            g.supabase_user = (g.supabase_session or {}).get('user') if g.supabase_session else None
+            g.admin_session = get_admin_session()
+            return None
+
     if path == '/api/generate-suite' and request.method == 'POST':
         async_task = str(request.form.get('async_task') or '').strip().lower() in {'1', 'true', 'yes'}
         if async_task:
@@ -3060,6 +3126,11 @@ def replicate_page():
 @app.get('/batch')
 def batch_page():
     return render_html_page('batch.html')
+
+
+@app.get('/virtual-tryon')
+def virtual_tryon_page():
+    return render_html_page('virtual-tryon.html')
 
 
 @app.post('/api/batch/create')
@@ -4515,7 +4586,7 @@ def generate_mode2_image_edit():
 
         def build_mode2_image_edit_result(task_id: str):
             generated_item, model = call_mode2_image_edit(
-                get_mode2_client(),
+                get_mode2_api_key(),
                 prompt,
                 image_payloads,
                 ratio,
@@ -4587,7 +4658,7 @@ def generate_mode2_image_edit_test():
 
         task_id = uuid.uuid4().hex
         generated_item, model = call_mode2_image_edit(
-            get_mode2_client(),
+            get_mode2_api_key(),
             prompt,
             image_payloads,
             ratio,
@@ -4635,7 +4706,7 @@ def generate_mode2_text2image():
 
         def build_mode2_text2image_result(task_id: str):
             generated_item, model = call_mode2_text2image(
-                get_mode2_client(),
+                get_mode2_api_key(),
                 prompt,
                 ratio,
                 resolution,
@@ -6171,6 +6242,219 @@ def handle_unsubscribe_task(data):
     if task_id:
         leave_room(f'task_{task_id}')
         logger.debug('Client %s unsubscribed from task %s', request.sid, task_id)
+
+
+def load_image_payload_from_path(image_path: str):
+    """从路径加载图片并返回 LazyImagePayload"""
+    from image_utils import LazyImagePayload, sniff_image_mime_type, build_remote_image_payload
+    from pathlib import Path
+    
+    if not image_path:
+        raise ValueError('图片路径不能为空')
+    
+    if image_path.startswith('http://') or image_path.startswith('https://'):
+        return build_remote_image_payload(image_path)
+    
+    if is_cos_enabled():
+        cos_url = f"{get_cos_url_prefix()}/{image_path}"
+        try:
+            return build_remote_image_payload(cos_url)
+        except Exception as exc:
+            logger.warning('Failed to load image from COS URL: %s, error: %s', cos_url, exc)
+    
+    local_path = (GENERATED_SUITES_DIR / image_path).resolve()
+    generated_root = GENERATED_SUITES_DIR.resolve()
+    
+    if not local_path.exists():
+        raise ValueError(f'图片文件不存在: {image_path}')
+    
+    try:
+        if not str(local_path).startswith(str(generated_root)):
+            local_path = local_path.resolve()
+            if not str(local_path).startswith(str(generated_root)):
+                raise ValueError(f'图片路径不在允许范围内: {image_path}')
+    except Exception:
+        raise ValueError(f'图片路径验证失败: {image_path}')
+    
+    content = local_path.read_bytes()
+    mime_type = sniff_image_mime_type(content) or 'image/png'
+    filename = local_path.name
+    return LazyImagePayload(filename=filename, mime_type=mime_type, content=content)
+
+
+def build_virtual_tryon_prompt(custom_prompt: str = '') -> str:
+    """构建虚拟试穿的提示词"""
+    base_prompt = """虚拟试穿任务：将服装合成到模特身上。
+
+核心要求：
+1. 保持模特完全不变：
+   - 模特的体型、身材比例完全保持原样
+   - 模特的姿势、动作完全保持原样
+   - 模特的肤色、面部特征完全保持原样
+   - 模特的光影效果完全保持原样
+   - 模特的背景环境完全保持原样
+
+2. 只更换服装：
+   - 将服装自然地穿在模特身上
+   - 服装必须完全贴合模特的体型和姿势
+   - 服装的版型要自然，不能有违和感
+
+3. 保留服装细节：
+   - 面料质感要真实呈现（棉、丝、麻、羊毛等）
+   - 褶皱要自然，符合人体动作和服装版型
+   - 纹理细节要清晰可见
+   - 颜色要准确还原
+   - 纽扣、拉链、缝线等细节要保留
+
+4. 自然融合：
+   - 服装和模特的交界处要自然
+   - 服装的阴影和高光要符合场景光照
+   - 整体效果要像真实拍摄一样自然
+
+请生成模特穿着新服装的效果图，确保效果真实自然。"""
+    
+    if custom_prompt and custom_prompt.strip():
+        return f"{base_prompt}\n\n用户额外要求：\n{custom_prompt.strip()}"
+    
+    return base_prompt
+
+
+def run_virtual_tryon_task(task_id: str, form_payload: dict):
+    """执行虚拟试穿任务（Celery worker调用）"""
+    from image_utils import LazyImagePayload
+    
+    model_image_path = form_payload.get('model_image_path')
+    garment_image_paths = form_payload.get('garment_image_paths', [])
+    custom_prompt = form_payload.get('custom_prompt', '')
+    image_size_ratio = form_payload.get('image_size_ratio', '3:4') or '3:4'
+    
+    if not model_image_path:
+        raise ValueError('模特图路径不能为空')
+    if not garment_image_paths:
+        raise ValueError('服装图路径不能为空')
+    
+    model_payload = load_image_payload_from_path(model_image_path)
+    garment_payloads = [load_image_payload_from_path(path) for path in garment_image_paths]
+    
+    all_payloads = [model_payload] + garment_payloads
+    
+    prompt = build_virtual_tryon_prompt(custom_prompt)
+    
+    generated_items = call_app_mode_image_generation(
+        None,
+        prompt,
+        all_payloads,
+        image_size_ratio,
+        '无文字',
+        '中国',
+        None,
+        'virtual-tryon',
+        max_images=1,
+    )
+    
+    if not generated_items:
+        raise ValueError('生成结果为空')
+    
+    image_bytes, mime_type = decode_generated_image(generated_items[0])
+    download_name, relative_path, image_url, storage_trace = save_generated_image(
+        task_id, 1, 'virtual-tryon', image_bytes, mime_type
+    )
+    
+    result = {
+        'success': True,
+        'task_id': task_id,
+        'image_url': image_url,
+        'image_path': relative_path,
+        'download_name': download_name,
+        'model_image_path': model_image_path,
+        'garment_image_paths': garment_image_paths,
+        'trace': storage_trace,
+    }
+    
+    update_generation_task(task_id, 'succeeded', result)
+    return result
+
+
+@app.post('/api/virtual-tryon')
+def virtual_tryon():
+    """虚拟试穿API - 将服装合成到模特身上"""
+    try:
+        payload = request.get_json(silent=True) if request.is_json else {}
+        if not isinstance(payload, dict):
+            payload = {}
+        
+        logger.info('Virtual try-on payload: %s', payload)
+        
+        model_image_path = payload.get('model_image_path') or request.form.get('model_image_path', '')
+        if isinstance(model_image_path, str):
+            model_image_path = model_image_path.strip()
+        
+        logger.info('Model image path: %s', model_image_path)
+        
+        garment_image_paths = payload.get('garment_image_paths') or request.form.get('garment_image_paths', [])
+        if isinstance(garment_image_paths, str):
+            try:
+                garment_image_paths = json.loads(garment_image_paths)
+            except:
+                garment_image_paths = [garment_image_paths] if garment_image_paths else []
+        
+        custom_prompt = payload.get('custom_prompt') or request.form.get('custom_prompt', '')
+        if isinstance(custom_prompt, str):
+            custom_prompt = custom_prompt.strip()
+        
+        image_size_ratio = payload.get('output_spec') or request.form.get('output_spec', '3:4') or '3:4'
+        run_async = str(payload.get('async_task') or request.form.get('async_task', '') or '').strip().lower() in {'1', 'true', 'yes'}
+        
+        if not model_image_path:
+            return jsonify({'success': False, 'error': '请上传模特图'}), 400
+        
+        if not garment_image_paths:
+            return jsonify({'success': False, 'error': '请上传服装图'}), 400
+        
+        if len(garment_image_paths) > 6:
+            return jsonify({'success': False, 'error': '最多上传6张服装图'}), 400
+        
+        if run_async:
+            session_data = g.get('supabase_session') or get_supabase_session()
+            user_id = _get_supabase_user_id(session_data)
+            if not user_id:
+                return jsonify({'success': False, 'error': '请先登录'}), 401
+            
+            task = create_generation_task(user_id, 'virtual-tryon')
+            form_payload = {
+                'model_image_path': model_image_path,
+                'garment_image_paths': garment_image_paths,
+                'custom_prompt': custom_prompt,
+                'image_size_ratio': image_size_ratio,
+            }
+            submit_generation_celery_task(run_virtual_tryon_task_celery, (task['task_id'], form_payload), task.get('queue_tier'))
+            return jsonify({'success': True, 'async_task': True, 'task': task, 'task_id': task['task_id']}), 202
+        
+        task_id = uuid.uuid4().hex
+        form_payload = {
+            'model_image_path': model_image_path,
+            'garment_image_paths': garment_image_paths,
+            'custom_prompt': custom_prompt,
+            'image_size_ratio': image_size_ratio,
+        }
+        result = run_virtual_tryon_task(task_id, form_payload)
+        return jsonify(result)
+    
+    except ValueError as exc:
+        return jsonify({'success': False, 'error': str(exc)}), 400
+    except RuntimeError as exc:
+        payload, status_code = parse_runtime_error(exc)
+        return jsonify(payload), status_code
+    except (APIError, APIStatusError) as exc:
+        payload, status_code = parse_ark_exception(exc)
+        return jsonify(payload), status_code
+    except requests.Timeout:
+        return jsonify({'success': False, 'error': '请求超时，请稍后重试'}), 504
+    except requests.RequestException as exc:
+        return jsonify({'success': False, 'error': f'请求失败：{exc}'}), 502
+    except Exception as exc:
+        logger.exception('Virtual try-on error: %s', exc)
+        return jsonify({'success': False, 'error': f'服务端异常：{exc}'}), 500
 
 
 def emit_task_update(task_id, task_data):
