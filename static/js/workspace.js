@@ -500,9 +500,10 @@ document.addEventListener('DOMContentLoaded', () => {
     const PENDING_GENERATION_MAX_STATUS_FAILURES = 3;
 
     const getDynamicPollInterval = (elapsedMs) => {
-      if (elapsedMs < 30000) return 5000;
-      if (elapsedMs < 120000) return 8000;
-      return 10000;
+      if (elapsedMs < 10000) return 2000;
+      if (elapsedMs < 30000) return 3000;
+      if (elapsedMs < 120000) return 5000;
+      return 8000;
     };
     let pendingGenerationTask = null;
     let pendingGenerationPollTimer = null;
@@ -1159,6 +1160,170 @@ document.addEventListener('DOMContentLoaded', () => {
       });
     };
 
+    const UPLOAD_PREVIEW_MAX_EDGE = 320;
+    const UPLOAD_PREVIEW_QUALITY = 0.72;
+    const UPLOAD_CONCURRENCY = 3;
+    const UPLOAD_COMPRESS_MAX_EDGE = 2048;
+    const UPLOAD_COMPRESS_QUALITY = 0.86;
+    const UPLOAD_COMPRESS_THRESHOLD = 1024 * 1024;
+
+    const formatFileSize = (bytes = 0) => {
+      const size = Number(bytes) || 0;
+      if (size >= 1024 * 1024) {
+        return `${(size / 1024 / 1024).toFixed(1)}MB`;
+      }
+      if (size >= 1024) {
+        return `${Math.max(1, Math.round(size / 1024))}KB`;
+      }
+      return `${size}B`;
+    };
+
+    const updateUploadHintText = (uploadHint, message) => {
+      if (uploadHint && message) {
+        uploadHint.textContent = message;
+      }
+    };
+
+    const buildImagePreviewUrl = (file) => new Promise((resolve) => {
+      if (!file || !file.type || !file.type.startsWith('image/')) {
+        resolve('');
+        return;
+      }
+      const objectUrl = URL.createObjectURL(file);
+      const image = new Image();
+      image.onload = () => {
+        const width = image.naturalWidth || image.width || 0;
+        const height = image.naturalHeight || image.height || 0;
+        if (!width || !height) {
+          URL.revokeObjectURL(objectUrl);
+          resolve(objectUrl);
+          return;
+        }
+        const scale = Math.min(1, UPLOAD_PREVIEW_MAX_EDGE / Math.max(width, height));
+        if (scale >= 1) {
+          resolve(objectUrl);
+          return;
+        }
+        const canvas = document.createElement('canvas');
+        canvas.width = Math.max(1, Math.round(width * scale));
+        canvas.height = Math.max(1, Math.round(height * scale));
+        const context = canvas.getContext('2d');
+        if (!context) {
+          resolve(objectUrl);
+          return;
+        }
+        context.drawImage(image, 0, 0, canvas.width, canvas.height);
+        URL.revokeObjectURL(objectUrl);
+        resolve(canvas.toDataURL('image/jpeg', UPLOAD_PREVIEW_QUALITY));
+      };
+      image.onerror = () => {
+        URL.revokeObjectURL(objectUrl);
+        resolve('');
+      };
+      image.src = objectUrl;
+    });
+
+    const uploadFilesWithConcurrency = async (files, worker, concurrency = UPLOAD_CONCURRENCY) => {
+      const selectedFiles = Array.from(files || []);
+      const results = new Array(selectedFiles.length);
+      let nextIndex = 0;
+      const workerCount = Math.max(1, Math.min(concurrency, selectedFiles.length));
+      await Promise.all(Array.from({ length: workerCount }, async () => {
+        while (nextIndex < selectedFiles.length) {
+          const index = nextIndex;
+          nextIndex += 1;
+          results[index] = await worker(selectedFiles[index], index);
+        }
+      }));
+      return results;
+    };
+
+    const compressImageForUpload = (file) => new Promise((resolve) => {
+      if (!file || !file.type || !file.type.startsWith('image/') || file.type === 'image/gif' || file.size < UPLOAD_COMPRESS_THRESHOLD) {
+        resolve(file);
+        return;
+      }
+      const objectUrl = URL.createObjectURL(file);
+      const image = new Image();
+      image.onload = () => {
+        const width = image.naturalWidth || image.width || 0;
+        const height = image.naturalHeight || image.height || 0;
+        const scale = Math.min(1, UPLOAD_COMPRESS_MAX_EDGE / Math.max(width, height));
+        if (!width || !height || scale >= 1) {
+          URL.revokeObjectURL(objectUrl);
+          resolve(file);
+          return;
+        }
+        const canvas = document.createElement('canvas');
+        canvas.width = Math.max(1, Math.round(width * scale));
+        canvas.height = Math.max(1, Math.round(height * scale));
+        const context = canvas.getContext('2d');
+        if (!context) {
+          URL.revokeObjectURL(objectUrl);
+          resolve(file);
+          return;
+        }
+        context.drawImage(image, 0, 0, canvas.width, canvas.height);
+        canvas.toBlob((blob) => {
+          URL.revokeObjectURL(objectUrl);
+          if (!blob || blob.size >= file.size) {
+            resolve(file);
+            return;
+          }
+          const compressedFile = new File([blob], file.name.replace(/\.[^.]+$/, '.jpg'), {
+            type: 'image/jpeg',
+            lastModified: Date.now(),
+          });
+          compressedFile._originalSize = file.size;
+          resolve(compressedFile);
+        }, 'image/jpeg', UPLOAD_COMPRESS_QUALITY);
+      };
+      image.onerror = () => {
+        URL.revokeObjectURL(objectUrl);
+        resolve(file);
+      };
+      image.src = objectUrl;
+    });
+
+    const uploadFileToCosDirect = async (file, { storageGroup, storageSubdir = 'uploads' }) => {
+      const presignResponse = await fetch('/api/reference-images/presign', {
+        method: 'POST',
+        credentials: 'include',
+        headers: {
+          'Content-Type': 'application/json',
+        },
+        body: JSON.stringify({
+          filename: file.name || 'image.jpg',
+          content_type: file.type || 'application/octet-stream',
+          file_size: file.size || 0,
+          storage_group: storageGroup || 'temp',
+          storage_subdir: storageSubdir || 'uploads',
+        }),
+      });
+      const presign = await presignResponse.json().catch(() => ({}));
+      if (!presignResponse.ok || !presign || presign.success === false || !presign.upload_url) {
+        throw new Error((presign && presign.error) || '获取上传签名失败，请稍后重试');
+      }
+      const uploadResponse = await fetch(presign.upload_url, {
+        method: 'PUT',
+        headers: presign.headers || { 'Content-Type': file.type || 'application/octet-stream' },
+        body: file,
+      });
+      if (!uploadResponse.ok) {
+        throw new Error(`图片直传 COS 失败（${uploadResponse.status}）`);
+      }
+      return {
+        imageUrl: String(presign.image_url || ''),
+        imagePath: String(presign.image_path || ''),
+        downloadName: String(presign.download_name || file.name || ''),
+        mimeType: String(presign.mime_type || file.type || ''),
+        storageGroup: String(presign.storage_group || storageGroup || ''),
+        storageBackend: String(presign.storage_backend || 'cos'),
+        compressedSize: file.size || 0,
+        originalSize: file._originalSize || file.size || 0,
+      };
+    };
+
     const appendImageUrlsToFormData = (formData, fieldName, items, limit = 3) => {
       Array.from(items || []).slice(0, limit).forEach((item) => {
         const imageUrl = typeof item?.imageUrl === 'string' ? item.imageUrl.trim() : '';
@@ -1568,6 +1733,20 @@ document.addEventListener('DOMContentLoaded', () => {
       }
     };
 
+    const getTaskQueueStatusMessage = (task, pendingMessage = '任务已提交，正在排队处理，请稍候…', runningMessage = '任务处理中，请稍候…') => {
+      if (task?.status === 'running') return runningMessage;
+      const aheadCount = Number(task?.ahead_count);
+      const queueTier = String(task?.queue_tier || '').toLowerCase();
+      const tierLabel = queueTier === 'priority' ? '付费优先队列' : '普通队列';
+      if (Number.isFinite(aheadCount) && aheadCount > 0) {
+        return `${tierLabel}排队中，前面还有 ${aheadCount} 人，请勿重复提交。`;
+      }
+      if (Number.isFinite(aheadCount) && aheadCount === 0) {
+        return `${tierLabel}排队中，即将开始生成，请勿重复提交。`;
+      }
+      return pendingMessage;
+    };
+
     const pollGenericTaskResult = async ({
       taskId,
       timeoutMs = PENDING_GENERATION_TIMEOUT,
@@ -1617,7 +1796,7 @@ document.addEventListener('DOMContentLoaded', () => {
             }
           } else {
             if (typeof onPending === 'function') {
-              onPending(task.status === 'running' ? runningMessage : pendingMessage, task);
+              onPending(getTaskQueueStatusMessage(task, pendingMessage, runningMessage), task);
             }
           }
         }
@@ -1653,7 +1832,7 @@ document.addEventListener('DOMContentLoaded', () => {
             break;
           }
           if (typeof onPending === 'function') {
-            onPending(task.status === 'running' ? runningMessage : pendingMessage, task);
+            onPending(getTaskQueueStatusMessage(task, pendingMessage, runningMessage), task);
           }
           const elapsedMs = Date.now() - startedAt;
           const currentInterval = typeof intervalMs === 'number' ? intervalMs : getDynamicPollInterval(elapsedMs);
@@ -2010,7 +2189,9 @@ document.addEventListener('DOMContentLoaded', () => {
           completePendingGenerationTask(mergeGenerationTaskResults(taskResponses));
           return;
         }
-        setResultStatus(taskResponses.some((task) => task.status === 'running') ? getCurrentModeConfig().imageProgress : '生成任务已提交，正在排队处理，请勿关闭页面。');
+        const runningTask = taskResponses.find((task) => task.status === 'running');
+        const pendingTask = taskResponses.find((task) => task.status !== 'running');
+        setResultStatus(runningTask ? getCurrentModeConfig().imageProgress : getTaskQueueStatusMessage(pendingTask, '生成任务已提交，正在排队处理，请勿关闭页面。'));
       } catch (error) {
         pendingGenerationPollFailureCount += 1;
         const failureMessage = `正在等待生成任务完成，状态查询暂时失败：${error.message || error}`;
@@ -2518,21 +2699,35 @@ document.addEventListener('DOMContentLoaded', () => {
       if (uploadButton) uploadButton.style.display = '';
       if (uploadHint) uploadHint.style.display = '';
       files.forEach((file, index) => {
-        const reader = new FileReader();
-        reader.onload = (e) => {
-          const item = document.createElement('div');
-          item.className = 'thumb';
-          item.style.backgroundImage = `url(${e.target.result})`;
-          item.style.backgroundSize = 'cover';
-          item.style.backgroundPosition = 'center';
-          item.style.color = '#fff';
-          item.innerHTML = `
-            <button class="thumb-delete-btn" type="button" data-index="${index}" aria-label="删除">×</button>
-          `;
-          item.dataset.index = index;
-          container.appendChild(item);
-        };
-        reader.readAsDataURL(file);
+        const item = document.createElement('div');
+        item.className = 'thumb';
+        item.style.backgroundSize = 'cover';
+        item.style.backgroundPosition = 'center';
+        item.style.color = '#fff';
+        item.innerHTML = `
+          <button class="thumb-delete-btn" type="button" data-index="${index}" aria-label="删除">×</button>
+        `;
+        item.dataset.index = index;
+        const cachedPreviewUrl = file && file._previewUrl;
+        if (cachedPreviewUrl) {
+          item.style.backgroundImage = `url(${cachedPreviewUrl})`;
+        } else if (file) {
+          const objectUrl = URL.createObjectURL(file);
+          file._previewUrl = objectUrl;
+          item.style.backgroundImage = `url(${objectUrl})`;
+          if (file.size > 1024 * 1024) {
+            buildImagePreviewUrl(file).then((previewUrl) => {
+              if (previewUrl && file._previewUrl === objectUrl) {
+                file._previewUrl = previewUrl;
+                item.style.backgroundImage = `url(${previewUrl})`;
+              }
+              URL.revokeObjectURL(objectUrl);
+            }).catch(() => {
+              URL.revokeObjectURL(objectUrl);
+            });
+          }
+        }
+        container.appendChild(item);
       });
       if (files.length < maxFiles) {
         const addButton = document.createElement('button');
@@ -2543,7 +2738,7 @@ document.addEventListener('DOMContentLoaded', () => {
       }
     };
 
-    const uploadReferenceAssets = async (rawFiles, { storageGroup = 'temp', maxFiles = 3, existingCount = 0, label = '参考图' } = {}) => {
+    const uploadReferenceAssets = async (rawFiles, { storageGroup = 'temp', maxFiles = 3, existingCount = 0, label = '参考图', onProgress = null } = {}) => {
       const files = Array.from(rawFiles || []).filter((file) => file && String(file.type || '').startsWith('image/'));
       if (!files.length) {
         return { uploadedAssets: [], errorMessage: '' };
@@ -2551,44 +2746,65 @@ document.addEventListener('DOMContentLoaded', () => {
       const availableSlots = maxFiles - existingCount;
       const selectedFiles = files.slice(0, availableSlots);
       let firstError = files.length > availableSlots ? `当前最多支持上传 ${maxFiles} 张${label}` : '';
+      let completedCount = 0;
       const uploadedAssets = [];
 
-      for (const file of selectedFiles) {
-        const formData = new FormData();
-        formData.append('file', file);
-        formData.append('storage_group', storageGroup);
-        formData.append('storage_subdir', 'uploads');
+      await uploadFilesWithConcurrency(selectedFiles, async (file, index) => {
         try {
-          const response = await fetch('/api/reference-images/upload', {
-            method: 'POST',
-            body: formData,
-            credentials: 'include',
-          });
-          const result = await response.json().catch(() => ({}));
-          if (!response.ok || !result || result.success === false || !result.image_url) {
-            throw new Error((result && result.error) || `${label}上传失败，请稍后重试`);
+          if (typeof onProgress === 'function') {
+            onProgress({ completed: completedCount, total: selectedFiles.length, current: index + 1, file, state: 'compressing' });
           }
-          uploadedAssets.push({
-            imageUrl: String(result.image_url || ''),
-            imagePath: String(result.image_path || ''),
-            downloadName: String(result.download_name || file.name || ''),
-            mimeType: String(result.mime_type || file.type || ''),
-            storageGroup: String(result.storage_group || storageGroup || ''),
-          });
+          const uploadFile = await compressImageForUpload(file);
+          if (typeof onProgress === 'function') {
+            onProgress({ completed: completedCount, total: selectedFiles.length, current: index + 1, file: uploadFile, originalFile: file, state: 'uploading' });
+          }
+          try {
+            uploadedAssets[index] = await uploadFileToCosDirect(uploadFile, { storageGroup, storageSubdir: 'uploads' });
+          } catch (directError) {
+            const formData = new FormData();
+            formData.append('file', uploadFile);
+            formData.append('storage_group', storageGroup);
+            formData.append('storage_subdir', 'uploads');
+            const response = await fetch('/api/reference-images/upload', {
+              method: 'POST',
+              body: formData,
+              credentials: 'include',
+            });
+            const result = await response.json().catch(() => ({}));
+            if (!response.ok || !result || result.success === false || !result.image_url) {
+              throw new Error((result && result.error) || (directError instanceof Error ? directError.message : `${label}上传失败，请稍后重试`));
+            }
+            uploadedAssets[index] = {
+              imageUrl: String(result.image_url || ''),
+              imagePath: String(result.image_path || ''),
+              downloadName: String(result.download_name || uploadFile.name || file.name || ''),
+              mimeType: String(result.mime_type || uploadFile.type || file.type || ''),
+              storageGroup: String(result.storage_group || storageGroup || ''),
+              storageBackend: String(result.storage_backend || 'server'),
+              compressedSize: uploadFile.size || 0,
+              originalSize: file.size || 0,
+            };
+          }
         } catch (error) {
           firstError = firstError || (error instanceof Error ? error.message : `${label}上传失败，请稍后重试`);
+        } finally {
+          completedCount += 1;
+          if (typeof onProgress === 'function') {
+            onProgress({ completed: completedCount, total: selectedFiles.length, current: index + 1, file, state: 'done' });
+          }
         }
-      }
+      });
 
-      return { uploadedAssets, errorMessage: firstError };
+      return { uploadedAssets: uploadedAssets.filter(Boolean), errorMessage: firstError };
     };
 
-    const uploadFashionProductFiles = async (rawFiles) => {
+    const uploadFashionProductFiles = async (rawFiles, options = {}) => {
       return uploadReferenceAssets(rawFiles, {
         storageGroup: 'products',
         maxFiles: getProductUploadLimit(),
         existingCount: uploadedProductAssets.length,
         label: '商品图',
+        ...options,
       });
     };
 
@@ -2617,37 +2833,74 @@ document.addEventListener('DOMContentLoaded', () => {
         }
 
         if (filesArray === currentFiles) {
-          const { uploadedAssets, errorMessage } = await uploadFashionProductFiles(rawFiles);
+          const previewFiles = rawFiles.slice(0, Math.max(0, getProductUploadLimit() - filesArray.length));
+          if (!previewFiles.length) {
+            setResultStatus(`当前最多支持上传 ${getProductUploadLimit()} 张商品图`, 'error');
+            event.target.value = '';
+            return;
+          }
+          filesArray.push(...previewFiles);
+          renderThumbList(thumbsContainer, filesArray, emptyMarkup, labelPrefix, button, uploadHint, isFashionUpload);
+          updateUploadHintText(uploadHint, `正在上传 ${previewFiles.length} 张商品图，请稍候...`);
+          const originalButtonDisabled = button.disabled;
+          button.disabled = true;
+          const { uploadedAssets, errorMessage } = await uploadFashionProductFiles(rawFiles, {
+            onProgress: ({ completed, total, file }) => {
+              updateUploadHintText(uploadHint, `商品图上传中 ${completed}/${total}${file?.size ? ` · ${formatFileSize(file.size)}` : ''}`);
+            },
+          });
           if (uploadedAssets.length) {
             const maxFiles = getProductUploadLimit();
             uploadedProductAssets = uploadedProductAssets.concat(uploadedAssets).slice(0, maxFiles);
-            currentFiles.push(...rawFiles.slice(0, uploadedAssets.length));
             currentProductJson = null;
+          }
+          if (uploadedAssets.length < previewFiles.length) {
+            filesArray.splice(filesArray.length - previewFiles.length + uploadedAssets.length, previewFiles.length - uploadedAssets.length);
           }
           if (errorMessage) {
             setResultStatus(errorMessage, 'error');
           }
           renderThumbList(thumbsContainer, filesArray, emptyMarkup, labelPrefix, button, uploadHint, isFashionUpload);
+          updateUploadHintText(uploadHint, uploadedAssets.length ? `已上传 ${uploadedAssets.length} 张商品图` : '点击上传商品图');
+          button.disabled = originalButtonDisabled;
           persistState();
           event.target.value = '';
           return;
         }
 
         if (filesArray === currentReferenceFiles) {
+          const previewFiles = rawFiles.slice(0, Math.max(0, 3 - filesArray.length));
+          if (!previewFiles.length) {
+            setResultStatus('当前最多支持上传 3 张参考图', 'error');
+            event.target.value = '';
+            return;
+          }
+          filesArray.push(...previewFiles);
+          renderThumbList(thumbsContainer, filesArray, emptyMarkup, labelPrefix, button, uploadHint, isFashionUpload);
+          updateUploadHintText(uploadHint, `正在上传 ${previewFiles.length} 张参考图，请稍候...`);
+          const originalButtonDisabled = button.disabled;
+          button.disabled = true;
           const { uploadedAssets, errorMessage } = await uploadReferenceAssets(rawFiles, {
             storageGroup: 'temp',
             maxFiles: 3,
             existingCount: uploadedReferenceAssets.length,
             label: '参考图',
+            onProgress: ({ completed, total, file }) => {
+              updateUploadHintText(uploadHint, `参考图上传中 ${completed}/${total}${file?.size ? ` · ${formatFileSize(file.size)}` : ''}`);
+            },
           });
           if (uploadedAssets.length) {
             uploadedReferenceAssets = uploadedReferenceAssets.concat(uploadedAssets).slice(0, 3);
-            currentReferenceFiles.push(...rawFiles.slice(0, uploadedAssets.length));
+          }
+          if (uploadedAssets.length < previewFiles.length) {
+            filesArray.splice(filesArray.length - previewFiles.length + uploadedAssets.length, previewFiles.length - uploadedAssets.length);
           }
           if (errorMessage) {
             setResultStatus(errorMessage, 'error');
           }
           renderThumbList(thumbsContainer, filesArray, emptyMarkup, labelPrefix, button, uploadHint, isFashionUpload);
+          updateUploadHintText(uploadHint, uploadedAssets.length ? `已上传 ${uploadedAssets.length} 张参考图` : '点击上传参考图');
+          button.disabled = originalButtonDisabled;
           persistState();
           event.target.value = '';
           return;
@@ -3713,7 +3966,6 @@ document.addEventListener('DOMContentLoaded', () => {
         const originalText = sellingInput.value;
         const formData = new FormData();
         formData.append('selling_text', originalText);
-        formData.append('async_task', '1');
         appendFilesToFormData(formData, 'images', getProductFiles());
 
         sellingMessage.textContent = '';
@@ -3728,49 +3980,60 @@ document.addEventListener('DOMContentLoaded', () => {
           });
           const result = await parseJsonResponse(response);
 
-          if (!response.ok || !result.success || !result.task_id) {
+          if (!response.ok || !result.success) {
             throw new Error(result.error || '生成失败，请稍后重试');
           }
 
-          await pollGenericTaskResult({
-            taskId: result.task_id,
-            loadingMessage: 'AI 文案任务已提交，正在处理中…',
-            pendingMessage: 'AI 文案任务排队中，请稍候…',
-            runningMessage: 'AI 文案生成中，请稍候…',
-            statusErrorMessage: 'AI 文案任务状态查询失败',
-            timeoutMessage: 'AI 文案生成等待超时，请稍后重试',
-            onPending: (message, task) => {
-              const partialResult = task?.result && typeof task.result === 'object' ? task.result : null;
-              const partialText = typeof partialResult?.text === 'string' ? partialResult.text : '';
-              if (partialText) {
+          if (result.task_id) {
+            await pollGenericTaskResult({
+              taskId: result.task_id,
+              loadingMessage: 'AI 文案任务已提交，正在处理中…',
+              pendingMessage: 'AI 文案任务排队中，请稍候…',
+              runningMessage: 'AI 文案生成中，请稍候…',
+              statusErrorMessage: 'AI 文案任务状态查询失败',
+              timeoutMessage: 'AI 文案生成等待超时，请稍后重试',
+              onPending: (message, task) => {
+                const partialResult = task?.result && typeof task.result === 'object' ? task.result : null;
+                const partialText = typeof partialResult?.text === 'string' ? partialResult.text : '';
+                if (partialText) {
+                  sellingInput.value = partialText;
+                  sellingMessage.textContent = '';
+                  sellingMessage.className = 'field-message';
+                  return;
+                }
+                sellingMessage.textContent = message || 'AI 文案生成中，请稍候…';
+                sellingMessage.className = 'field-message';
+                sellingInput.value = '生成中';
+              },
+              onProgress: (taskResult) => {
+                const partialText = typeof taskResult?.text === 'string' ? taskResult.text : '';
+                if (!partialText) {
+                  return;
+                }
                 sellingInput.value = partialText;
                 sellingMessage.textContent = '';
                 sellingMessage.className = 'field-message';
-                return;
-              }
-              sellingMessage.textContent = message || 'AI 文案生成中，请稍候…';
-              sellingMessage.className = 'field-message';
-              sellingInput.value = '生成中';
-            },
-            onProgress: (taskResult) => {
-              const partialText = typeof taskResult?.text === 'string' ? taskResult.text : '';
-              if (!partialText) {
-                return;
-              }
-              sellingInput.value = partialText;
-              sellingMessage.textContent = '';
-              sellingMessage.className = 'field-message';
-            },
-            onSuccess: (taskResult) => {
-              sellingInput.value = taskResult?.text || '';
-              currentProductJson = taskResult?.product_json && typeof taskResult.product_json === 'object'
-                ? taskResult.product_json
-                : null;
-              sellingMessage.textContent = '';
-              sellingMessage.className = 'field-message';
-              persistState();
-            },
-          });
+              },
+              onSuccess: (taskResult) => {
+                sellingInput.value = taskResult?.text || '';
+                currentProductJson = taskResult?.product_json && typeof taskResult.product_json === 'object'
+                  ? taskResult.product_json
+                  : null;
+                sellingMessage.textContent = '';
+                sellingMessage.className = 'field-message';
+                persistState();
+              },
+            });
+            return;
+          }
+
+          sellingInput.value = result.text || '';
+          currentProductJson = result.product_json && typeof result.product_json === 'object'
+            ? result.product_json
+            : null;
+          sellingMessage.textContent = '';
+          sellingMessage.className = 'field-message';
+          persistState();
         } catch (error) {
           sellingInput.value = originalText;
           sellingMessage.textContent = error.message || '生成失败，请稍后重试';
@@ -3787,7 +4050,6 @@ document.addEventListener('DOMContentLoaded', () => {
         const formData = new FormData();
         formData.append('selling_text', sellingInput.value.trim());
         formData.append('platform', getPlatformLabel());
-        formData.append('async_task', '1');
         appendFilesToFormData(formData, 'images', getProductFiles());
 
         currentStyleResults = [];
@@ -3806,32 +4068,44 @@ document.addEventListener('DOMContentLoaded', () => {
           });
           const result = await parseJsonResponse(response);
 
-          if (!response.ok || !result.success || !result.task_id) {
+          if (!response.ok || !result.success) {
             throw new Error(result.error || '风格分析失败，请稍后重试');
           }
 
-          await pollGenericTaskResult({
-            taskId: result.task_id,
-            loadingMessage: `${getStyleLoadingLabel()}，请稍候…`,
-            pendingMessage: '风格分析任务排队中，请稍候…',
-            runningMessage: '风格分析中，请稍候…',
-            statusErrorMessage: '风格分析任务状态查询失败',
-            timeoutMessage: '风格分析等待超时，请稍后重试',
-            onPending: (message) => {
-              styleResultsMessage.textContent = message || `${getStyleLoadingLabel()}，请稍候…`;
-              styleResultsMessage.className = 'style-results-message';
-            },
-            onSuccess: (taskResult) => {
-              if (!Array.isArray(taskResult?.styles)) {
-                throw new Error('风格分析成功，但未返回可用结果');
-              }
-              renderStyleCards(taskResult.styles);
-              setStyleButtonLabel(refreshStyleBtnLabel);
-              styleResultsMessage.textContent = getStyleSuccessMessage();
-              styleResultsMessage.className = 'style-results-message success';
-              persistState();
-            },
-          });
+          if (result.task_id) {
+            await pollGenericTaskResult({
+              taskId: result.task_id,
+              loadingMessage: `${getStyleLoadingLabel()}，请稍候…`,
+              pendingMessage: '风格分析任务排队中，请稍候…',
+              runningMessage: '风格分析中，请稍候…',
+              statusErrorMessage: '风格分析任务状态查询失败',
+              timeoutMessage: '风格分析等待超时，请稍后重试',
+              onPending: (message) => {
+                styleResultsMessage.textContent = message || `${getStyleLoadingLabel()}，请稍候…`;
+                styleResultsMessage.className = 'style-results-message';
+              },
+              onSuccess: (taskResult) => {
+                if (!Array.isArray(taskResult?.styles)) {
+                  throw new Error('风格分析成功，但未返回可用结果');
+                }
+                renderStyleCards(taskResult.styles);
+                setStyleButtonLabel(refreshStyleBtnLabel);
+                styleResultsMessage.textContent = getStyleSuccessMessage();
+                styleResultsMessage.className = 'style-results-message success';
+                persistState();
+              },
+            });
+            return;
+          }
+
+          if (!Array.isArray(result.styles)) {
+            throw new Error('风格分析成功，但未返回可用结果');
+          }
+          renderStyleCards(result.styles);
+          setStyleButtonLabel(refreshStyleBtnLabel);
+          styleResultsMessage.textContent = getStyleSuccessMessage();
+          styleResultsMessage.className = 'style-results-message success';
+          persistState();
         } catch (error) {
           currentStyleResults = [];
           selectedStyleIndex = -1;

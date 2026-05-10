@@ -5,13 +5,23 @@ WORKDIR /app
 ENV PYTHONDONTWRITEBYTECODE=1 \
     PYTHONUNBUFFERED=1 \
     HOST=0.0.0.0 \
-    PORT=5078
+    PORT=5078 \
+    CELERY_WORKER_POOL=prefork \
+    CELERY_WORKER_CONCURRENCY=30 \
+    CELERY_WORKER_PREFETCH_MULTIPLIER=1 \
+    CELERY_TASK_TIME_LIMIT=1200 \
+    CELERY_TASK_SOFT_TIME_LIMIT=900 \
+    GUNICORN_WORKERS=8 \
+    GUNICORN_TIMEOUT=300 \
+    GUNICORN_MAX_REQUESTS=500 \
+    GUNICORN_MAX_REQUESTS_JITTER=50
 
 COPY requirements.txt ./
 RUN pip install --no-cache-dir -r requirements.txt
 
 COPY . ./
+RUN chmod +x /app/start.sh
 
 EXPOSE 5078
 
-CMD ["gunicorn", "-w", "8", "-b", "0.0.0.0:5078", "--timeout", "300", "--max-requests", "500", "--max-requests-jitter", "50", "--access-logfile", "-", "app:app"]
+CMD ["/app/start.sh"]

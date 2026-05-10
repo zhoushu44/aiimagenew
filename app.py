@@ -101,10 +101,11 @@ from config import (
     PROTECTED_PAGE_PATHS, PUBLIC_API_PREFIXES, PUBLIC_PATH_PREFIXES, PUBLIC_PATHS,
     SUPABASE_USER_PROFILES_TABLE, SUPABASE_POINTS_TABLE, SUPABASE_PAYMENTS_TABLE,
     SUPABASE_GENERATION_TASKS_TABLE, GENERATION_TASK_TTL_SECONDS,
-    GENERATION_TASK_POLL_RETENTION_SECONDS, GENERATION_TASKS, GENERATION_TASKS_LOCK,
+    GENERATION_TASK_POLL_RETENTION_SECONDS, _MAX_CACHED_GENERATION_TASKS, GENERATION_TASKS, GENERATION_TASKS_LOCK,
     GENERATION_TASK_CANCEL_EVENTS, GENERATION_TASK_EXECUTOR, ZPAY_PID, ZPAY_KEY, ZPAY_GATEWAY, ZPAY_NOTIFY_URL,
     ZPAY_RETURN_URL, ZPAY_DEFAULT_CHANNEL, ZPAY_SUCCESS_STATUSES, VIP_PLAN_CONFIG_TABLE,
     MAX_IMAGE_UPLOADS, ALLOWED_IMAGE_MIME_TYPES, ALLOWED_IMAGE_EXTENSIONS, IMAGE_SIGNATURES,
+    get_semaphore_stats,
 )
 from utils import (
     parse_money_amount, normalize_vip_plan_key, _resolve_configured_plan_key,
@@ -125,6 +126,14 @@ from image_utils import (
     normalize_product_json, serialize_product_json, build_product_json_prompt_text,
     build_plan_control_prompt, build_enriched_image_prompt,
 )
+from celery_tasks import (
+    run_generation_task_celery, run_replicate_generation_task_celery,
+    run_fashion_model_task_celery, run_mode_image_task_celery,
+    run_aplus_task_celery, run_zip_task_celery,
+    run_ai_write_task_celery, run_style_analysis_task_celery,
+    serialize_payloads_for_celery,
+)
+from redis_client import get_redis_client
 from points_rules import (
     DEFAULT_POINTS_RULES, ALLOWED_POINTS_RULE_METRICS, POINTS_RULE_SETTING_KEYS,
     normalize_points_rule, _get_env_points_rule_json, get_points_rules, get_points_rule,
@@ -623,6 +632,275 @@ def _iso_utc_from_ts(timestamp: float | int | None) -> str:
     return datetime.fromtimestamp(normalized, timezone.utc).isoformat()
 
 
+GENERATION_QUEUE_REDIS_KEY = 'aiimagenew:generation_queue:pending'
+GENERATION_QUEUE_PRIORITY_REDIS_KEY = 'aiimagenew:generation_queue:priority'
+GENERATION_QUEUE_NORMAL_REDIS_KEY = 'aiimagenew:generation_queue:normal'
+GENERATION_MONITOR_EVENT_REDIS_KEY = 'aiimagenew:generation_monitor:events'
+GENERATION_MONITOR_ERROR_REDIS_KEY = 'aiimagenew:generation_monitor:errors'
+GENERATION_QUEUE_TTL_SECONDS = max(int(os.getenv('GENERATION_QUEUE_TTL_SECONDS') or 86400), 3600)
+CELERY_PRIORITY_QUEUE_NAME = os.getenv('CELERY_PRIORITY_QUEUE_NAME', 'generation_priority').strip() or 'generation_priority'
+CELERY_NORMAL_QUEUE_NAME = os.getenv('CELERY_NORMAL_QUEUE_NAME', 'generation_normal').strip() or 'generation_normal'
+CELERY_PRIORITY_VALUE = max(min(int(os.getenv('CELERY_PRIORITY_VALUE') or 9), 9), 0)
+CELERY_NORMAL_PRIORITY_VALUE = max(min(int(os.getenv('CELERY_NORMAL_PRIORITY_VALUE') or 3), 9), 0)
+
+
+def is_user_priority_generation(user_id: str) -> bool:
+    normalized_user_id = str(user_id or '').strip()
+    if not normalized_user_id:
+        return False
+    try:
+        from redis_client import cache_get, cache_set
+        cache_key = f'aiimagenew:user_priority_generation:{normalized_user_id}'
+        cached = cache_get(cache_key)
+        if isinstance(cached, dict) and 'priority_generation' in cached:
+            return bool(cached.get('priority_generation'))
+    except Exception:
+        cache_key = ''
+    try:
+        profile = fetch_user_profile_by_user_id(normalized_user_id) or {}
+        subscribe_expire = profile.get('subscribe_expire')
+        subscribe_expire_at = parse_iso_datetime(subscribe_expire)
+        priority_generation = bool(subscribe_expire_at and subscribe_expire_at > datetime.now(timezone.utc))
+        try:
+            if cache_key:
+                cache_set(cache_key, {'priority_generation': priority_generation}, ttl=300)
+        except Exception:
+            pass
+        return priority_generation
+    except Exception as exc:
+        logger.warning('Priority generation check failed for user %s: %s', normalized_user_id, exc)
+        return False
+
+
+def get_generation_queue_key(queue_tier: str | None = None) -> str:
+    normalized_tier = str(queue_tier or '').strip().lower()
+    if normalized_tier == 'priority':
+        return GENERATION_QUEUE_PRIORITY_REDIS_KEY
+    if normalized_tier == 'normal':
+        return GENERATION_QUEUE_NORMAL_REDIS_KEY
+    return GENERATION_QUEUE_REDIS_KEY
+
+
+def get_generation_celery_queue(queue_tier: str | None = None) -> str:
+    return CELERY_PRIORITY_QUEUE_NAME if str(queue_tier or '').strip().lower() == 'priority' else CELERY_NORMAL_QUEUE_NAME
+
+
+def get_generation_celery_priority(queue_tier: str | None = None) -> int:
+    return CELERY_PRIORITY_VALUE if str(queue_tier or '').strip().lower() == 'priority' else CELERY_NORMAL_PRIORITY_VALUE
+
+
+def submit_generation_celery_task(celery_task, args: tuple, queue_tier: str | None = None):
+    task_id = args[0] if args else ''
+    try:
+        result = celery_task.apply_async(
+            args=args,
+            queue=get_generation_celery_queue(queue_tier),
+            priority=get_generation_celery_priority(queue_tier),
+        )
+        logger.info('Celery task submitted: task_id=%s celery_id=%s queue=%s', task_id, result.id if result else None, get_generation_celery_queue(queue_tier))
+        return result
+    except Exception as exc:
+        logger.error('Celery task submit failed: task_id=%s error=%s', task_id, exc)
+        if task_id:
+            try:
+                fail_generation_task_with_refund(str(task_id), f'任务提交失败：{exc}', str(exc))
+            except Exception as refund_exc:
+                logger.error('Failed to mark task as failed after submit error: task_id=%s error=%s', task_id, refund_exc)
+        raise
+
+
+def _get_generation_queue_client():
+    try:
+        return get_redis_client()
+    except Exception:
+        return None
+
+
+def record_generation_monitor_event(task: dict | None, status: str, error: str = '') -> None:
+    payload = task if isinstance(task, dict) else {}
+    task_id = str(payload.get('task_id') or '').strip()
+    if not task_id:
+        return
+    client = _get_generation_queue_client()
+    if not client:
+        return
+    now_ts = time.time()
+    event = {
+        'task_id': task_id,
+        'status': str(status or '').strip().lower(),
+        'mode': str(payload.get('mode') or ''),
+        'queue_tier': str(payload.get('queue_tier') or 'normal'),
+        'error': str(error or payload.get('error') or '')[:300],
+        'ts': now_ts,
+    }
+    try:
+        client.zadd(GENERATION_MONITOR_EVENT_REDIS_KEY, {json.dumps(event, ensure_ascii=False): now_ts})
+        client.zremrangebyscore(GENERATION_MONITOR_EVENT_REDIS_KEY, '-inf', now_ts - 86400)
+        client.expire(GENERATION_MONITOR_EVENT_REDIS_KEY, 90000)
+        if event['status'] == 'failed' and event['error']:
+            client.lpush(GENERATION_MONITOR_ERROR_REDIS_KEY, json.dumps(event, ensure_ascii=False))
+            client.ltrim(GENERATION_MONITOR_ERROR_REDIS_KEY, 0, 49)
+            client.expire(GENERATION_MONITOR_ERROR_REDIS_KEY, 90000)
+    except Exception as exc:
+        logger.warning('Generation monitor event record failed for task %s: %s', task_id, exc)
+
+
+def get_generation_monitor_metrics(window_seconds: int = 3600) -> dict:
+    client = _get_generation_queue_client()
+    if not client:
+        return {'redis_ok': 0, 'error': 'redis unavailable'}
+    now_ts = time.time()
+    since_ts = now_ts - max(int(window_seconds or 3600), 60)
+    try:
+        client.ping()
+        raw_events = client.zrangebyscore(GENERATION_MONITOR_EVENT_REDIS_KEY, since_ts, now_ts)
+        total = 0
+        succeeded = 0
+        failed = 0
+        running = 0
+        pending = 0
+        by_mode = {}
+        by_queue_tier = {'priority': 0, 'normal': 0}
+        for raw_event in raw_events:
+            try:
+                event = json.loads(raw_event)
+            except (TypeError, ValueError):
+                continue
+            status = str(event.get('status') or '').lower()
+            mode = str(event.get('mode') or 'unknown') or 'unknown'
+            queue_tier = str(event.get('queue_tier') or 'normal').lower() or 'normal'
+            total += 1
+            if status == 'succeeded':
+                succeeded += 1
+            elif status == 'failed':
+                failed += 1
+            elif status == 'running':
+                running += 1
+            elif status == 'pending':
+                pending += 1
+            by_mode[mode] = by_mode.get(mode, 0) + 1
+            by_queue_tier[queue_tier] = by_queue_tier.get(queue_tier, 0) + 1
+        completed = succeeded + failed
+        success_rate = round((succeeded / completed) * 100, 2) if completed else 100.0
+        failure_rate = round((failed / completed) * 100, 2) if completed else 0.0
+        priority_queue_length = int(client.zcard(GENERATION_QUEUE_PRIORITY_REDIS_KEY) or 0)
+        normal_queue_length = int(client.zcard(GENERATION_QUEUE_NORMAL_REDIS_KEY) or 0)
+        total_queue_length = int(client.zcard(GENERATION_QUEUE_REDIS_KEY) or 0)
+        recent_errors = []
+        for raw_error in client.lrange(GENERATION_MONITOR_ERROR_REDIS_KEY, 0, 9):
+            try:
+                recent_errors.append(json.loads(raw_error))
+            except (TypeError, ValueError):
+                continue
+        semaphore_stats = get_semaphore_stats()
+        api_slots = semaphore_stats.get('api_slots') if isinstance(semaphore_stats, dict) else {}
+        return {
+            'redis_ok': 1,
+            'window_seconds': max(int(window_seconds or 3600), 60),
+            'total_events': total,
+            'completed': completed,
+            'succeeded': succeeded,
+            'failed': failed,
+            'running_events': running,
+            'pending_events': pending,
+            'success_rate': success_rate,
+            'failure_rate': failure_rate,
+            'queue_total': total_queue_length,
+            'queue_priority': priority_queue_length,
+            'queue_normal': normal_queue_length,
+            'api_slot_capacity': int((api_slots or {}).get('capacity') or 0),
+            'api_slot_active': int((api_slots or {}).get('active') or 0),
+            'api_slot_available': int((api_slots or {}).get('available') or 0),
+            'api_slot_backend': str((api_slots or {}).get('backend') or ''),
+            'by_mode': by_mode,
+            'by_queue_tier': by_queue_tier,
+            'recent_errors': recent_errors,
+        }
+    except Exception as exc:
+        logger.warning('Generation monitor metrics failed: %s', exc)
+        return {'redis_ok': 0, 'error': str(exc)[:300]}
+
+
+def enqueue_generation_task(task_id: str, created_at_ts: float | None = None, queue_tier: str | None = None) -> None:
+    normalized_task_id = str(task_id or '').strip()
+    if not normalized_task_id:
+        return
+    client = _get_generation_queue_client()
+    if not client:
+        return
+    try:
+        score = float(created_at_ts or time.time())
+        queue_key = get_generation_queue_key(queue_tier)
+        client.zadd(GENERATION_QUEUE_REDIS_KEY, {normalized_task_id: score})
+        client.zadd(queue_key, {normalized_task_id: score})
+        client.expire(GENERATION_QUEUE_REDIS_KEY, GENERATION_QUEUE_TTL_SECONDS)
+        client.expire(queue_key, GENERATION_QUEUE_TTL_SECONDS)
+    except Exception as exc:
+        logger.warning('Generation queue enqueue failed for task %s: %s', normalized_task_id, exc)
+
+
+def dequeue_generation_task(task_id: str) -> None:
+    normalized_task_id = str(task_id or '').strip()
+    if not normalized_task_id:
+        return
+    client = _get_generation_queue_client()
+    if not client:
+        return
+    try:
+        client.zrem(
+            GENERATION_QUEUE_REDIS_KEY,
+            normalized_task_id,
+        )
+        client.zrem(
+            GENERATION_QUEUE_PRIORITY_REDIS_KEY,
+            normalized_task_id,
+        )
+        client.zrem(
+            GENERATION_QUEUE_NORMAL_REDIS_KEY,
+            normalized_task_id,
+        )
+    except Exception as exc:
+        logger.warning('Generation queue dequeue failed for task %s: %s', normalized_task_id, exc)
+
+
+def get_generation_task_queue_info(task: dict | None) -> dict:
+    if not isinstance(task, dict):
+        return {'queue_position': None, 'ahead_count': None, 'queue_length': None, 'queue_tier': 'normal', 'priority_ahead_count': None}
+    status = str(task.get('status') or '').strip().lower()
+    task_id = str(task.get('task_id') or '').strip()
+    queue_tier = str(task.get('queue_tier') or 'normal').strip().lower() or 'normal'
+    if status != 'pending' or not task_id:
+        return {'queue_position': None, 'ahead_count': 0, 'queue_length': 0, 'queue_tier': queue_tier, 'priority_ahead_count': 0}
+    client = _get_generation_queue_client()
+    if not client:
+        return {'queue_position': None, 'ahead_count': None, 'queue_length': None, 'queue_tier': queue_tier, 'priority_ahead_count': None}
+    try:
+        queue_key = get_generation_queue_key(queue_tier)
+        rank = client.zrank(queue_key, task_id)
+        queue_length = client.zcard(queue_key)
+        priority_waiting = client.zcard(GENERATION_QUEUE_PRIORITY_REDIS_KEY)
+        priority_ahead_count = 0 if queue_tier == 'priority' else int(priority_waiting or 0)
+        if rank is None:
+            return {
+                'queue_position': None,
+                'ahead_count': None,
+                'queue_length': int(queue_length),
+                'queue_tier': queue_tier,
+                'priority_ahead_count': priority_ahead_count,
+            }
+        ahead_count = int(rank) if queue_tier == 'priority' else int(rank) + priority_ahead_count
+        return {
+            'queue_position': ahead_count + 1,
+            'ahead_count': ahead_count,
+            'queue_length': int(queue_length),
+            'queue_tier': queue_tier,
+            'priority_ahead_count': priority_ahead_count,
+        }
+    except Exception as exc:
+        logger.warning('Generation queue info failed for task %s: %s', task_id, exc)
+        return {'queue_position': None, 'ahead_count': None, 'queue_length': None, 'queue_tier': queue_tier, 'priority_ahead_count': None}
+
+
 
 def _build_task_trace_patch(task: dict | None, stage: str, now_ts: float | None = None, extra: dict | None = None) -> dict:
     normalized_now = float(now_ts) if isinstance(now_ts, (int, float)) else time.time()
@@ -715,8 +993,18 @@ def log_generation_task_trace_summary(task: dict | None, label: str = 'task_summ
 def cache_generation_task(task: dict | None) -> None:
     if not isinstance(task, dict) or not task.get('task_id'):
         return
+    task_id = str(task.get('task_id'))
     with GENERATION_TASKS_LOCK:
-        GENERATION_TASKS[str(task.get('task_id'))] = dict(task)
+        if task_id in GENERATION_TASKS:
+            GENERATION_TASKS.move_to_end(task_id)
+        GENERATION_TASKS[task_id] = dict(task)
+        while len(GENERATION_TASKS) > _MAX_CACHED_GENERATION_TASKS:
+            GENERATION_TASKS.popitem(last=False)
+    try:
+        from redis_client import tasks_cache_set, build_task_cache_key, get_task_cache_ttl
+        tasks_cache_set(build_task_cache_key(task_id), task, ttl=get_task_cache_ttl(str(task.get('status') or '')))
+    except Exception:
+        pass
 
 
 def cleanup_generation_tasks():
@@ -748,11 +1036,15 @@ def create_generation_task(user_id: str, mode: str, request_id: str = '', spend_
     now = time.time()
     created_at_iso = _iso_utc_from_ts(now)
     task_id = uuid.uuid4().hex
+    priority_generation = is_user_priority_generation(user_id)
+    queue_tier = 'priority' if priority_generation else 'normal'
     task = {
         'task_id': task_id,
         'user_id': str(user_id or '').strip(),
         'mode': str(mode or 'suite').strip() or 'suite',
         'request_id': str(request_id or '').strip(),
+        'queue_tier': queue_tier,
+        'priority_generation': priority_generation,
         'spend_record': spend_record if isinstance(spend_record, dict) else None,
         'status': 'pending',
         'result': None,
@@ -771,6 +1063,8 @@ def create_generation_task(user_id: str, mode: str, request_id: str = '', spend_
                     'ts': now,
                     'at': created_at_iso,
                     'mode': str(mode or 'suite').strip() or 'suite',
+                    'queue_tier': queue_tier,
+                    'priority_generation': priority_generation,
                 }
             ],
             'last_stage': 'task_created',
@@ -780,29 +1074,86 @@ def create_generation_task(user_id: str, mode: str, request_id: str = '', spend_
     }
     cache_generation_task(task)
     persist_generation_task(task)
+    enqueue_generation_task(task_id, now, queue_tier)
+    record_generation_monitor_event(task, 'pending')
     with GENERATION_TASKS_LOCK:
         GENERATION_TASK_CANCEL_EVENTS[task_id] = threading.Event()
-    return serialize_generation_task(task)
+    return serialize_generation_task(task, include_queue_info=False)
+
+
+_PERSIST_EXECUTOR = concurrent.futures.ThreadPoolExecutor(max_workers=2)
+
+
+def _async_persist_generation_task(snapshot: dict) -> None:
+    try:
+        persist_generation_task(snapshot)
+    except Exception as exc:
+        logger.warning('Async persist generation task %s failed: %s', snapshot.get('task_id'), exc)
+
+
+def _build_task_cache_snapshot(task: dict | None) -> dict:
+    snapshot = dict(task) if isinstance(task, dict) else {}
+    result = snapshot.get('result') if isinstance(snapshot.get('result'), dict) else None
+    if result:
+        lightweight_result = dict(result)
+        for key in ('base64', 'image_base64', 'raw_image', 'raw_images', 'data', 'binary'):
+            lightweight_result.pop(key, None)
+        for key in ('images', 'items', 'outputs'):
+            values = lightweight_result.get(key)
+            if isinstance(values, list):
+                compact_values = []
+                for item in values:
+                    if isinstance(item, dict):
+                        compact = dict(item)
+                        for heavy_key in ('base64', 'image_base64', 'raw_image', 'data', 'binary'):
+                            compact.pop(heavy_key, None)
+                        compact_values.append(compact)
+                    else:
+                        compact_values.append(item)
+                lightweight_result[key] = compact_values
+        snapshot['result'] = lightweight_result
+    return snapshot
 
 
 def update_generation_task(task_id: str, **patch) -> dict | None:
     normalized_task_id = str(task_id or '').strip()
     if not normalized_task_id:
         return None
+    critical_fields = {'status', 'result', 'error', 'completed_at', 'completed_at_ts'}
+    should_emit = bool(critical_fields & patch.keys())
     with GENERATION_TASKS_LOCK:
         task = GENERATION_TASKS.get(normalized_task_id)
         if not task:
-            db_task = normalize_generation_task_row(fetch_generation_task_row(normalized_task_id))
-            if not db_task:
-                return None
-            task = db_task
+            try:
+                from redis_client import tasks_cache_get, build_task_cache_key
+                redis_task = tasks_cache_get(build_task_cache_key(normalized_task_id))
+            except Exception:
+                redis_task = None
+            if redis_task and isinstance(redis_task, dict):
+                task = redis_task
+            else:
+                task = {'task_id': normalized_task_id}
             GENERATION_TASKS[normalized_task_id] = task
         task.update(patch)
         now_ts = time.time()
         task['updated_at'] = _iso_utc_from_ts(now_ts)
         task['updated_at_ts'] = now_ts
         snapshot = dict(task)
-    persist_generation_task(snapshot)
+    try:
+        from redis_client import tasks_cache_set, build_task_cache_key, get_task_cache_ttl
+        cache_snapshot = _build_task_cache_snapshot(snapshot)
+        tasks_cache_set(build_task_cache_key(normalized_task_id), cache_snapshot, ttl=get_task_cache_ttl(str(snapshot.get('status') or '')))
+    except Exception:
+        pass
+    try:
+        _PERSIST_EXECUTOR.submit(_async_persist_generation_task, snapshot)
+    except Exception:
+        logger.warning('Async persist executor unavailable for task %s', normalized_task_id)
+    if should_emit:
+        try:
+            emit_task_update(normalized_task_id, snapshot)
+        except Exception:
+            pass
     return snapshot
 
 
@@ -811,18 +1162,38 @@ def get_generation_task(task_id: str, prefer_cache: bool = False) -> dict | None
     if not normalized_task_id:
         return None
     if prefer_cache:
+        try:
+            from redis_client import tasks_cache_get, build_task_cache_key
+            redis_task = tasks_cache_get(build_task_cache_key(normalized_task_id))
+            if redis_task and isinstance(redis_task, dict):
+                cache_generation_task(redis_task)
+                return redis_task
+        except Exception:
+            pass
         with GENERATION_TASKS_LOCK:
             task = GENERATION_TASKS.get(normalized_task_id)
             if task:
                 return dict(task)
+    if not prefer_cache:
+        try:
+            from redis_client import tasks_cache_get, build_task_cache_key
+            redis_task = tasks_cache_get(build_task_cache_key(normalized_task_id))
+            if redis_task and isinstance(redis_task, dict):
+                cache_generation_task(redis_task)
+                return redis_task
+        except Exception:
+            pass
     db_task = normalize_generation_task_row(fetch_generation_task_row(normalized_task_id))
     if db_task:
+        db_status = str(db_task.get('status') or '').strip().lower()
+        is_active = db_status in {'pending', 'running'}
         with GENERATION_TASKS_LOCK:
             cached_task = GENERATION_TASKS.get(normalized_task_id)
-            if cached_task and cached_task.get('updated_at_ts') and db_task.get('updated_at_ts'):
-                if float(cached_task.get('updated_at_ts') or 0) >= float(db_task.get('updated_at_ts') or 0):
-                    return dict(cached_task)
-        cache_generation_task(db_task)
+            if cached_task and not is_active:
+                if cached_task.get('updated_at_ts') and db_task.get('updated_at_ts'):
+                    if float(cached_task.get('updated_at_ts') or 0) >= float(db_task.get('updated_at_ts') or 0):
+                        return dict(cached_task)
+            cache_generation_task(db_task)
         return db_task
     with GENERATION_TASKS_LOCK:
         task = GENERATION_TASKS.get(normalized_task_id)
@@ -836,9 +1207,17 @@ def maybe_fail_stale_generation_task(task: dict | None) -> dict | None:
     if status not in {'pending', 'running'}:
         return task
     now_ts = time.time()
-    created_ts = float(task.get('created_at_ts') or task.get('updated_at_ts') or now_ts)
+    raw_created_ts = task.get('created_at_ts') or task.get('updated_at_ts')
+    if raw_created_ts is None:
+        logger.warning('Generation task %s has no created_at_ts/updated_at_ts, skipping stale check', task.get('task_id'))
+        return task
+    try:
+        created_ts = float(raw_created_ts)
+    except (TypeError, ValueError):
+        logger.warning('Generation task %s has invalid created_at_ts=%r, skipping stale check', task.get('task_id'), raw_created_ts)
+        return task
     elapsed_seconds = max(now_ts - created_ts, 0)
-    queue_timeout_seconds = max(int(os.getenv('GENERATION_TASK_QUEUE_TIMEOUT_SECONDS') or 180), 180)
+    queue_timeout_seconds = max(int(os.getenv('GENERATION_TASK_QUEUE_TIMEOUT_SECONDS') or 300), 300)
     running_timeout_seconds = max(int(os.getenv('GENERATION_TASK_RUNNING_TIMEOUT_SECONDS') or 600), 300)
     timeout_seconds = queue_timeout_seconds if status == 'pending' else running_timeout_seconds
     if elapsed_seconds < timeout_seconds:
@@ -864,19 +1243,34 @@ def maybe_fail_stale_generation_task(task: dict | None) -> dict | None:
             extra={'elapsed_ms': int(elapsed_seconds * 1000), 'timeout_seconds': timeout_seconds},
         ),
     )
+    dequeue_generation_task(str(task.get('task_id') or ''))
+    record_generation_monitor_event(updated_task or task, 'failed', error)
     refund_task_points(str(task.get('task_id') or ''))
     logger.warning('Generation task %s stale timeout: status=%s elapsed=%ss timeout=%ss', task.get('task_id'), status, int(elapsed_seconds), timeout_seconds)
     return updated_task or get_generation_task(str(task.get('task_id') or ''), prefer_cache=True)
 
 
-def serialize_generation_task(task: dict | None) -> dict:
+def serialize_generation_task(task: dict | None, include_queue_info: bool = True) -> dict:
     payload = task if isinstance(task, dict) else {}
     trace = payload.get('trace') if isinstance(payload.get('trace'), dict) else {}
+    queue_info = get_generation_task_queue_info(payload) if include_queue_info else {
+        'queue_position': None,
+        'ahead_count': 0 if str(payload.get('status') or '').strip().lower() != 'pending' else None,
+        'queue_length': None,
+        'queue_tier': payload.get('queue_tier') or 'normal',
+        'priority_ahead_count': 0 if str(payload.get('status') or '').strip().lower() != 'pending' else None,
+    }
     return {
         'task_id': payload.get('task_id'),
         'mode': payload.get('mode'),
         'request_id': payload.get('request_id') or '',
         'status': payload.get('status') or 'missing',
+        'queue_position': queue_info.get('queue_position'),
+        'ahead_count': queue_info.get('ahead_count'),
+        'queue_length': queue_info.get('queue_length'),
+        'queue_tier': queue_info.get('queue_tier') or payload.get('queue_tier') or 'normal',
+        'priority_generation': bool(payload.get('priority_generation')),
+        'priority_ahead_count': queue_info.get('priority_ahead_count'),
         'result': payload.get('result') if isinstance(payload.get('result'), dict) else None,
         'reference_analysis': payload.get('reference_analysis') if isinstance(payload.get('reference_analysis'), dict) else None,
         'error': payload.get('error') or '',
@@ -1032,6 +1426,7 @@ def fail_generation_task_with_refund(task_id: str, error: str, details: str = ''
     )
     if task:
         task = update_generation_task(task_id, **_build_task_trace_patch(task, 'task_failed', now_ts=failed_at, extra={'error': str(error or '生成失败')}))
+        record_generation_monitor_event(task, 'failed', str(error or '生成失败'))
         logger.warning('Generation task %s failed: mode=%s error=%s', task_id, (task or {}).get('mode') or '', str(error or '生成失败'))
     if not task:
         return
@@ -1116,17 +1511,28 @@ def run_background_generation_task(task_id: str, builder, timeout: int = 600, ti
     if cancel_event and cancel_event.is_set():
         logger.info('Generation task %s was cancelled before starting', task_id)
         return
+    try:
+        from image_utils import cleanup_generated_suites
+        cleanup_generated_suites(active_task_id=task_id)
+    except Exception:
+        pass
     task = update_generation_task(task_id, status='running', generation_started=False)
+    dequeue_generation_task(task_id)
+    record_generation_monitor_event(task, 'running')
     task = update_generation_task(task_id, **_build_task_trace_patch(task, 'task_running', extra={'timeout_seconds': timeout}))
     started_at = time.time()
     logger.info('Generation task %s started: mode=%s timeout=%ss', task_id, (task or {}).get('mode') or '', timeout)
     try:
+        task = update_generation_task(task_id, **_build_task_trace_patch(task, 'task_builder_wait_start', extra={'timeout_seconds': timeout}))
+        logger.info('Generation task %s builder wait start', task_id)
         result = _run_with_timeout(
             builder,
             timeout=timeout,
             error_message=timeout_error,
         )
         finished_at = time.time()
+        logger.info('Generation task %s builder returned after %sms', task_id, int(max((finished_at - started_at) * 1000, 0)))
+        task = update_generation_task(task_id, **_build_task_trace_patch(task, 'task_builder_returned', now_ts=finished_at, extra={'elapsed_ms': int(max((finished_at - started_at) * 1000, 0))}))
         current_task = get_generation_task(task_id)
         if current_task and current_task.get('status') == 'failed':
             logger.info('Generation task %s was cancelled, discarding result', task_id)
@@ -1162,6 +1568,7 @@ def run_background_generation_task(task_id: str, builder, timeout: int = 600, ti
         trace_payload['last_at'] = _iso_utc_from_ts(finished_at)
         trace_payload['last_ts'] = finished_at
         result_payload['trace'] = trace_payload
+        logger.info('Generation task %s final status update start', task_id)
         task = update_generation_task(
             task_id,
             status='succeeded',
@@ -1172,7 +1579,9 @@ def run_background_generation_task(task_id: str, builder, timeout: int = 600, ti
             completed_at=_iso_utc_from_ts(finished_at),
             completed_at_ts=finished_at,
         )
+        logger.info('Generation task %s final status update done', task_id)
         task = update_generation_task(task_id, **_build_task_trace_patch(task, 'task_succeeded', now_ts=finished_at, extra={'elapsed_ms': int(max((finished_at - started_at) * 1000, 0))}))
+        record_generation_monitor_event(task, 'succeeded')
         log_generation_task_trace_summary(task, 'task_result_ready')
         logger.info('Generation task %s result ready: mode=%s image_count=%s elapsed=%sms', task_id, (task or {}).get('mode') or '', len(serialize_generation_history_items(task)), int(max((finished_at - started_at) * 1000, 0)))
         history_items = serialize_generation_history_items(task)
@@ -1193,6 +1602,7 @@ def run_background_generation_task(task_id: str, builder, timeout: int = 600, ti
         failed_at = time.time()
         task = update_generation_task(task_id, status='failed', error=timeout_error, details='task execution timeout', completed_at=_iso_utc_from_ts(failed_at), completed_at_ts=failed_at)
         update_generation_task(task_id, **_build_task_trace_patch(task, 'task_timeout', now_ts=failed_at, extra={'elapsed_ms': int(max((failed_at - started_at) * 1000, 0)), 'timeout_seconds': timeout}))
+        record_generation_monitor_event(task, 'failed', timeout_error)
         refund_task_points(task_id)
     except RequestEntityTooLarge as exc:
         fail_generation_task_with_refund(task_id, '上传内容过大，请压缩图片后重试', str(exc))
@@ -1212,6 +1622,7 @@ def run_background_generation_task(task_id: str, builder, timeout: int = 600, ti
         logger.exception('Generation task failed: %s', task_id)
         fail_generation_task_with_refund(task_id, f'服务端异常：{exc}', str(exc))
     finally:
+        dequeue_generation_task(task_id)
         import gc
         gc.collect()
 
@@ -1233,6 +1644,304 @@ def run_generation_task(task_id: str, form_payload: dict, file_payloads: dict):
         lambda: build_generation_result_from_payload(form_payload, file_payloads, task_id),
         timeout=600,
         timeout_error='生成任务执行超时（10分钟），请稍后重试',
+    )
+
+
+def build_zip_task_result(image_paths: list[str]) -> dict:
+    return build_zip_archive_result(image_paths)
+
+
+def run_zip_task(task_id: str, image_paths: list[str]):
+    run_background_generation_task(
+        task_id,
+        lambda: build_zip_task_result(image_paths),
+        timeout=300,
+        timeout_error='图片打包超时（5分钟），请稍后重试',
+    )
+
+
+def build_ai_write_task_result(form_payload: dict, file_payloads: dict, task_id: str):
+    form = form_payload if isinstance(form_payload, dict) else {}
+    payloads = file_payloads if isinstance(file_payloads, dict) else {}
+    selling_text = str(form.get('selling_text') or '').strip()
+    image_payloads = list(payloads.get('images') or [])
+    text_container: dict[str, str] = {}
+
+    def build_text_result() -> str:
+        text_value = call_chat_completion(
+            SYSTEM_PROMPT,
+            build_multimodal_content(
+                USER_PROMPT_TEMPLATE.format(selling_text=selling_text or '（未填写）'),
+                image_payloads,
+            ),
+            temperature=0.7,
+        )
+        text_container['text'] = text_value
+        update_generation_task_partial_result(
+            task_id,
+            {
+                'success': True,
+                'mode': 'ai-write',
+                'text': text_value,
+                'product_json': None,
+                'product_json_pending': True,
+            },
+            'ai_write_text_ready',
+            {'product_json_pending': True},
+        )
+        return text_value
+
+    def build_product_json_result() -> dict | None:
+        product_selling_text = selling_text or '（未填写）'
+        if not image_payloads and not product_selling_text:
+            return None
+        product_json, _response_text = call_chat_json_with_repair(
+            PRODUCT_JSON_SYSTEM_PROMPT,
+            build_multimodal_content(
+                PRODUCT_JSON_USER_PROMPT_TEMPLATE.format(selling_text=product_selling_text),
+                image_payloads,
+            ),
+            parse_product_json,
+            '商品结构化信息格式异常',
+            temperature=0.2,
+            timeout_seconds=60,
+            repair_attempts=1,
+        )
+        return product_json
+
+    with concurrent.futures.ThreadPoolExecutor(max_workers=2) as executor:
+        text_future = executor.submit(build_text_result)
+        product_json_future = executor.submit(build_product_json_result)
+        text = text_future.result()
+        text_container['text'] = text
+        product_json = product_json_future.result()
+
+    return {
+        'success': True,
+        'mode': 'ai-write',
+        'text': text_container.get('text') or '',
+        'product_json': product_json,
+        'product_json_pending': False,
+    }
+
+
+def run_ai_write_task(task_id: str, form_payload: dict, file_payloads: dict):
+    run_background_generation_task(
+        task_id,
+        lambda: build_ai_write_task_result(form_payload, file_payloads, task_id),
+        timeout=180,
+        timeout_error='AI 文案生成超时（3分钟），请稍后重试',
+    )
+
+
+def build_style_analysis_task_result(form_payload: dict, file_payloads: dict):
+    form = form_payload if isinstance(form_payload, dict) else {}
+    payloads = file_payloads if isinstance(file_payloads, dict) else {}
+    selling_text = str(form.get('selling_text') or '').strip()
+    platform = normalize_platform_label(form.get('platform', '亚马逊'))
+    image_payloads = list(payloads.get('images') or [])
+    styles, _response_text = call_chat_json_with_repair(
+        STYLE_ANALYSIS_SYSTEM_PROMPT,
+        build_multimodal_content(
+            STYLE_ANALYSIS_USER_PROMPT_TEMPLATE.format(
+                platform=platform,
+                selling_text=selling_text or '（未填写）',
+            ),
+            image_payloads,
+        ),
+        parse_style_analysis,
+        '风格分析结果格式异常',
+        temperature=0.3,
+        timeout_seconds=60,
+        repair_attempts=1,
+    )
+    return {'success': True, 'mode': 'style-analysis', 'styles': styles}
+
+
+def run_style_analysis_task(task_id: str, form_payload: dict, file_payloads: dict):
+    run_background_generation_task(
+        task_id,
+        lambda: build_style_analysis_task_result(form_payload, file_payloads),
+        timeout=180,
+        timeout_error='风格分析超时（3分钟），请稍后重试',
+    )
+
+
+def build_fashion_model_task_result(form_payload: dict, task_id: str):
+    form = form_payload if isinstance(form_payload, dict) else {}
+    gender = str(form.get('gender') or '女').strip() or '女'
+    age = str(form.get('age') or '青年（18-35岁）').strip() or '青年（18-35岁）'
+    ethnicity = str(form.get('ethnicity') or '欧美白人').strip() or '欧美白人'
+    body_type = str(form.get('body_type') or '标准').strip() or '标准'
+    appearance_details = str(form.get('appearance_details') or '').strip()
+    image_size_ratio = str(form.get('image_size_ratio') or '3:4').strip() or '3:4'
+    prompt = build_fashion_model_prompt(gender, age, ethnicity, body_type, appearance_details)
+    generated_item = call_app_mode_image_generation(
+        None,
+        prompt,
+        [],
+        image_size_ratio,
+        '无文字',
+        '中国',
+        None,
+        'fashion-model',
+        max_images=1,
+    )[0]
+    image_bytes, mime_type = decode_generated_image(generated_item)
+    download_name, relative_path, image_url, storage_trace = save_generated_image(task_id, 1, 'fashion-model', image_bytes, mime_type, storage_group='fashion-models')
+    model_id = f'ai-{task_id}'
+    model = build_fashion_model_response(
+        task_id,
+        model_id,
+        gender,
+        age,
+        ethnicity,
+        body_type,
+        appearance_details,
+        prompt,
+        image_url,
+        relative_path,
+        download_name,
+    )
+    model['trace'] = storage_trace
+    return {
+        'success': True,
+        'mode': 'fashion-model',
+        'task_id': task_id,
+        'model': model,
+        'image_url': image_url,
+        'image_path': relative_path,
+        'download_name': download_name,
+        'trace': storage_trace,
+    }
+
+
+def run_fashion_model_task(task_id: str, form_payload: dict):
+    run_background_generation_task(
+        task_id,
+        lambda: build_fashion_model_task_result(form_payload, task_id),
+        timeout=600,
+        timeout_error='基准模特生成超时（10分钟），请稍后重试',
+    )
+
+
+def build_mode_image_task_result(mode_name: str, form_payload: dict, file_payloads: dict, task_id: str):
+    form = form_payload if isinstance(form_payload, dict) else {}
+    payloads = file_payloads if isinstance(file_payloads, dict) else {}
+    prompt = str(form.get('prompt') or '').strip()
+    image_payloads = list(payloads.get('images') or [])
+    if mode_name == 'mode1-image-edit':
+        image_size_ratio = str(form.get('image_size_ratio') or '1:1').strip() or '1:1'
+        product_json = extract_product_json_from_image_payloads(prompt, image_payloads)
+        enriched_prompt = build_enriched_image_prompt(prompt, image_size_ratio, '中文', '中国', product_json, 'mode1-image-edit')
+        generated_item, model = call_mode1_image_edit(get_mode1_client(), enriched_prompt, image_payloads, image_size_ratio)
+        response = build_mode2_success_response(task_id, 'mode1-image-edit', enriched_prompt, model, generated_item)
+        response['mode'] = 'mode1-image-edit'
+        return response
+    if mode_name == 'mode2-image-edit':
+        generated_item, model = call_mode2_image_edit(
+            get_mode2_client(),
+            prompt,
+            image_payloads,
+            str(form.get('image_size_ratio') or form.get('ratio') or ''),
+            str(form.get('resolution') or ''),
+            str(form.get('sample_strength') or ''),
+        )
+        response = build_mode2_success_response(task_id, 'mode2-image-edit', prompt, model, generated_item)
+        response['mode'] = 'mode2-image-edit'
+        return response
+    if mode_name == 'mode2-text2image':
+        generated_item, model = call_mode2_text2image(
+            get_mode2_client(),
+            prompt,
+            str(form.get('image_size_ratio') or form.get('ratio') or ''),
+            str(form.get('resolution') or ''),
+        )
+        response = build_mode2_success_response(task_id, 'mode2-text2image', prompt, model, generated_item)
+        response['mode'] = 'mode2-text2image'
+        return response
+    if mode_name == 'mode3-image-edit':
+        image_size_ratio = str(form.get('image_size_ratio') or '1:1').strip() or '1:1'
+        product_json = extract_product_json_from_image_payloads(prompt, image_payloads)
+        enriched_prompt = build_enriched_image_prompt(prompt, image_size_ratio, '中文', '中国', product_json, 'mode3-image-edit')
+        generated_item, model = call_mode3_image_edit(get_mode3_api_key(), enriched_prompt, image_payloads, image_size_ratio)
+        response = build_mode2_success_response(task_id, 'mode3-image-edit', enriched_prompt, model, generated_item)
+        response['mode'] = 'mode3-image-edit'
+        return response
+    raise ValueError('未知生成模式')
+
+
+def run_mode_image_task(task_id: str, mode_name: str, form_payload: dict, file_payloads: dict):
+    run_background_generation_task(
+        task_id,
+        lambda: build_mode_image_task_result(mode_name, form_payload, file_payloads, task_id),
+        timeout=600,
+        timeout_error='图像生成超时（10分钟），请稍后重试',
+    )
+
+
+def build_aplus_task_result(form_payload: dict, file_payloads: dict, task_id: str):
+    form = form_payload if isinstance(form_payload, dict) else {}
+    payloads = file_payloads if isinstance(file_payloads, dict) else {}
+    selling_text = str(form.get('selling_text') or '').strip()
+    platform = normalize_platform_label(form.get('platform', '亚马逊'))
+    country = str(form.get('country') or '中国').strip() or '中国'
+    text_type = str(form.get('text_type') or '中文').strip() or '中文'
+    image_size_ratio = str(form.get('image_size_ratio') or '1:1').strip() or '1:1'
+    selected_modules = parse_selected_modules(str(form.get('selected_modules') or ''))
+    selected_style = parse_selected_style(
+        str(form.get('selected_style_title') or ''),
+        str(form.get('selected_style_reasoning') or ''),
+        str(form.get('selected_style_colors') or ''),
+    )
+    product_json = parse_product_json_payload(str(form.get('product_json') or ''))
+    image_payloads = list(payloads.get('images') or [])
+    reference_payloads = list(payloads.get('reference_images') or [])
+    task_name = build_task_name(platform, 'aplus', len(selected_modules))
+    generated_at = build_generated_at()
+    reference_images = build_reference_images(task_id, image_payloads, source='product')
+    if reference_payloads:
+        reference_images.extend(
+            build_reference_images(
+                task_id,
+                reference_payloads,
+                source='reference',
+                start_sort=len(reference_images) + 1,
+            )
+        )
+    planning_payloads = image_payloads + reference_payloads
+    resolved_product_json = product_json
+    if resolved_product_json is None and planning_payloads:
+        logger.warning('A+ generation extracting product_json from uploaded reference images: product_count=%s reference_count=%s total_generation_count=%s', len(image_payloads), len(reference_payloads), len(planning_payloads))
+        resolved_product_json = extract_product_json_from_image_payloads(selling_text, planning_payloads)
+    logger.warning(
+        'A+ generation upload payloads: product_count=%s reference_count=%s total_generation_count=%s product_json_ready=%s',
+        len(image_payloads),
+        len(reference_payloads),
+        len(planning_payloads),
+        bool(resolved_product_json),
+    )
+    plan = build_aplus_plan(platform, selling_text, selected_modules, planning_payloads, country, text_type, image_size_ratio, selected_style, resolved_product_json)
+    images = generate_aplus_images(plan, planning_payloads, task_id, image_size_ratio, text_type, country, resolved_product_json)
+    return {
+        'success': True,
+        'mode': 'aplus',
+        'task_id': task_id,
+        'task_name': task_name,
+        'generated_at': generated_at,
+        'plan': plan,
+        'selected_style': selected_style,
+        'reference_images': reference_images,
+        'images': images,
+    }
+
+
+def run_aplus_task(task_id: str, form_payload: dict, file_payloads: dict):
+    run_background_generation_task(
+        task_id,
+        lambda: build_aplus_task_result(form_payload, file_payloads, task_id),
+        timeout=600,
+        timeout_error='A+ 生成超时（10分钟），请稍后重试',
     )
 
 
@@ -1847,6 +2556,28 @@ def get_image_payloads_from_request(field_name: str = 'images', limit: int = MAX
     return payloads
 
 
+def get_image_payloads_from_request_async(field_name: str = 'images', limit: int = MAX_IMAGE_UPLOADS, url_field_name: str | None = None):
+    image_files = request.files.getlist(field_name)
+    image_urls = []
+    if url_field_name:
+        image_urls = [str(item or '').strip() for item in request.form.getlist(url_field_name) if str(item or '').strip()]
+    total_count = len(image_files) + len(image_urls)
+    if total_count > limit:
+        raise ValueError(f'最多仅支持上传 {limit} 张图片')
+    payloads = []
+    for image_file in image_files:
+        payloads.append(create_image_payload(image_file))
+    for image_url in image_urls:
+        normalized_url = str(image_url or '').strip()
+        if normalized_url.startswith('/generated/'):
+            payloads.append(build_local_or_remote_image_payload(normalized_url))
+        else:
+            payload = LazyImagePayload(filename='deferred-image.png', mime_type='image/png', content=b'')
+            payload.source_url = normalized_url
+            payloads.append(payload)
+    return payloads
+
+
 
 
 FASHION_DEFAULT_PLATFORM = '服饰穿搭'
@@ -1918,6 +2649,12 @@ def guard_authentication():
         g.admin_session = get_admin_session()
         return None
 
+    if path in {'/api/monitor/generation', '/api/health'}:
+        g.supabase_session = get_supabase_session()
+        g.supabase_user = (g.supabase_session or {}).get('user') if g.supabase_session else None
+        g.admin_session = get_admin_session()
+        return None
+
     if path == '/api/generate-replicate' and request.method == 'POST':
         async_task = str(request.form.get('async_task') or '').strip().lower() in {'1', 'true', 'yes'}
         if not async_task:
@@ -1925,6 +2662,26 @@ def guard_authentication():
             g.supabase_user = (g.supabase_session or {}).get('user') if g.supabase_session else None
             g.admin_session = get_admin_session()
             return None
+
+    if path == '/api/generate-suite' and request.method == 'POST':
+        async_task = str(request.form.get('async_task') or '').strip().lower() in {'1', 'true', 'yes'}
+        if async_task:
+            session_data = parse_supabase_session_cookie()
+            g.supabase_session = session_data
+            g.supabase_user = (session_data or {}).get('user') if session_data else None
+            g.admin_session = get_admin_session()
+            if not session_data:
+                return jsonify({'success': False, 'error': '请先登录'}), 401
+            return None
+
+    if path.startswith('/api/generation-tasks'):
+        session_data = parse_supabase_session_cookie()
+        g.supabase_session = session_data
+        g.supabase_user = (session_data or {}).get('user') if session_data else None
+        g.admin_session = get_admin_session()
+        if not session_data:
+            return jsonify({'success': False, 'error': '请先登录'}), 401
+        return None
 
     if path == '/settings' or path.startswith('/api/settings'):
         admin_session = get_admin_session()
@@ -2627,13 +3384,7 @@ def download_batch_zip(batch_id: str):
 
         if run_async:
             task = create_generation_task(user_id, 'download-zip')
-            GENERATION_TASK_EXECUTOR.submit(
-                run_background_generation_task,
-                task['task_id'],
-                lambda: build_zip_archive_result(image_urls),
-                300,
-                '图片打包超时（5分钟），请稍后重试',
-            )
+            submit_generation_celery_task(run_zip_task_celery, (task['task_id'], image_urls), task.get('queue_tier'))
             return jsonify({'success': True, 'async_task': True, 'task': task, 'task_id': task['task_id']}), 202
 
         zip_result = build_zip_archive_result(image_urls)
@@ -3113,13 +3864,7 @@ def download_zip():
             if not user_id:
                 return jsonify({'success': False, 'error': '请先登录'}), 401
             task = create_generation_task(user_id, 'download-zip')
-            GENERATION_TASK_EXECUTOR.submit(
-                run_background_generation_task,
-                task['task_id'],
-                lambda: build_zip_archive_result(image_paths),
-                300,
-                '图片打包超时（5分钟），请稍后重试',
-            )
+            submit_generation_celery_task(run_zip_task_celery, (task['task_id'], image_paths), task.get('queue_tier'))
             return jsonify({'success': True, 'async_task': True, 'task': task, 'task_id': task['task_id']}), 202
 
         zip_result = build_zip_archive_result(image_paths)
@@ -3142,6 +3887,7 @@ def ai_write():
             return jsonify({'success': False, 'error': '请至少提供核心卖点文案或上传 1 张图片'}), 400
 
         def build_ai_write_result():
+            started_at = time.perf_counter()
             text = call_chat_completion(
                 SYSTEM_PROMPT,
                 build_multimodal_content(
@@ -3164,7 +3910,14 @@ def ai_write():
                     timeout_seconds=60,
                     repair_attempts=1,
                 )
-            return {'success': True, 'mode': 'ai-write', 'text': text, 'product_json': product_json}
+            return {
+                'success': True,
+                'mode': 'ai-write',
+                'text': text,
+                'product_json': product_json,
+                'elapsed_ms': int(max((time.perf_counter() - started_at) * 1000, 0)),
+                'execution_mode': 'direct',
+            }
 
         def build_ai_write_async_result(task_id: str):
             text_container: dict[str, str] = {}
@@ -3232,13 +3985,9 @@ def ai_write():
             if not user_id:
                 return jsonify({'success': False, 'error': '请先登录'}), 401
             task = create_generation_task(user_id, 'ai-write')
-            GENERATION_TASK_EXECUTOR.submit(
-                run_background_generation_task,
-                task['task_id'],
-                lambda: build_ai_write_async_result(task['task_id']),
-                180,
-                'AI 文案生成超时（3分钟），请稍后重试',
-            )
+            form_payload = {'selling_text': selling_text}
+            file_payloads = serialize_payloads_for_celery({'images': image_payloads})
+            submit_generation_celery_task(run_ai_write_task_celery, (task['task_id'], form_payload, file_payloads), task.get('queue_tier'))
             return jsonify({'success': True, 'async_task': True, 'task': task, 'task_id': task['task_id']}), 202
 
         return jsonify(build_ai_write_result())
@@ -3269,6 +4018,7 @@ def style_analysis():
             return jsonify({'success': False, 'error': '请至少提供核心卖点文案或上传 1 张图片'}), 400
 
         def build_style_analysis_result():
+            started_at = time.perf_counter()
             styles, _response_text = call_chat_json_with_repair(
                 STYLE_ANALYSIS_SYSTEM_PROMPT,
                 build_multimodal_content(
@@ -3284,7 +4034,13 @@ def style_analysis():
                 timeout_seconds=60,
                 repair_attempts=1,
             )
-            return {'success': True, 'mode': 'style-analysis', 'styles': styles}
+            return {
+                'success': True,
+                'mode': 'style-analysis',
+                'styles': styles,
+                'elapsed_ms': int(max((time.perf_counter() - started_at) * 1000, 0)),
+                'execution_mode': 'direct',
+            }
 
         if run_async:
             session_data = g.get('supabase_session') or get_supabase_session()
@@ -3292,13 +4048,9 @@ def style_analysis():
             if not user_id:
                 return jsonify({'success': False, 'error': '请先登录'}), 401
             task = create_generation_task(user_id, 'style-analysis')
-            GENERATION_TASK_EXECUTOR.submit(
-                run_background_generation_task,
-                task['task_id'],
-                build_style_analysis_result,
-                180,
-                '风格分析超时（3分钟），请稍后重试',
-            )
+            form_payload = {'selling_text': selling_text, 'platform': platform}
+            file_payloads = serialize_payloads_for_celery({'images': image_payloads})
+            submit_generation_celery_task(run_style_analysis_task_celery, (task['task_id'], form_payload, file_payloads), task.get('queue_tier'))
             return jsonify({'success': True, 'async_task': True, 'task': task, 'task_id': task['task_id']}), 202
 
         return jsonify(build_style_analysis_result())
@@ -3313,6 +4065,59 @@ def style_analysis():
         return jsonify({'success': False, 'error': '模型接口请求超时，请稍后重试'}), 504
     except requests.RequestException as exc:
         return jsonify({'success': False, 'error': f'模型接口请求失败：{exc}'}), 502
+    except Exception as exc:
+        return jsonify({'success': False, 'error': f'服务端异常：{exc}'}), 500
+
+
+@app.post('/api/reference-images/presign')
+def presign_reference_image_upload():
+    try:
+        session_data = g.get('supabase_session') or get_supabase_session()
+        user_id = _get_supabase_user_id(session_data)
+        if not user_id:
+            return jsonify({'success': False, 'error': '请先登录'}), 401
+
+        payload = request.get_json(silent=True) or {}
+        filename = str(payload.get('filename') or 'reference-image').strip()
+        content_type = str(payload.get('content_type') or payload.get('mime_type') or '').strip().lower()
+        file_size = int(payload.get('file_size') or 0)
+        if file_size <= 0:
+            return jsonify({'success': False, 'error': '文件大小无效'}), 400
+        if file_size > UPLOAD_MAX_FILE_BYTES:
+            return jsonify({'success': False, 'error': f'参考图片超过单张大小限制（{UPLOAD_MAX_FILE_BYTES // (1024 * 1024)}MB）'}), 400
+        if content_type not in ALLOWED_IMAGE_MIME_TYPES:
+            return jsonify({'success': False, 'error': '仅支持 JPG、PNG、WEBP 图片'}), 400
+
+        storage_group = str(payload.get('storage_group') or 'temp').strip().strip('/').replace('..', '') or 'temp'
+        if storage_group not in {'products', 'temp', 'fashion-models'}:
+            storage_group = 'temp'
+        storage_subdir = str(payload.get('storage_subdir') or 'uploads').strip().strip('/').replace('..', '') or 'uploads'
+        safe_stem = sanitize_filename_part(Path(filename or 'reference-image').stem, 'reference-image')
+        extension = guess_extension(content_type)
+        download_name = f'{safe_stem}{extension}'
+        object_id = f'{user_id[:8]}-{uuid.uuid4().hex}'
+        storage_prefix = f'{storage_group}/{storage_subdir}'.strip('/')
+        image_key = generate_cos_key(object_id, download_name, storage_group=storage_prefix)
+
+        from cos_utils import generate_presigned_put_url
+        direct_upload = generate_presigned_put_url(image_key, content_type, expires=600)
+        return jsonify({
+            'success': True,
+            'direct_upload': True,
+            'upload_url': direct_upload['upload_url'],
+            'image_url': direct_upload['image_url'],
+            'image_path': direct_upload['image_path'],
+            'download_name': download_name,
+            'mime_type': content_type,
+            'storage_backend': 'cos',
+            'storage_group': storage_group,
+            'headers': direct_upload['headers'],
+            'expires_in': direct_upload['expires_in'],
+        })
+    except RuntimeError as exc:
+        return jsonify({'success': False, 'error': str(exc)}), 503
+    except ValueError as exc:
+        return jsonify({'success': False, 'error': str(exc)}), 400
     except Exception as exc:
         return jsonify({'success': False, 'error': f'服务端异常：{exc}'}), 500
 
@@ -3548,13 +4353,15 @@ def generate_fashion_model():
             if not user_id:
                 return jsonify({'success': False, 'error': '请先登录'}), 401
             task = create_generation_task(user_id, 'fashion-model')
-            GENERATION_TASK_EXECUTOR.submit(
-                run_background_generation_task,
-                task['task_id'],
-                lambda: build_fashion_model_result(task['task_id']),
-                600,
-                '基准模特生成超时（10分钟），请稍后重试',
-            )
+            form_payload = {
+                'gender': gender,
+                'age': age,
+                'ethnicity': ethnicity,
+                'body_type': body_type,
+                'appearance_details': appearance_details,
+                'image_size_ratio': image_size_ratio,
+            }
+            submit_generation_celery_task(run_fashion_model_task_celery, (task['task_id'], form_payload), task.get('queue_tier'))
             return jsonify({'success': True, 'async_task': True, 'task': task, 'task_id': task['task_id']}), 202
 
         task_id = uuid.uuid4().hex
@@ -3617,13 +4424,9 @@ def generate_mode1_image_edit():
             if not user_id:
                 return jsonify({'success': False, 'error': '请先登录'}), 401
             task = create_generation_task(user_id, 'mode1-image-edit')
-            GENERATION_TASK_EXECUTOR.submit(
-                run_background_generation_task,
-                task['task_id'],
-                lambda: build_mode1_image_edit_result(task['task_id']),
-                600,
-                '模式1图生图超时（10分钟），请稍后重试',
-            )
+            form_payload = {'prompt': prompt, 'image_size_ratio': image_size_ratio}
+            file_payloads = serialize_payloads_for_celery({'images': image_payloads})
+            submit_generation_celery_task(run_mode_image_task_celery, (task['task_id'], 'mode1-image-edit', form_payload, file_payloads), task.get('queue_tier'))
             return jsonify({'success': True, 'async_task': True, 'task': task, 'task_id': task['task_id']}), 202
 
         task_id = uuid.uuid4().hex
@@ -3729,13 +4532,9 @@ def generate_mode2_image_edit():
             if not user_id:
                 return jsonify({'success': False, 'error': '请先登录'}), 401
             task = create_generation_task(user_id, 'mode2-image-edit')
-            GENERATION_TASK_EXECUTOR.submit(
-                run_background_generation_task,
-                task['task_id'],
-                lambda: build_mode2_image_edit_result(task['task_id']),
-                600,
-                '模式2图生图超时（10分钟），请稍后重试',
-            )
+            form_payload = {'prompt': prompt, 'image_size_ratio': ratio, 'ratio': ratio, 'resolution': resolution, 'sample_strength': sample_strength}
+            file_payloads = serialize_payloads_for_celery({'images': image_payloads})
+            submit_generation_celery_task(run_mode_image_task_celery, (task['task_id'], 'mode2-image-edit', form_payload, file_payloads), task.get('queue_tier'))
             return jsonify({'success': True, 'async_task': True, 'task': task, 'task_id': task['task_id']}), 202
 
         task_id = uuid.uuid4().hex
@@ -3851,13 +4650,8 @@ def generate_mode2_text2image():
             if not user_id:
                 return jsonify({'success': False, 'error': '请先登录'}), 401
             task = create_generation_task(user_id, 'mode2-text2image')
-            GENERATION_TASK_EXECUTOR.submit(
-                run_background_generation_task,
-                task['task_id'],
-                lambda: build_mode2_text2image_result(task['task_id']),
-                600,
-                '模式2文生图超时（10分钟），请稍后重试',
-            )
+            form_payload = {'prompt': prompt, 'image_size_ratio': ratio, 'ratio': ratio, 'resolution': resolution}
+            submit_generation_celery_task(run_mode_image_task_celery, (task['task_id'], 'mode2-text2image', form_payload, {}), task.get('queue_tier'))
             return jsonify({'success': True, 'async_task': True, 'task': task, 'task_id': task['task_id']}), 202
 
         task_id = uuid.uuid4().hex
@@ -3922,13 +4716,9 @@ def generate_mode3_image_edit():
             if not user_id:
                 return jsonify({'success': False, 'error': '请先登录'}), 401
             task = create_generation_task(user_id, 'mode3-image-edit')
-            GENERATION_TASK_EXECUTOR.submit(
-                run_background_generation_task,
-                task['task_id'],
-                lambda: build_mode3_image_edit_result(task['task_id']),
-                600,
-                '模式3图生图超时（10分钟），请稍后重试',
-            )
+            form_payload = {'prompt': prompt, 'image_size_ratio': image_size_ratio}
+            file_payloads = serialize_payloads_for_celery({'images': image_payloads})
+            submit_generation_celery_task(run_mode_image_task_celery, (task['task_id'], 'mode3-image-edit', form_payload, file_payloads), task.get('queue_tier'))
             return jsonify({'success': True, 'async_task': True, 'task': task, 'task_id': task['task_id']}), 202
 
         task_id = uuid.uuid4().hex
@@ -4338,15 +5128,18 @@ def build_generation_result_from_payload(form_payload: dict, file_payloads: dict
 def generate_suite():
     try:
         form_payload = {key: request.form.get(key, '') for key in request.form.keys()}
-        file_payloads = {
-            'images': get_image_payloads_from_request('images', url_field_name='image_urls'),
-            'reference_images': get_image_payloads_from_request('reference_images', url_field_name='reference_image_urls'),
-            'fashion_selected_model_image': get_image_payloads_from_request('fashion_selected_model_image', limit=1),
-        }
         run_async = str(form_payload.get('async_task') or '').strip().lower() in {'1', 'true', 'yes'}
         if run_async:
-            session_data = g.get('supabase_session') or get_supabase_session()
+            file_payloads = {
+                'images': get_image_payloads_from_request_async('images', url_field_name='image_urls'),
+                'reference_images': get_image_payloads_from_request_async('reference_images', url_field_name='reference_image_urls'),
+                'fashion_selected_model_image': get_image_payloads_from_request_async('fashion_selected_model_image', limit=1),
+            }
+            session_data = g.get('supabase_session') or parse_supabase_session_cookie()
             user_id = _get_supabase_user_id(session_data)
+            if not user_id:
+                session_data = get_supabase_session()
+                user_id = _get_supabase_user_id(session_data)
             if not user_id:
                 return jsonify({'success': False, 'error': '请先登录'}), 401
             spend_record = None
@@ -4360,8 +5153,15 @@ def generate_suite():
                     spend_record = None
             request_id = str(form_payload.get('points_request_id') or (spend_record or {}).get('requestId') or '').strip()
             task = create_generation_task(user_id, str(form_payload.get('mode') or 'suite'), request_id, spend_record)
-            GENERATION_TASK_EXECUTOR.submit(run_generation_task, task['task_id'], form_payload, file_payloads)
-            return jsonify({'success': True, 'async_task': True, 'task': task, 'task_id': task['task_id']}), 202
+            response_payload = {'success': True, 'async_task': True, 'task': task, 'task_id': task['task_id']}
+            serialized_file_payloads = serialize_payloads_for_celery(file_payloads)
+            submit_generation_celery_task(run_generation_task_celery, (task['task_id'], form_payload, serialized_file_payloads), task.get('queue_tier'))
+            return jsonify(response_payload), 202
+        file_payloads = {
+            'images': get_image_payloads_from_request('images', url_field_name='image_urls'),
+            'reference_images': get_image_payloads_from_request('reference_images', url_field_name='reference_image_urls'),
+            'fashion_selected_model_image': get_image_payloads_from_request('fashion_selected_model_image', limit=1),
+        }
         result = build_generation_result_from_payload(form_payload, file_payloads)
         return jsonify(result)
     except RequestEntityTooLarge as exc:
@@ -4412,7 +5212,8 @@ def generate_replicate():
                 return jsonify({'success': False, 'error': '请先登录'}), 401
 
             task = create_generation_task(user_id, f'replicate-{replicate_mode}', '', None)
-            GENERATION_TASK_EXECUTOR.submit(run_replicate_generation_task, task['task_id'], form_payload, file_payloads)
+            serialized_file_payloads = serialize_payloads_for_celery(file_payloads)
+            submit_generation_celery_task(run_replicate_generation_task_celery, (task['task_id'], form_payload, serialized_file_payloads), task.get('queue_tier'))
             return jsonify({'success': True, 'async_task': True, 'task': task, 'task_id': task['task_id']}), 202
 
         result = build_replicate_generation_result(form_payload, file_payloads)
@@ -4884,6 +5685,27 @@ def _build_sku_replicate_result(form: dict, payloads: dict, reference_payloads: 
     }
 
 
+@app.get('/api/monitor/generation')
+def generation_monitor_metrics():
+    window_seconds = request.args.get('window_seconds') or request.args.get('window') or '3600'
+    try:
+        normalized_window = max(min(int(window_seconds), 86400), 60)
+    except (TypeError, ValueError):
+        normalized_window = 3600
+    started_at = time.time()
+    metrics = get_generation_monitor_metrics(normalized_window)
+    redis_ok = int(metrics.get('redis_ok') or 0)
+    status = 'ok' if redis_ok else 'error'
+    payload = {
+        'success': bool(redis_ok),
+        'status': status,
+        'service': 'generation',
+        'response_time_ms': int(max((time.time() - started_at) * 1000, 0)),
+        'metrics': metrics,
+    }
+    return jsonify(payload), 200 if redis_ok else 503
+
+
 @app.get('/api/generation-tasks')
 def generation_tasks_list():
     session_data = g.get('supabase_session') or get_supabase_session()
@@ -5180,17 +6002,22 @@ def generation_history_list():
 @app.get('/api/generation-tasks/<task_id>')
 @limiter.limit("30 per minute")
 def generation_task_status(task_id):
-    session_data = g.get('supabase_session') or get_supabase_session()
+    session_data = g.get('supabase_session') or parse_supabase_session_cookie()
     user_id = _get_supabase_user_id(session_data)
     if not user_id:
+        session_data = get_supabase_session()
+        user_id = _get_supabase_user_id(session_data)
+    if not user_id:
         return jsonify({'success': False, 'error': '请先登录'}), 401
-    task = get_generation_task(task_id)
+    task = get_generation_task(task_id, prefer_cache=True)
     if not task:
         return jsonify({'success': False, 'error': '生成任务不存在或已过期'}), 404
     if str(task.get('user_id') or '') != str(user_id):
         return jsonify({'success': False, 'error': '无权访问该生成任务'}), 403
-    task = maybe_fail_stale_generation_task(task)
-    serialized_task = serialize_generation_task(task)
+    status = str(task.get('status') or '').strip().lower()
+    if status in {'pending', 'running'}:
+        task = maybe_fail_stale_generation_task(task)
+    serialized_task = serialize_generation_task(task, include_queue_info=False)
     return jsonify({'success': True, 'task': serialized_task})
 
 
@@ -5294,13 +6121,9 @@ def generate_aplus():
                     spend_record = None
             request_id = str(request.form.get('points_request_id') or (spend_record or {}).get('requestId') or '').strip()
             task = create_generation_task(user_id, 'aplus', request_id, spend_record)
-            GENERATION_TASK_EXECUTOR.submit(
-                run_background_generation_task,
-                task['task_id'],
-                lambda: build_aplus_result(task['task_id']),
-                600,
-                'A+ 生成超时（10分钟），请稍后重试',
-            )
+            form_payload = {key: request.form.get(key, '') for key in request.form.keys()}
+            file_payloads = serialize_payloads_for_celery({'images': image_payloads, 'reference_images': reference_payloads})
+            submit_generation_celery_task(run_aplus_task_celery, (task['task_id'], form_payload, file_payloads), task.get('queue_tier'))
             return jsonify({'success': True, 'async_task': True, 'task': task, 'task_id': task['task_id']}), 202
 
         task_id = uuid.uuid4().hex

@@ -29,7 +29,9 @@
 .
 ├── app.py                    # Flask 主应用（3044 行）
 ├── config.py                 # 全局配置与环境变量
-├── redis_client.py           # Redis 连接池与缓存管理
+├── redis_client.py           # Redis 多 DB 连接池与缓存管理（DB0-DB4）
+├── celery_app.py             # Celery 应用配置（gevent 协程池）
+├── celery_tasks.py           # Celery 异步任务定义（8个任务，自动重试）
 ├── supabase_client.py        # Supabase REST 操作（积分、支付、用户、任务）
 ├── utils.py                  # 通用工具函数
 ├── image_utils.py            # 图片处理、编解码、保存、上传
@@ -99,11 +101,20 @@ pip install -r requirements.txt
 REDIS_HOST=your-redis-host
 REDIS_PORT=6379
 REDIS_PASSWORD=your-redis-password
-REDIS_DB=0
 REDIS_MAX_CONNECTIONS=200
+REDIS_SOCKET_TIMEOUT=10
+REDIS_SOCKET_CONNECT_TIMEOUT=5
+
+# Redis 多 DB 分离
+REDIS_DB=0
+REDIS_DB_TASKS=1
+REDIS_DB_API=2
+REDIS_DB_CELERY=3
+REDIS_DB_MONITOR=4
 
 # 缓存TTL配置（秒）
-REDIS_CACHE_TTL_TASK=30
+REDIS_CACHE_TTL_TASK_ACTIVE=10
+REDIS_CACHE_TTL_TASK_DONE=300
 REDIS_CACHE_TTL_POINTS=60
 REDIS_CACHE_TTL_PROFILE=300
 REDIS_CACHE_TTL_VIP=3600
@@ -147,6 +158,49 @@ gunicorn -w 4 -b 0.0.0.0:5078 --timeout 300 --access-logfile - app:app
 
 ## Redis缓存系统
 
+### Redis 多 DB 分离
+
+系统使用 Redis 多 DB 隔离不同业务数据，便于监控、排查和独立清理：
+
+| Redis DB | 用途 | 环境变量 | 默认值 | 数据内容 |
+|----------|------|---------|--------|---------|
+| **DB 0** | 通用缓存 | `REDIS_DB` | 0 | 用户积分、用户资料、VIP配置 |
+| **DB 1** | 任务状态 | `REDIS_DB_TASKS` | 1 | 生成任务缓存、任务队列状态 |
+| **DB 2** | API 并发控制 | `REDIS_DB_API` | 2 | API 槽位、API Key 状态、限流 |
+| **DB 3** | Celery | `REDIS_DB_CELERY` | 3 | Broker 队列、Result Backend |
+| **DB 4** | 监控 | `REDIS_DB_MONITOR` | 4 | 错误日志、监控事件 |
+
+```bash
+# .env 配置
+REDIS_DB=0
+REDIS_DB_TASKS=1
+REDIS_DB_API=2
+REDIS_DB_CELERY=3
+REDIS_DB_MONITOR=4
+
+# 向后兼容：全部设为 0 即可使用单 DB
+# REDIS_DB=0
+# REDIS_DB_TASKS=0
+# REDIS_DB_API=0
+# REDIS_DB_CELERY=0
+# REDIS_DB_MONITOR=0
+```
+
+监控命令：
+
+```bash
+# 查看各 DB 的 key 数量和内存
+redis-cli INFO keyspace
+
+# 单独查看某个 DB
+redis-cli -n 1 DBSIZE    # DB1 任务缓存 key 数
+redis-cli -n 2 DBSIZE    # DB2 API 并发 key 数
+redis-cli -n 3 DBSIZE    # DB3 Celery key 数
+
+# 清理某个 DB（不影响其他）
+redis-cli -n 1 FLUSHDB   # 只清理任务缓存
+```
+
 ### 性能提升
 
 - **数据库查询压力降低90%**
@@ -156,12 +210,15 @@ gunicorn -w 4 -b 0.0.0.0:5078 --timeout 300 --access-logfile - app:app
 
 ### 缓存策略
 
-| 数据类型  | TTL   | 说明                |
-| ----- | ----- | ----------------- |
-| 任务状态  | 30秒   | 任务查询缓存，状态更新时自动失效  |
-| 用户积分  | 60秒   | 积分查询缓存，消费/充值时自动失效 |
-| 用户信息  | 300秒  | 用户资料缓存            |
-| VIP配置 | 3600秒 | VIP套餐配置缓存         |
+| 数据类型 | TTL | Redis DB | 说明 |
+| --- | --- | --- | --- |
+| 任务状态（pending/running） | 10秒 | DB1 | 活跃任务短 TTL，确保状态实时性 |
+| 任务状态（succeeded/failed） | 300秒 | DB1 | 完成任务长 TTL，减少重复查询 |
+| 用户积分 | 60秒 | DB0 | 积分查询缓存，消费/充值时自动失效 |
+| 用户信息 | 300秒 | DB0 | 用户资料缓存 |
+| VIP配置 | 3600秒 | DB0 | VIP套餐配置缓存 |
+| API 并发槽位 | 实时 | DB2 | API Key 并发控制、熔断状态 |
+| Celery 队列/结果 | 3600秒 | DB3 | Broker 队列 + Result Backend |
 
 ### 安全配置
 
@@ -185,14 +242,94 @@ redis-cli -h <host> -p <port> -a <password> monitor
 redis-cli -h <host> -p <port> -a <password> info memory
 ```
 
+## Celery 异步任务系统
+
+### 架构
+
+```
+Flask (提交任务)
+  → Redis DB3 (Celery Broker)
+    → Celery Worker (gevent 协程池, 100并发)
+      → 外部 API 调用
+        → 结果写回 Supabase + Redis DB1 (任务缓存)
+```
+
+### 队列配置
+
+| 队列 | 用途 | 优先级 |
+|------|------|--------|
+| `generation_priority` | VIP用户任务 | 0-9 (高优先级) |
+| `generation_normal` | 普通用户任务 | 0-9 (默认3) |
+
+### 关键配置
+
+| 配置项 | 默认值 | 说明 |
+|--------|--------|------|
+| `CELERY_WORKER_POOL` | `gevent` | 协程池，I/O密集型任务推荐 |
+| `CELERY_WORKER_CONCURRENCY` | `100` (gevent) / `30` (prefork) | Worker 并发数 |
+| `CELERY_WORKER_PREFETCH_MULTIPLIER` | `1` | 预取数，设为1避免任务堆积 |
+| `CELERY_TASK_TIME_LIMIT` | `1200` | 任务硬超时（秒） |
+| `CELERY_TASK_SOFT_TIME_LIMIT` | `900` | 任务软超时（秒） |
+| `CELERY_BROKER_URL` | `redis://.../3` | 自动使用 DB3 |
+| `REDIS_DB_CELERY` | `3` | Celery 专用 Redis DB |
+
+### 任务重试
+
+所有 Celery 任务自动重试瞬态错误（`ConnectionError`、`TimeoutError`、`OSError`）：
+
+- 最大重试次数：2
+- 初始退避：10秒
+- 指数退避：启用
+- 退避上限：60秒
+- 随机抖动：启用
+
+### 图片传输优化
+
+Celery 任务中的图片数据优先上传到 COS，只传 URL：
+
+```
+提交时: 图片 bytes → COS 上传 → 获得 URL → Celery 消息只含 URL
+执行时: Worker 从 URL 下载图片 → 处理
+降级:  COS 不可用时自动 fallback 到 Base64 编码
+```
+
+收益：Celery 消息从 ~20MB 降到 <1KB，Redis 内存占用大幅下降。
+
+### 启动命令
+
+```bash
+# 安装 gevent
+pip install gevent
+
+# 启动 Celery Worker（gevent 模式，推荐）
+celery -A celery_app:celery_app worker -P gevent -c 100 \
+  -Q generation_priority,generation_normal --loglevel=info
+
+# 启动 Celery Worker（prefork 模式，兼容）
+celery -A celery_app:celery_app worker -P prefork -c 30 \
+  -Q generation_priority,generation_normal --loglevel=info
+```
+
+### 可靠性保障
+
+| 机制 | 说明 |
+|------|------|
+| `task_acks_late=True` | 任务执行完成后才确认，Worker崩溃时任务重新入队 |
+| `task_reject_on_worker_lost=True` | Worker丢失时拒绝任务，触发重试 |
+| `visibility_timeout=7200` | 匹配 task_time_limit，避免执行中被重复消费 |
+| `result_expires=3600` | 结果1小时后自动清理 |
+| 提交异常处理 | `apply_async` 失败时自动标记任务失败并退分 |
+
+***
+
 ## Docker 镜像发布
 
 通过 GitHub Action 自动构建并推送 Docker 镜像，**不需要本地手动执行**。
 
 | 触发条件                | 标签                |
 | ------------------- | ----------------- |
-| 推送到 `main` 分支       | `11.8` + `latest` |
-| GitHub Actions 手动触发 | `11.8` + `latest` |
+| 推送到 `main` 分支       | `11.9` + `latest` |
+| GitHub Actions 手动触发 | `11.9` + `latest` |
 
 - 构建平台：`linux/amd64` + `linux/arm64`
 - 镜像内使用 Gunicorn 运行 Flask 应用：`gunicorn -w 4 -b 0.0.0.0:5078 --timeout 300 --access-logfile - app:app`
@@ -520,9 +657,246 @@ POST {MODE3_OPENAI_BASE_URL}/images/edits
 | mode3 并行生成 | \~35s      | 9 workers，单张 \~30s                  |
 | **总计**     | **\~121s** | 每张平摊 \~20s                          |
 
+## AI 帮写 / 爆款风格分析直连说明
+
+AI 帮写与爆款风格分析现在默认走快速直连，不再主动进入 Celery 队列。
+
+### 返回模式
+
+这两个接口会直接返回结果：
+
+- `execution_mode = "direct"`
+- `elapsed_ms`：本次接口的后端执行耗时
+
+如果历史客户端仍然传入 `async_task=1`，后端也保留兼容异步分支，前端会根据返回值里的 `task_id` 自动切换到轮询模式。
+
+### 直连和单独队列的差异
+
+| 场景 | 组成 | 典型额外开销 |
+| --- | --- | --- |
+| 快速直连 | Flask 直接调用模型接口并返回 | 只包含模型推理时间 + 少量 HTTP 处理开销 |
+| 单独队列 | Flask 接单 → Redis/Celery 入队 → Worker 执行 → 前端轮询结果 | 额外增加队列等待、任务状态查询、前端轮询发现延迟 |
+
+### 可量化差异
+
+- **直连**：约等于 `elapsed_ms`
+- **单独队列**：约等于 `task_queue_ms + backend_until_ready_ms + poll_after_success_ms + frontendPollDetectMs + direct_elapsed_ms`
+- 如果队列空闲，单独队列通常比直连多 **200ms ~ 800ms** 的协议和轮询开销
+- 如果队列拥塞，额外等待可能从 **1s** 到 **数十秒** 不等，主要取决于当前排队长度和 Celery worker 忙碌程度
+- 对 AI 帮写而言，如果同步返回 `text` 和 `product_json`，直连通常能减少“先排队再轮询”的等待
+- 对爆款风格分析而言，直连能直接返回 `styles`，体验上通常比排队模式更快、更稳定
+
+### 建议使用方式
+
+- **默认推荐**：快速直连
+- **保留异步**：仅作为历史兼容和特殊高峰保护
+- 如果你更关注“前面还有几人”，那只应保留给生图类重任务，而不必给 AI 帮写和风格分析单独排队
+
+### 结果对比建议
+
+建议在压测和真实测试时记录下面几项：
+
+- `elapsed_ms`：直连后端总耗时
+- `task_queue_ms`：队列等待时间
+- `backend_until_ready_ms`：后端实际处理时间
+- `poll_after_success_ms`：队列成功后到前端感知成功的延迟
+- `frontendDisplayDelayMs`：前端最终展示完成时间
+
+这样就可以直接比较：
+
+- 直连 = 纯模型耗时
+- 单独队列 = 纯模型耗时 + 排队 + 轮询 + 前端发现延迟
+
+
+Hertzbeat 的 HTTP API 监控用于调用一个 HTTP 接口，查看接口是否可用，并对响应时间等指标进行监测。
+
+本项目已经专门提供了一个适合 Hertzbeat 采集的监控接口：
+
+```text
+GET /api/monitor/generation?window_seconds=3600
+```
+
+这个接口不是业务提交接口，而是专门给监控系统看的汇总指标接口。
+
+### 监控配置参数
+
+下面这些参数与 Hertzbeat 官方 HTTP API 监控配置一一对应：
+
+| 参数名称         | 参数帮助描述                                                             |
+| ------------ | ------------------------------------------------------------------ |
+| 监控Host       | 被监控的对端 IPv4、IPv6 或域名，注意不带协议头，例如不要写 `https://` 或 `http://`          |
+| 任务名称         | 标识此监控的名称，名称需要保证唯一性                                                 |
+| 端口           | 网站对外提供的端口，HTTP 一般默认为 `80`，HTTPS 一般默认为 `443`                        |
+| 相对路径         | 网站地址除 IP 端口外的后缀路径，例如 `/api/monitor/generation?window_seconds=3600` |
+| 请求方式         | 设置接口调用的请求方式：`GET`、`POST`、`PUT`、`DELETE`                            |
+| 启用HTTPS      | 是否通过 HTTPS 访问网站，开启后一般默认对应端口需要改为 `443`                              |
+| 用户名          | 接口 Basic 认证或 Digest 认证时使用的用户名                                      |
+| 密码           | 接口 Basic 认证或 Digest 认证时使用的密码                                       |
+| 请求Headers    | HTTP 请求头                                                           |
+| 查询Params     | HTTP 查询参数，支持时间表达式                                                  |
+| Content-Type | 设置携带 BODY 请求体数据时的资源类型                                              |
+| 请求BODY       | 设置携带 BODY 请求体数据，`PUT`、`POST` 请求方式时有效，支持时间表达式                       |
+| 采集间隔         | 监控周期性采集数据间隔时间，单位秒，最小间隔为 `30` 秒                                     |
+| 是否探测         | 新增监控前是否先探测检查监控可用性，探测成功才会继续新增或修改操作                                  |
+| 描述备注         | 更多标识和描述此监控的备注信息                                                    |
+
+### 本项目推荐填写方式
+
+如果你要监控本项目的生图服务，建议这样填写：
+
+- **监控Host**：`127.0.0.1`、服务器内网 IP，或者公网域名
+- **任务名称**：`aiimagenew-generation`
+- **端口**：`5078`
+- **相对路径**：`/api/monitor/generation?window_seconds=3600`
+- **请求方式**：`GET`
+- **启用HTTPS**：如果是 HTTPS 域名就开启，否则关闭
+- **请求Headers**：一般不需要填写
+- **查询Params**：可留空，也可以传 `window_seconds=3600`
+- **采集间隔**：`30` 秒或 `60` 秒
+- **是否探测**：建议开启
+
+### 采集指标
+
+Hertzbeat 官方 HTTP API 监控默认采集的指标集合是 `summary`，本项目对应输出的核心指标如下：
+
+| 指标名称         | 指标单位  | 指标帮助描述 |
+| ------------ | ----- | ------ |
+| responseTime | ms 毫秒 | 网站响应时间 |
+
+本项目在这个基础上，返回了更丰富的 JSON 数据，Hertzbeat 可以进一步读取这些字段用于展示和告警：
+
+- `success`
+- `status`
+- `service`
+- `response_time_ms`
+- `metrics.redis_ok`
+- `metrics.success_rate`
+- `metrics.failure_rate`
+- `metrics.failed`
+- `metrics.succeeded`
+- `metrics.running_events`
+- `metrics.pending_events`
+- `metrics.queue_total`
+- `metrics.queue_priority`
+- `metrics.queue_normal`
+- `metrics.api_slot_capacity`
+- `metrics.api_slot_active`
+- `metrics.api_slot_available`
+- `metrics.recent_errors`
+
+### 接口实现原理
+
+监控接口的实现位置在：
+
+- [app.py 中的监控事件记录](file:///c:/Users/zs/Desktop/aiimagenew/app.py#L693-L719)
+- [app.py 中的监控指标汇总](file:///c:/Users/zs/Desktop/aiimagenew/app.py#L722-L782)
+- [app.py 中的监控接口](file:///c:/Users/zs/Desktop/aiimagenew/app.py#L5433-L5453)
+
+它的工作方式是：
+
+1. 用户提交生图任务后，Flask 先创建任务并返回排队信息
+2. 任务进入 Celery 后记录 `pending`、`running`、`succeeded`、`failed` 事件
+3. 这些事件写入 Redis
+4. Hertzbeat 定时请求 `/api/monitor/generation`
+5. 接口把最近一段时间的成功率、失败率、队列数、API 槽位等数据汇总后返回 JSON
+
+### 监控返回示例
+
+```json
+{
+  "success": true,
+  "status": "ok",
+  "service": "generation",
+  "response_time_ms": 985,
+  "metrics": {
+    "redis_ok": 1,
+    "window_seconds": 3600,
+    "total_events": 120,
+    "completed": 110,
+    "succeeded": 104,
+    "failed": 6,
+    "running_events": 2,
+    "pending_events": 8,
+    "success_rate": 94.55,
+    "failure_rate": 5.45,
+    "queue_total": 18,
+    "queue_priority": 3,
+    "queue_normal": 15,
+    "api_slot_capacity": 30,
+    "api_slot_active": 12,
+    "api_slot_available": 18,
+    "api_slot_backend": "redis",
+    "recent_errors": []
+  }
+}
+```
+
+### 为什么不用直接监控业务接口
+
+不建议直接监控 `/api/generate`，原因是：
+
+- 它依赖登录态、积分、表单参数和具体业务上下文
+- 它可能返回 202、4xx、5xx 或业务错误码，不适合作为稳定健康检查入口
+- Hertzbeat 更适合采集一个稳定、公开、结构化的指标接口
+
+### 告警建议
+
+建议在 Hertzbeat 里关注这些情况：
+
+- **接口不可用**：HTTP 状态码不是 200，或者 `success=false`
+- **响应时间异常**：`response_time_ms > 3000`
+- **成功率下降**：`success_rate < 90`
+- **失败率过高**：`failure_rate > 10`
+- **队列堆积**：`queue_total` 持续升高
+- **API 槽位耗尽**：`api_slot_available = 0`
+- **Redis 异常**：`redis_ok = 0`
+
+### 公开访问说明
+
+这个监控接口已经加入公开白名单，不需要登录态即可访问。对应代码在 `guard_authentication()` 里放行了：
+
+- `/api/monitor/generation`
+- `/api/health`
+
+这样 Hertzbeat 才能稳定抓取指标，不会被 401 拦截。
+
+### 本地验证命令
+
+```bash
+curl "http://127.0.0.1:5078/api/monitor/generation?window_seconds=3600"
+```
+
+如果返回 JSON，并且 `status=ok`、`redis_ok=1`，说明监控链路已经打通。
+
 ***
 
-## 近期更新
+### 2026-05-09 · v12.0
+
+- **Redis 多 DB 分离**：DB0 通用缓存、DB1 任务状态、DB2 API并发控制、DB3 Celery、DB4 监控，各业务数据隔离，便于监控和独立清理
+- **"排队超时"误报修复**：`submit_generation_celery_task` 添加异常处理，任务提交失败时立即标记失败并退分；`get_generation_task` 对 pending/running 任务强制走 DB 而非进程内过期缓存；`maybe_fail_stale_generation_task` 对 `created_at_ts` 缺失/异常值更健壮
+- **Celery gevent 协程池**：默认使用 gevent 替代 prefork，内存从 ~1.5GB 降到 ~200MB，并发从 30 提升到 100；自动检测 gevent 是否安装，不可用时降级到 prefork
+- **Celery 任务自动重试**：所有8个任务添加 `autoretry_for=(ConnectionError, TimeoutError, OSError)`，最多重试2次，指数退避
+- **Celery 可靠性配置**：`task_acks_late=True`、`task_reject_on_worker_lost=True`、`visibility_timeout=7200`、`result_expires=3600`
+- **图片 COS 优先传输**：Celery 消息中的图片数据优先上传到 COS 只传 URL，COS 不可用时自动降级到 Base64
+- **Redis 客户端自动重连**：`get_redis_client()` 每次先 `ping()` 检测，断连后自动重建连接
+- **Redis KEYS→SCAN**：`cache_delete_pattern` 改用 SCAN 分批迭代，不再阻塞 Redis
+- **Redis 连接池健康检查**：`retry_on_timeout=True`、`health_check_interval=30`
+- **任务缓存 TTL 分级**：pending/running 10秒、succeeded/failed 300秒，减少活跃任务穿透率
+- **GENERATION_TASKS LRU 淘汰**：`OrderedDict` + 上限5000，避免内存泄漏
+- **Supabase HTTP 连接池**：全局 `requests.Session` 复用连接，自动重试 5xx 错误
+- **API 槽位 Pub/Sub 优化**：`_acquire_redis_api_slot` 使用 Redis Pub/Sub 替代忙等待轮询，释放时发布通知
+
+### 2026-05-09 · v11.9
+
+- **上传体验升级**：商品图/参考图上传新增前端压缩与 COS 预签名直传，默认先压缩大图再直传 COS，失败时自动回退到后端上传
+- **预签名接口**：新增 `/api/reference-images/presign`，前端可先获取 PUT 签名再上传，减少后端中转和 Flask 压力
+- **上传链路验证**：已完成真实预签名返回、真实 PUT 上传和图片 URL 可访问验证，浏览器直传链路可用
+- **任务缓存修复**：修复 `_MAX_CACHED_GENERATION_TASKS` 未导入导致的服务端异常，退款失败场景不再因缓存上限变量缺失而二次报错
+- **Redis/Celery 配置修复**：`redis_client.py` 独立加载 `.env`，避免退回 `localhost:6379` 触发 `[WinError 10061]`；`CELERY_BROKER_URL=` / `CELERY_RESULT_BACKEND=` 留空时自动回退 Redis DB3
+- **Redis 切换说明**：支持直接更换为空 Redis，DB0/DB1/DB2/DB3/DB4 会自动写入缓存、任务状态、限流、Celery 队列和监控数据；切换后必须重启 Flask 与 Celery Worker
+- **Redis/Celery 验证**：已确认远端 Redis 端口连通，Celery broker/backend 正确指向 `REDIS_DB_CELERY=3`，后端重启后接口正常响应
+- **后端重启验证**：重新启动后端后确认修复生效，相关接口恢复正常返回
+- **镜像标签更新**：Docker 镜像版本号同步到 `11.9` + `latest`
 
 ### 2026-05-08 · v11.8
 

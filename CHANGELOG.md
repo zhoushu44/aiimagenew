@@ -1,6 +1,60 @@
-# 版本说明 (Changelog)
+## v12.0 (2026-05-10)
 
-## v11.8 (2026-05-08)
+### 并发配置优化（4核8G服务器）
+
+- **GUNICORN_WORKERS=4**：Flask HTTP请求处理worker数，适配4核CPU
+- **CELERY_WORKER_CONCURRENCY=24**：Celery异步任务并发数，充分利用8G内存
+- **CELERY_WORKER_POOL=prefork**：进程池模式，稳定可靠
+- **资源预估**：内存约2GB（Flask 400MB + Celery 1.2GB + 系统 400MB），CPU 4核充分利用
+
+### 宝塔Docker部署指南
+
+- **command配置**：`/app/start.sh`（同时启动Flask和Celery两个后端）
+- **entrypoint**：留空
+- **环境变量**：通过`.env`文件或宝塔界面配置
+- **验证命令**：`docker exec -it aiimagenew ps aux` 检查进程
+
+### 文档更新
+
+- README更新部署说明，添加宝塔Docker配置示例
+- CHANGELOG新增v12.0版本记录
+- 清理临时分析文档和测试文件
+
+***
+
+## v11.9 (2026-05-09)
+
+### 前端上传体验优化
+
+- 新增上传前图片压缩，默认对大图按最长边 2048px、质量 0.86 进行压缩，减少上传体积
+- 商品图参考图上传改为浏览器直传 COS，减少后端中转和 Flask 压力
+- 浏览器直传失败时自动回退到后端上传，保证上传链路可用性
+- 新增参考图片预签名接口 `/api/reference-images/presign`，前端可先取签名再 PUT 到 COS
+- 真实验证直传链路可用：预签名返回成功、PUT 上传成功、图片 URL 可访问
+
+### 生成任务缓存修复
+
+- 修复 `_MAX_CACHED_GENERATION_TASKS` 未导入导致的服务端异常
+- 退款失败场景下不再因为任务缓存上限变量缺失而二次报错
+- 重新启动后端后验证修复生效，预签名接口再次返回正常
+
+### Redis / Celery 配置修复
+
+- 修复 `redis_client.py` 独立导入时未加载 `.env` 的问题，避免 Redis 配置退回到 `localhost:6379` 并触发 `[WinError 10061]`
+- 修复 `CELERY_BROKER_URL=` / `CELERY_RESULT_BACKEND=` 留空时被当成有效空字符串的问题，现在会自动回退到 Redis DB3
+- Celery Broker 与 Result Backend 默认使用 `redis://:密码@REDIS_HOST:REDIS_PORT/REDIS_DB_CELERY`
+- 支持直接更换为空 Redis：DB0/DB1/DB2/DB3/DB4 会在运行中自动写入缓存、任务状态、限流状态、队列与监控数据
+- 明确切换 Redis 后必须重启 Flask 与 Celery Worker，运行中的旧进程不会自动读取新的 `.env`
+- 已验证远端 Redis 端口连通、Celery broker/backend 指向 Redis DB3，Flask 重启后 `/suite` 和积分接口可正常响应
+
+### 文档更新
+
+- README 更新到 v11.9 标签，补充最新镜像版本号
+- Changelog 新增 11.9 版本说明，记录相较 11.8 的新增优化点
+
+***
+
+## v11.8 (2026-05-09)
 
 ### Docker
 
@@ -115,11 +169,11 @@
 
 ### 新增配置项
 
-| 配置项 | 默认值 | 说明 |
-|--------|--------|------|
-| `API_KEY_CONCURRENCY_LIMIT` | `10` | 每 Key 最大并发数 |
-| `API_KEY_FAILURE_THRESHOLD` | `3` | Key 连续失败 N 次触发熔断 |
-| `API_KEY_FAILURE_COOLDOWN_SECONDS` | `60` | 熔断冷却时间（秒） |
+| 配置项                                | 默认值  | 说明               |
+| ---------------------------------- | ---- | ---------------- |
+| `API_KEY_CONCURRENCY_LIMIT`        | `10` | 每 Key 最大并发数      |
+| `API_KEY_FAILURE_THRESHOLD`        | `3`  | Key 连续失败 N 次触发熔断 |
+| `API_KEY_FAILURE_COOLDOWN_SECONDS` | `60` | 熔断冷却时间（秒）        |
 
 ### 并发架构升级
 
@@ -176,9 +230,9 @@
 
 ### 安全配置优化
 
-- **新增SECRET_KEY配置**：WebSocket和Session安全密钥
+- **新增SECRET\_KEY配置**：WebSocket和Session安全密钥
 - **Redis连接池优化**：最大连接数从50增加到200，支持更高并发
-- **配置文档完善**：添加SECRET_KEY生成方法和使用说明
+- **配置文档完善**：添加SECRET\_KEY生成方法和使用说明
 
 ### Docker
 
@@ -213,7 +267,7 @@
   - 任务订阅/取消订阅机制
   - 实时接收任务状态更新
 - **后端实现**：
-  - WebSocket事件处理器（connect、disconnect、subscribe_task、unsubscribe_task）
+  - WebSocket事件处理器（connect、disconnect、subscribe\_task、unsubscribe\_task）
   - 任务更新时自动推送（`emit_task_update`）
   - 支持房间机制，精准推送
 - **效果**：
@@ -314,7 +368,7 @@
 
 ### IO 与日志优化
 
-- **错误日志精简**：SSL/网络错误使用简短标识（SSL_ERROR、TIMEOUT_ERROR 等）
+- **错误日志精简**：SSL/网络错误使用简短标识（SSL\_ERROR、TIMEOUT\_ERROR 等）
 - **重试延迟优化**：SSL/网络错误使用更长的指数退避（最长 60 秒）
 - **日志格式统一**：重试日志统一格式，减少冗余信息
 

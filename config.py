@@ -7,6 +7,8 @@ import json
 import os
 import threading
 import time
+import uuid
+from collections import OrderedDict
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
@@ -80,7 +82,8 @@ SUPABASE_PAYMENTS_TABLE = 'zpay_transactions'
 SUPABASE_GENERATION_TASKS_TABLE = 'generation_tasks'
 GENERATION_TASK_TTL_SECONDS = max(int(os.getenv('GENERATION_TASK_TTL_SECONDS') or 7200), 300)
 GENERATION_TASK_POLL_RETENTION_SECONDS = max(int(os.getenv('GENERATION_TASK_POLL_RETENTION_SECONDS') or 86400), 3600)
-GENERATION_TASKS: dict[str, dict] = {}
+_MAX_CACHED_GENERATION_TASKS = max(int(os.getenv('MAX_CACHED_GENERATION_TASKS') or 5000), 100)
+GENERATION_TASKS: OrderedDict[str, dict] = OrderedDict()
 GENERATION_TASKS_LOCK = threading.Lock()
 GENERATION_TASK_CANCEL_EVENTS: dict[str, threading.Event] = {}
 GENERATION_TASK_EXECUTOR = concurrent.futures.ThreadPoolExecutor(max_workers=max(int(os.getenv('GENERATION_TASK_WORKERS') or 3), 1))
@@ -98,8 +101,8 @@ REDIS_PORT = int(os.getenv('REDIS_PORT') or 6379)
 REDIS_PASSWORD = (os.getenv('REDIS_PASSWORD') or '').strip() or None
 REDIS_DB = int(os.getenv('REDIS_DB') or 0)
 REDIS_MAX_CONNECTIONS = int(os.getenv('REDIS_MAX_CONNECTIONS') or 50)
-REDIS_SOCKET_TIMEOUT = int(os.getenv('REDIS_SOCKET_TIMEOUT') or 5)
-REDIS_SOCKET_CONNECT_TIMEOUT = int(os.getenv('REDIS_SOCKET_CONNECT_TIMEOUT') or 5)
+REDIS_SOCKET_TIMEOUT = float(os.getenv('REDIS_SOCKET_TIMEOUT') or 5)
+REDIS_SOCKET_CONNECT_TIMEOUT = float(os.getenv('REDIS_SOCKET_CONNECT_TIMEOUT') or 5)
 
 REDIS_CACHE_TTL = {
     'task_status': int(os.getenv('REDIS_CACHE_TTL_TASK') or 30),
@@ -165,7 +168,10 @@ def get_supabase_setting_json(name: str, default=None):
 
 
 def get_optional_env(name: str, default: str = '') -> str:
-    return os.getenv(name, default).strip()
+    value = os.getenv(name)
+    if value is None or not value.strip():
+        return str(default).strip()
+    return value.strip()
 
 
 def get_optional_int_env(name: str, default: int) -> int:
@@ -346,6 +352,9 @@ _round_robin_indices: dict[str, int] = {}
 _round_robin_locks: dict[str, threading.Lock] = {}
 _key_failure_counts: dict[str, int] = {}
 _key_circuit_breaker_until: dict[str, float] = {}
+_local_api_slot_tokens = threading.local()
+_API_KEY_STATE_PREFIX = 'aiimagenew:api_key_state'
+_API_SLOT_STATE_PREFIX = 'aiimagenew:api_slot_state'
 
 _global_api_semaphore: DynamicSemaphore | None = None
 _semaphore_init_lock = threading.Lock()
@@ -359,6 +368,19 @@ def _parse_api_keys(raw_keys: str) -> list[str]:
 
 
 def _get_api_concurrency_limit() -> int:
+    explicit_limit = get_supabase_setting_int(
+        'API_GLOBAL_CONCURRENCY_LIMIT',
+        get_optional_int_env('API_GLOBAL_CONCURRENCY_LIMIT', 0),
+    )
+    if explicit_limit > 0:
+        return explicit_limit
+    return max(get_supabase_setting_int(
+        'API_KEY_CONCURRENCY_LIMIT',
+        get_optional_int_env('API_KEY_CONCURRENCY_LIMIT', 10),
+    ), 1)
+
+
+def _get_api_key_concurrency_limit() -> int:
     return max(get_supabase_setting_int(
         'API_KEY_CONCURRENCY_LIMIT',
         get_optional_int_env('API_KEY_CONCURRENCY_LIMIT', 10),
@@ -383,6 +405,79 @@ def _get_api_failure_cooldown() -> float:
         return 60.0
 
 
+def _get_api_key_state_ttl() -> int:
+    return max(
+        get_supabase_setting_int(
+            'API_KEY_STATE_TTL_SECONDS',
+            get_optional_int_env('API_KEY_STATE_TTL_SECONDS', 86400),
+        ),
+        60,
+    )
+
+
+def _get_redis_key_state_client():
+    try:
+        from redis_client import get_api_redis_client
+
+        return get_api_redis_client()
+    except Exception:
+        return None
+
+
+def _api_key_state_id(key: str) -> str:
+    return hashlib.sha256(key.encode('utf-8')).hexdigest()[:24]
+
+
+def _api_rr_key(mode: str) -> str:
+    return f'{_API_KEY_STATE_PREFIX}:rr:{mode}'
+
+
+def _api_failure_key(key: str) -> str:
+    return f'{_API_KEY_STATE_PREFIX}:failure:{_api_key_state_id(key)}'
+
+
+def _api_cooldown_key(key: str) -> str:
+    return f'{_API_KEY_STATE_PREFIX}:cooldown:{_api_key_state_id(key)}'
+
+
+def _get_api_key_state_snapshot() -> dict:
+    client = _get_redis_key_state_client()
+    if not client:
+        return {
+            'backend': 'memory',
+            'circuit_broken': dict(_key_circuit_breaker_until),
+            'failure_counts': dict(_key_failure_counts),
+            'round_robin_indices': dict(_round_robin_indices),
+        }
+    try:
+        modes = ('mode1', 'mode2', 'mode3')
+        round_robin = {mode: client.get(_api_rr_key(mode)) for mode in modes}
+        circuit_broken = {}
+        failure_counts = {}
+        for mode in modes:
+            for key in _get_mode_keys(mode):
+                state_id = _api_key_state_id(key)
+                cooldown_ttl = client.ttl(_api_cooldown_key(key))
+                failure_count = client.get(_api_failure_key(key))
+                if cooldown_ttl and cooldown_ttl > 0:
+                    circuit_broken[state_id] = cooldown_ttl
+                if failure_count:
+                    failure_counts[state_id] = int(failure_count)
+        return {
+            'backend': 'redis',
+            'round_robin': round_robin,
+            'circuit_broken_ttl': circuit_broken,
+            'failure_counts': failure_counts,
+        }
+    except Exception:
+        return {
+            'backend': 'memory',
+            'circuit_broken': dict(_key_circuit_breaker_until),
+            'failure_counts': dict(_key_failure_counts),
+            'round_robin_indices': dict(_round_robin_indices),
+        }
+
+
 def _get_mode_keys(mode: str) -> list[str]:
     mode_num = mode[-1]
     key_name = f'MODE{mode_num}_IMAGE_API_KEY'
@@ -398,6 +493,12 @@ def _get_mode_keys(mode: str) -> list[str]:
 
 
 def _is_circuit_broken(key: str) -> bool:
+    client = _get_redis_key_state_client()
+    if client:
+        try:
+            return client.exists(_api_cooldown_key(key)) > 0
+        except Exception:
+            pass
     until = _key_circuit_breaker_until.get(key, 0)
     return until > time.time()
 
@@ -408,7 +509,13 @@ def _count_healthy_keys_for_mode(mode: str) -> int:
 
 
 def _calculate_semaphore_capacity() -> int:
-    limit = _get_api_concurrency_limit()
+    explicit_limit = get_supabase_setting_int(
+        'API_GLOBAL_CONCURRENCY_LIMIT',
+        get_optional_int_env('API_GLOBAL_CONCURRENCY_LIMIT', 0),
+    )
+    if explicit_limit > 0:
+        return explicit_limit
+    limit = _get_api_key_concurrency_limit()
     total = 0
     for mode in ('mode1', 'mode2', 'mode3'):
         total += _count_healthy_keys_for_mode(mode) * limit
@@ -447,18 +554,11 @@ def _sweep_recovered_keys():
         _adjust_semaphore_for_key_change()
 
 
-def get_round_robin_api_key(mode: str) -> str:
-    keys = _get_mode_keys(mode)
-    if not keys:
-        raise ValueError(
-            f'{mode} 没有可用的 API Key，请配置 MODE{mode[-1]}_IMAGE_API_KEY'
-        )
-    _sweep_recovered_keys()
+def _select_round_robin_key_local(mode: str, keys: list[str]) -> str:
     lock = _round_robin_locks.get(mode)
     if lock is None:
         lock = threading.Lock()
         _round_robin_locks[mode] = lock
-    now = time.time()
     with lock:
         idx = _round_robin_indices.get(mode, -1)
         for _ in range(len(keys)):
@@ -473,17 +573,197 @@ def get_round_robin_api_key(mode: str) -> str:
         return key
 
 
+def _select_round_robin_key_redis(mode: str, keys: list[str]) -> str | None:
+    client = _get_redis_key_state_client()
+    if not client:
+        return None
+    try:
+        cursor = int(client.incr(_api_rr_key(mode)))
+        client.expire(_api_rr_key(mode), _get_api_key_state_ttl())
+        start_idx = (cursor - 1) % len(keys)
+        for offset in range(len(keys)):
+            idx = (start_idx + offset) % len(keys)
+            key = keys[idx]
+            if not _is_circuit_broken(key):
+                return key
+        return keys[start_idx]
+    except Exception:
+        return None
+
+
+def _api_slot_active_key() -> str:
+    return f'{_API_SLOT_STATE_PREFIX}:active'
+
+
+def _api_slot_token_key(token: str) -> str:
+    return f'{_API_SLOT_STATE_PREFIX}:token:{token}'
+
+
+def _get_api_slot_ttl() -> int:
+    return max(get_supabase_setting_int(
+        'API_SLOT_TTL_SECONDS',
+        get_optional_int_env('API_SLOT_TTL_SECONDS', 600),
+    ), 30)
+
+
+def _get_api_slot_poll_interval() -> float:
+    raw = get_supabase_setting(
+        'API_SLOT_POLL_INTERVAL_SECONDS',
+        get_optional_env('API_SLOT_POLL_INTERVAL_SECONDS', '0.2'),
+    )
+    try:
+        return min(max(float(raw), 0.05), 2.0)
+    except ValueError:
+        return 0.2
+
+
+def _get_local_api_slot_stack() -> list[str]:
+    stack = getattr(_local_api_slot_tokens, 'stack', None)
+    if stack is None:
+        stack = []
+        _local_api_slot_tokens.stack = stack
+    return stack
+
+
+def _cleanup_expired_api_slots(client) -> None:
+    now = time.time()
+    try:
+        expired_tokens = client.zrangebyscore(_api_slot_active_key(), '-inf', now)
+        if expired_tokens:
+            client.zrem(_api_slot_active_key(), *expired_tokens)
+            client.delete(*[_api_slot_token_key(token) for token in expired_tokens])
+    except Exception:
+        pass
+
+
+def _try_acquire_redis_api_slot(client, token: str) -> bool:
+    capacity = _calculate_semaphore_capacity()
+    ttl = _get_api_slot_ttl()
+    now = time.time()
+    expires_at = now + ttl
+    _cleanup_expired_api_slots(client)
+    try:
+        pipe = client.pipeline()
+        pipe.zcard(_api_slot_active_key())
+        results = pipe.execute()
+        active_count = int(results[0] or 0)
+        if active_count >= capacity:
+            return False
+        pipe = client.pipeline()
+        pipe.zadd(_api_slot_active_key(), {token: expires_at})
+        pipe.setex(_api_slot_token_key(token), ttl, str(expires_at))
+        pipe.expire(_api_slot_active_key(), ttl)
+        pipe.execute()
+        return True
+    except Exception:
+        return False
+
+
+_API_SLOT_RELEASE_CHANNEL = f'{_API_SLOT_STATE_PREFIX}:release'
+
+
+def _acquire_redis_api_slot(timeout: float = 300) -> bool | None:
+    client = _get_redis_key_state_client()
+    if not client:
+        return None
+    deadline = time.time() + max(float(timeout or 0), 0)
+    token = f'{os.getpid()}:{threading.get_ident()}:{uuid.uuid4().hex}'
+    pubsub = None
+    try:
+        pubsub = client.pubsub()
+        pubsub.subscribe(_API_SLOT_RELEASE_CHANNEL)
+        while True:
+            if _try_acquire_redis_api_slot(client, token):
+                _get_local_api_slot_stack().append(token)
+                return True
+            if time.time() >= deadline:
+                return False
+            remaining = deadline - time.time()
+            if remaining <= 0:
+                return False
+            wait_time = min(_get_api_slot_poll_interval(), remaining, 2.0)
+            try:
+                msg = pubsub.get_message(timeout=wait_time)
+                if msg and msg.get('type') == 'message':
+                    continue
+            except Exception:
+                time.sleep(wait_time)
+    except Exception:
+        while True:
+            if _try_acquire_redis_api_slot(client, token):
+                _get_local_api_slot_stack().append(token)
+                return True
+            if time.time() >= deadline:
+                return False
+            time.sleep(_get_api_slot_poll_interval())
+    finally:
+        if pubsub:
+            try:
+                pubsub.unsubscribe(_API_SLOT_RELEASE_CHANNEL)
+                pubsub.close()
+            except Exception:
+                pass
+
+
+def _release_redis_api_slot() -> bool:
+    stack = _get_local_api_slot_stack()
+    if not stack:
+        return False
+    token = stack.pop()
+    client = _get_redis_key_state_client()
+    if not client:
+        return False
+    try:
+        client.zrem(_api_slot_active_key(), token)
+        client.delete(_api_slot_token_key(token))
+        try:
+            client.publish(_API_SLOT_RELEASE_CHANNEL, token)
+        except Exception:
+            pass
+        return True
+    except Exception:
+        return False
+
+
+def get_round_robin_api_key(mode: str) -> str:
+    keys = _get_mode_keys(mode)
+    if not keys:
+        raise ValueError(
+            f'{mode} 没有可用的 API Key，请配置 MODE{mode[-1]}_IMAGE_API_KEY'
+        )
+    _sweep_recovered_keys()
+    redis_key = _select_round_robin_key_redis(mode, keys)
+    if redis_key:
+        return redis_key
+    return _select_round_robin_key_local(mode, keys)
+
+
 def acquire_api_slot(timeout: float = 300) -> bool:
+    redis_acquired = _acquire_redis_api_slot(timeout)
+    if redis_acquired is not None:
+        return redis_acquired
     _init_semaphore()
     return _global_api_semaphore.acquire(timeout)
 
 
 def release_api_slot():
+    if _release_redis_api_slot():
+        return
     if _global_api_semaphore is not None:
         _global_api_semaphore.release()
 
 
 def report_key_success(key: str):
+    client = _get_redis_key_state_client()
+    if client:
+        try:
+            had_cooldown = client.exists(_api_cooldown_key(key)) > 0
+            client.delete(_api_failure_key(key), _api_cooldown_key(key))
+            if had_cooldown:
+                _adjust_semaphore_for_key_change()
+            return
+        except Exception:
+            pass
     cleared = _key_failure_counts.pop(key, None)
     if cleared is not None:
         pass
@@ -493,6 +773,19 @@ def report_key_success(key: str):
 
 
 def report_key_failure(key: str):
+    client = _get_redis_key_state_client()
+    if client:
+        try:
+            cooldown = _get_api_failure_cooldown()
+            count = int(client.incr(_api_failure_key(key)))
+            client.expire(_api_failure_key(key), max(int(cooldown * 2), 60))
+            threshold = _get_api_failure_threshold()
+            if count >= threshold and client.exists(_api_cooldown_key(key)) == 0:
+                client.setex(_api_cooldown_key(key), max(int(cooldown), 1), str(time.time() + cooldown))
+                _adjust_semaphore_for_key_change()
+            return
+        except Exception:
+            pass
     count = _key_failure_counts.get(key, 0) + 1
     _key_failure_counts[key] = count
     threshold = _get_api_failure_threshold()
@@ -502,12 +795,38 @@ def report_key_failure(key: str):
         _adjust_semaphore_for_key_change()
 
 
+def get_api_slot_stats() -> dict:
+    capacity = _calculate_semaphore_capacity()
+    client = _get_redis_key_state_client()
+    if client:
+        try:
+            _cleanup_expired_api_slots(client)
+            active_count = int(client.zcard(_api_slot_active_key()) or 0)
+            return {
+                'backend': 'redis',
+                'capacity': capacity,
+                'active': active_count,
+                'available': max(capacity - active_count, 0),
+            }
+        except Exception:
+            pass
+    value = _global_api_semaphore.get_value() if _global_api_semaphore is not None else 0
+    return {
+        'backend': 'memory',
+        'capacity': capacity,
+        'active': max(capacity - value, 0),
+        'available': value,
+    }
+
+
 def get_semaphore_stats() -> dict:
-    if _global_api_semaphore is None:
-        return {'initialized': False, 'value': 0}
+    state_snapshot = _get_api_key_state_snapshot()
+    api_slot_snapshot = get_api_slot_stats()
+    if _global_api_semaphore is None and api_slot_snapshot.get('backend') != 'redis':
+        return {'initialized': False, 'value': 0, 'key_state': state_snapshot, 'api_slots': api_slot_snapshot}
     return {
         'initialized': True,
-        'value': _global_api_semaphore.get_value(),
-        'circuit_broken': dict(_key_circuit_breaker_until),
-        'failure_counts': dict(_key_failure_counts),
+        'value': api_slot_snapshot.get('available', 0),
+        'key_state': state_snapshot,
+        'api_slots': api_slot_snapshot,
     }

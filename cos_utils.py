@@ -1,7 +1,11 @@
+import hashlib
+import hmac
 import logging
 import os
+import time
 from datetime import datetime
 from pathlib import Path
+from urllib.parse import quote
 
 from dotenv import load_dotenv
 from qcloud_cos import CosConfig, CosS3Client
@@ -116,6 +120,63 @@ def generate_cos_key(task_id: str, filename: str, storage_group: str = 'generate
     safe_group = str(storage_group or 'generated').strip().strip('/').replace('..', '') or 'generated'
     safe_filename = str(filename or '').lstrip('/').replace('..', '')
     return f"{safe_group}/{date_str}/{task_id}/{safe_filename}"
+
+
+def generate_presigned_put_url(file_key: str, content_type: str = 'image/jpeg', expires: int = 600) -> dict:
+    client, config = _get_cos_client()
+    if not client:
+        raise RuntimeError("COS client not initialized")
+    safe_key = str(file_key or '').strip().lstrip('/')
+    if not safe_key or '..' in safe_key:
+        raise ValueError('invalid cos key')
+    expires = max(60, min(int(expires or 600), 1800))
+    content_type = str(content_type or 'application/octet-stream').strip() or 'application/octet-stream'
+    headers = {
+        'Content-Type': content_type,
+        'x-cos-acl': 'public-read',
+    }
+    try:
+        upload_url = client.get_presigned_url(
+            Bucket=config['bucket'],
+            Key=safe_key,
+            Method='PUT',
+            Expired=expires,
+            Headers=headers,
+        )
+    except Exception:
+        upload_url = _generate_presigned_put_url_v5(config, safe_key, content_type, expires)
+    return {
+        'upload_url': upload_url,
+        'image_url': f"{config['url_prefix']}/{safe_key}",
+        'image_path': safe_key,
+        'headers': headers,
+        'expires_in': expires,
+    }
+
+
+def _hmac_sha1(key: bytes, value: str) -> bytes:
+    return hmac.new(key, value.encode('utf-8'), hashlib.sha1).digest()
+
+
+def _generate_presigned_put_url_v5(config: dict, file_key: str, content_type: str, expires: int) -> str:
+    start_time = int(time.time())
+    end_time = start_time + expires
+    key_time = f'{start_time};{end_time}'
+    sign_key = hmac.new(config['secret_key'].encode('utf-8'), key_time.encode('utf-8'), hashlib.sha1).hexdigest()
+    http_method = 'put'
+    uri_pathname = '/' + quote(file_key, safe='/')
+    header_list = 'content-type;host;x-cos-acl'
+    host = f"{config['bucket']}.cos.{config['region']}.myqcloud.com"
+    http_headers = f"content-type={quote(content_type.lower(), safe='')}&host={host}&x-cos-acl=public-read"
+    http_string = f"{http_method}\n{uri_pathname}\n\n{http_headers}\n"
+    sha1ed_http_string = hashlib.sha1(http_string.encode('utf-8')).hexdigest()
+    string_to_sign = f"sha1\n{key_time}\n{sha1ed_http_string}\n"
+    signature = hmac.new(bytes.fromhex(sign_key), string_to_sign.encode('utf-8'), hashlib.sha1).hexdigest()
+    authorization = (
+        f"q-sign-algorithm=sha1&q-ak={config['secret_id']}&q-sign-time={key_time}"
+        f"&q-key-time={key_time}&q-header-list={header_list}&q-url-param-list=&q-signature={signature}"
+    )
+    return f"https://{host}{uri_pathname}?{authorization}"
 
 
 def is_cos_enabled() -> bool:

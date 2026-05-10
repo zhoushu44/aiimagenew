@@ -4,6 +4,8 @@ from datetime import datetime, timezone
 from urllib.parse import urlencode
 
 import requests
+from requests.adapters import HTTPAdapter
+from urllib3.util.retry import Retry
 
 from config import (
     SUPABASE_URL,
@@ -23,9 +25,13 @@ from redis_client import (
     cache_get,
     cache_set,
     cache_delete,
+    tasks_cache_get,
+    tasks_cache_set,
+    tasks_cache_delete,
     build_task_cache_key,
     build_user_points_cache_key,
     build_user_profile_cache_key,
+    get_task_cache_ttl,
 )
 
 try:
@@ -44,6 +50,33 @@ from utils import (
 )
 
 logger = logging.getLogger(__name__)
+
+_http_session: requests.Session | None = None
+
+
+def get_http_session() -> requests.Session:
+    global _http_session
+    if _http_session is not None:
+        try:
+            _http_session.get('about:blank', timeout=0.001)
+        except Exception:
+            pass
+        return _http_session
+    _http_session = requests.Session()
+    retry_strategy = Retry(
+        total=2,
+        backoff_factor=0.5,
+        status_forcelist=[500, 502, 503, 504],
+        allowed_methods=['GET', 'POST', 'PATCH', 'PUT', 'DELETE'],
+    )
+    adapter = HTTPAdapter(
+        pool_connections=20,
+        pool_maxsize=50,
+        max_retries=retry_strategy,
+    )
+    _http_session.mount('https://', adapter)
+    _http_session.mount('http://', adapter)
+    return _http_session
 
 
 def build_supabase_auth_headers() -> dict:
@@ -578,7 +611,7 @@ def fetch_generation_task_row(task_id: str, _logger: logging.Logger | None = Non
         result = _extract_single_supabase_row(response.json())
         
         if result:
-            cache_set(cache_key, result, REDIS_CACHE_TTL.get('task_status', 30))
+            cache_set(cache_key, result, get_task_cache_ttl(str(result.get('status') or '')))
         
         return result
     except Exception as exc:

@@ -233,7 +233,12 @@ def build_multimodal_content(prompt_text: str, image_files):
     content = [{'type': 'text', 'text': prompt_text}]
 
     for image_file in image_files:
-        if hasattr(image_file, 'data_url'):
+        source_url = getattr(image_file, 'source_url', None)
+        if not source_url and isinstance(image_file, dict):
+            source_url = image_file.get('source_url')
+        if isinstance(source_url, str) and source_url.startswith(('http://', 'https://')):
+            image_url = source_url
+        elif hasattr(image_file, 'data_url'):
             image_url = image_file.data_url
         elif isinstance(image_file, dict):
             image_url = image_file.get('data_url')
@@ -409,7 +414,6 @@ def _build_trace_payload(events) -> dict:
 
 
 def save_generated_image(task_id: str, sort: int, image_type: str, image_bytes: bytes, mime_type: str, storage_group: str = 'generated'):
-    cleanup_generated_suites(active_task_id=task_id)
     extension = guess_extension(mime_type)
     filename = f'{sort:02d}-{sanitize_filename_part(image_type, "image")}{extension}'
     storage_started_at = time.time()
@@ -482,7 +486,6 @@ def save_generated_image(task_id: str, sort: int, image_type: str, image_bytes: 
 
 
 def save_reference_image(task_id: str, sort: int, filename: str, image_bytes: bytes, mime_type: str, storage_group: str = 'generated', storage_subdir: str = 'references'):
-    cleanup_generated_suites(active_task_id=task_id)
     extension = guess_extension(mime_type)
     source_stem = Path(filename or 'reference').stem
     safe_stem = sanitize_filename_part(source_stem, f'reference-{sort:02d}')
@@ -522,12 +525,25 @@ def build_reference_images(task_id: str, image_payloads, source: str = 'product'
 
     for offset, payload in enumerate(image_payloads):
         sort = start_sort + offset
+        image_bytes = payload.get('bytes', b'') if hasattr(payload, 'get') else getattr(payload, 'bytes', b'')
+        source_url = getattr(payload, 'source_url', None) if hasattr(payload, 'source_url') else payload.get('source_url') if hasattr(payload, 'get') else None
+        if not image_bytes and source_url:
+            try:
+                logger.info('Downloading deferred image for task %s sort %d from %s', task_id, sort, source_url[:80])
+                response = requests.get(source_url, timeout=60, allow_redirects=True)
+                response.raise_for_status()
+                image_bytes = response.content or b''
+                logger.info('Downloaded %d bytes for task %s sort %d', len(image_bytes), task_id, sort)
+                if image_bytes and hasattr(payload, '_bytes'):
+                    payload._bytes = image_bytes
+            except Exception as exc:
+                logger.warning('Failed to download deferred image for task %s sort %d: %s', task_id, sort, exc)
         download_name, relative_path, image_url = save_reference_image(
             task_id,
             sort,
-            payload.get('filename', ''),
-            payload.get('bytes', b''),
-            payload.get('mime_type', 'image/png'),
+            payload.get('filename', '') if hasattr(payload, 'get') else getattr(payload, 'filename', ''),
+            image_bytes,
+            payload.get('mime_type', 'image/png') if hasattr(payload, 'get') else getattr(payload, 'mime_type', 'image/png'),
             storage_group=meta['storage_group'],
             storage_subdir=meta['storage_subdir'],
         )
